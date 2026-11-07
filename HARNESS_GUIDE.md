@@ -76,7 +76,7 @@ Other options:
 - `--view URL` (default `http://127.0.0.1:8093`)
 - `--runs-dir DIR` (default `runs`)
 - `--verifier NAME` overrides every stage's verifier.
-- `--var NAME=VALUE` fills a `{NAME}` placeholder in the plan, for example `--var color=orange`. It can be repeated.
+- `--var NAME=VALUE` fills a `{NAME}` placeholder in the plan, for example `--var watch_arm=right`. It can be repeated.
 
 While it runs, type `y` / `n` + Enter to answer a manual check, or `s` + Enter to stop.
 
@@ -170,17 +170,17 @@ stages:
 | `plans/example_hill_climb_v2.yaml` | Uses every v2 field, with comments |
 | `plans/sim_fruit_bowl.yaml` | For the MuJoCo sim scene (apple, orange, banana, bowl, plate) |
 | `plans/hill_climb_sprint.yaml` | **Match plan.** Unplug 1 cable, put it down, then stack 2, stack 3, move clear. Then it prints "CALL STOP NOW". |
-| `plans/hill_climb_full.yaml` | Required unplug and stack, optional watcher-assisted plug, then up to 8 balls of your colour. Needs `--var color=<colour>`. |
+| `plans/hill_climb_full.yaml` | Required unplug and stack, optional watcher-assisted plug, then up to eight shared golf balls. |
 
-## 6b. Match rules and how the plans follow them (from `hillclimb_rubric_v2.pdf`)
+## 6b. Match rules and how the plans follow them
 
-The match is a 5-minute 1v1. The stages, in order:
+Rubric v4 gives each team five minutes. The stages are ordered.
 
-1. **Unplug.** The pass bar is 1 cable out: +10, and +5 for each further unplug. Plugging a loose cable into a free port is +20.
-2. **Stack.** The pass bar is a free-standing stack 3 layers / 6 inches tall that still stands 3 s after release: +20, and +10 for each further block. If the stack falls later, those points are lost.
-3. **Balls.** Own colour +5, other colour -5. A black 8-ball in the bin loses the match.
+1. **Unplug.** One cable out passes the stage and scores +10. Further unplugs score +5 each. Each originally loose cable plugged into a free port scores +20, up to four.
+2. **Stack.** The pass bar is four inches and three seconds of standing freely after release. The scoring table awards +20 for a tower over four inches, +3 per full inch remaining at the end if the stage passed, and +10 for the taller qualifying tower in head-to-head matches.
+3. **Balls.** Each shared golf ball resting in our bin at the end scores +5. Either black 8-ball in our bin loses the match.
 
-Time bonus: +1 per 2 s left on the clock, but only if Stages 1 and 2 passed and a team member calls "stop".
+The rubric awards +10 for LiveKit and +5 for Dimensional when the team shows its use to the referee before the match.
 
 What the rules mean for the harness:
 
@@ -188,15 +188,15 @@ What the rules mean for the harness:
 - **A false "done" is a DQ.** Touching a later stage's objects before the pass bar is met is a DQ. That's why the plans:
   - require `confirm: 2`,
   - end the run if a required stage exhausts its allocation,
-  - ask for fresh evidence of a stack at least six inches and three layers tall, stable for three seconds after release.
-- **Stop early.** Stopping right after Stage 2 usually wins. A ball pays only if it takes under 10 s (it costs 5 bonus points of clock), and an extra block pays only if it takes under 20 s. So the sprint plan ends after the stack and prints `CALL STOP NOW`, and the designated member says "stop" out loud. Use the full plan only if practice shows balls are fast.
+  - ask for fresh evidence of a stack at least four inches tall, stable for three seconds after release.
+- The sprint plan ends after the stack. The full plan attempts optional points within its allocations. The designated team member can call stop.
 - The match budget is 300 s. After preflight, the runner allocates up to 295 s for work and reserves the final 5 s for requesting stop. The full plan preserves 173 s for clearance and stack while attempting the optional plug. It stops chasing balls after the first unverified count.
 
 See [the match design](MATCH_DESIGN.md) for timing, simulator coverage, and the LiveKit training and observation paths.
 
 ```bash
 python -m harness plans/hill_climb_sprint.yaml --live
-python -m harness plans/hill_climb_full.yaml --live --var color=orange   # colour from the coin flip
+python -m harness plans/hill_climb_full.yaml --live
 ```
 
 Still unclear in the rubric (ask the organizers):
@@ -238,6 +238,18 @@ python -m dimos_skills
 ```
 
 Connect an MCP client to `http://127.0.0.1:9990/mcp` and call `inspect_watcher` with `arm` set to `left` or `right`. It returns the current station status and labelled JPEGs for the overhead and selected wrist when the latest camera trip matches the active prompt. Use `--station` and `--view` if the simulator uses different ports. This skill reads the station and debug view over HTTP.
+
+### Observe a stage through LiveKit
+
+Install `livekit==1.2.1` and `pillow` in the harness environment. Set `LIVEKIT_URL` and `LIVEKIT_TOKEN` for the station's room. Use a room token with `canSubscribe` enabled and `canPublish` and `canPublishData` disabled.
+
+```bash
+python -m harness.livekit_observer --publisher metal-station \
+  --track overhead=table_top --track wrist_l=left_wrist \
+  --plan plans/hill_climb_full.yaml --stage watcher_into_place
+```
+
+Use the publisher identity and exact video track names from the room. With a plan and stage, the observer uses the existing Anthropic monitor and `ANTHROPIC_API_KEY`. Omit both options to capture camera evidence alone. It writes camera JPEGs and optional advisory verdicts under `runs_livekit/`. The logged receive age measures time since the local subscriber received each frame. The RTC timestamp is stored separately. The observer reports on the selected stage while the runner continues to verify its own stage transitions.
 
 ## 7. Test in simulation (before the robot)
 
@@ -354,4 +366,4 @@ If the adapters are CANables in slcan mode (a `/dev/tty…` serial device), the 
 - Can an outside model (Claude) check stages during a match? (Human `y`/`n` is clearly not allowed.)
 - How do we start the harness at "go" without it counting as keyboard input?
 - Can the harness change the prompt live during a match, or is it one prompt per run?
-- Is Ethernet hard mode on, and how tall is one block (are 3 layers already 6 inches)?
+- Is Ethernet hard mode on, and what fixed reference in the camera views gives the four-inch height?

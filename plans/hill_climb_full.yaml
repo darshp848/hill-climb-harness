@@ -1,11 +1,6 @@
-# Hill Climb relay, FULL plan: the sprint stages, then Stage 3 balls until the clock runs out.
-# Run with: --var color=<your color>  (assigned by coin flip at the match, e.g. orange or white).
-# Each ball: own color +5, other color -5, black 8-ball in the bin = match lost.
-# Base: the SPRINT plan (from hillclimb_rubric_v2.pdf, 7-8 Nov 2026).
-# Pass Stage 1 (unplug one cable, +10) and Stage 2 (a free-standing 3-layer / 6 inch stack, +20), then end the
-# run so the designated team member calls "stop" for the time bonus (+1 per 2 s left, only if Stages 1 and 2
-# passed). At that rate a ball (+5) is only worth chasing if it takes under 10 s, an extra block (+10) under
-# 20 s, so stopping early usually wins. Use hill_climb_full.yaml if the balls turn out to be fast.
+# Hill Climb relay, FULL plan (hillclimb_rubric_v4.pdf, 7–8 Nov 2026).
+# Required unplug and four-inch stack, optional loose-cable insertion, then shared golf balls.
+# Each golf ball in our bin scores +5. Either black 8-ball in our bin loses the match.
 #
 # Rules that shape this plan:
 # - Touching a later stage's object before the current pass bar is met is a DQ. So a false "done" is a DQ:
@@ -16,8 +11,9 @@
 # - An unplugged cable may not be plugged back in, so the cable is put down away from the hub.
 task: >-
   Hill Climb relay: first unplug one USB cable from the hub and put it down, then stack blocks into a
-  free-standing tower at least 3 layers (6 inches) tall and move the arms away from it.
-  Do not touch the blocks before a cable is unplugged. Then put {color} ping-pong balls into the bin, one at a time, never the black ball and never another color, without touching the stack.
+  free-standing tower at least four inches tall and move the arms away from it.
+  Keep clear of the blocks until a cable is unplugged. Once the stack passes, put shared golf balls
+  into our bin one at a time, keeping clear of both black 8-balls and the tower.
 checkpoint: null            # set to your dream-1-ft:... fine-tune
 time_budget_s: 300
 match: {gates: [unplug_cable, clear_of_stack], stop_reserve_s: 5}
@@ -128,10 +124,10 @@ stages:
          when: "a block was dropped, knocked over, or the gripper is stuck", settle_s: 6, max_uses: 3}
     on_fail: retry_in_place
 
-  - name: stack_three
-    prompt: "put another block on top of the stack"
-    success: "Is the stack three blocks tall, standing on its own with no gripper touching it?"
-    expect: "An arm picks up a third block and places it on the two-block stack without knocking it, then opens."
+  - name: raise_stack
+    prompt: "build the tower to at least four inches high, adding blocks if needed, then release it"
+    success: "Is the stack at least four inches tall and standing on its own with no gripper touching it?"
+    expect: "The arm adds a block if needed to reach four inches, then opens and moves clear."
     timeout_s: 50
     stage_budget_s: 65
     max_attempts: 6
@@ -145,7 +141,7 @@ stages:
 
   - name: clear_of_stack
     prompt: "move the arms up and away from the stack without touching it"
-    success: "Is the stack at least six inches and three layers tall, free-standing for three seconds after release, with both arms clear? Withhold success if the views cannot establish the height, release, or stability."
+    success: "Is the stack at least four inches tall and free-standing for three seconds after release, with both arms clear? Withhold success if the views cannot establish the height, release, or stability."
     expect: "Both arms rise and move back; the stack stays standing."
     timeout_s: 20
     stage_budget_s: 30
@@ -160,9 +156,9 @@ stages:
   - &ball
     name: ball_1
     requires_stage: clear_of_stack
-    prompt: "put one {color} ping-pong ball in the bin; avoid the black ball and keep clear of the stack"
-    success: "Is at least 1 {color} ball resting inside the bin, with no black ball in the bin?"
-    expect: "An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin."
+    prompt: "put one shared golf ball in our bin; avoid both black 8-balls and keep clear of the stack"
+    success: "Is at least one golf ball resting inside our bin, with no black 8-ball in our bin?"
+    expect: "An arm picks up a golf ball, keeping clear of both black 8-balls and the stack, and drops it into our bin."
     timeout_s: 10
     stage_budget_s: 10
     max_attempts: 1
@@ -172,28 +168,28 @@ stages:
   - <<: *ball
     name: ball_2
     requires_stage: ball_1
-    success: "Are at least 2 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 2 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_3
     requires_stage: ball_2
-    success: "Are at least 3 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 3 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_4
     requires_stage: ball_3
-    success: "Are at least 4 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 4 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_5
     requires_stage: ball_4
-    success: "Are at least 5 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 5 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_6
     requires_stage: ball_5
-    success: "Are at least 6 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 6 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_7
     requires_stage: ball_6
-    success: "Are at least 7 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 7 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_8
     requires_stage: ball_7
-    success: "Are at least 8 {color} balls resting inside the bin, with no black ball in the bin?"
+    success: "Are at least 8 golf balls resting inside our bin, with no black 8-ball in our bin?"

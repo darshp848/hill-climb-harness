@@ -5,12 +5,12 @@
 Run the sprint plan for unplug and stack, or the full plan to exercise the optional plug and balls. Use a mock station and a scripted monitor for scheduling tests.
 
 ```python
-plan = load_plan("plans/hill_climb_full.yaml", {"color": "orange"})
+plan = load_plan("plans/hill_climb_full.yaml")
 result = Runner(plan, station, frames, {"monitor": monitor}, log).run()
 abandoned = [stage.name for stage in result.stages if stage.abandoned]
 ```
 
-The match plans use 300 seconds, with the last five reserved for requesting stop. The runner starts its clock after preflight. Match procedure still needs to align this start with the organizer's go signal. The time bonus depends on the designated person calling stop after both pass bars.
+The match plans use 300 seconds, with the last five reserved for requesting stop. The runner starts its clock after preflight. Match procedure still needs to align this start with the organizer's go signal. A designated team member can call stop.
 
 ## Shape
 
@@ -18,7 +18,7 @@ The match plans use 300 seconds, with the last five reserved for requesting stop
 
 The runner checks the remaining budget before commands, when it sleeps or polls, and after a verifier returns. A timed-out command is ambiguous and terminates the run. The station's reply is separate from the stop request. HTTP timeouts are socket bounds. Physical stop and command ordering after a network failure depend on the station.
 
-The unplug gate needs visual evidence of a cable clear of the hub. The stack gate asks for a free-standing stack at least six inches and three layers tall for three seconds after release. Current camera evidence and monitor prompts are proxies for the judge. The hardware validation needs a height reference and a check that the release and three-second dwell are visible.
+The unplug gate needs visual evidence of a cable clear of the hub. Rubric v4 requires a stack at least four inches tall that stands freely for three seconds after release. Current camera evidence and monitor prompts are proxies for the judge. Hardware validation needs a height reference and a check that the release and three-second dwell are visible.
 
 ## Design selection
 
@@ -34,8 +34,8 @@ Sentinel supports comparing timestamped observations asynchronously. Hi Robot se
 
 ## LiveKit
 
-The event advertises LiveKit for streaming and voice agents. The Hill Climb rubric restricts human input after go. Keep tele-op handoffs in practice and demonstration collection. [Event page](https://luma.com/pah)
+Rubric v4 awards 10 points when the team shows its use of LiveKit to the referee before the match. The same rubric restricts human input after go, including voice. Keep tele-op handoffs in practice and demonstration collection. [Event page](https://luma.com/pah)
 
 For training, Portal can record synchronized observations, executed actions, and which operator supplied each action. Use the capture timeline to label the policy mistake, human correction, and recovery result. Verify the event's Metal/Dream adapter, feature schema, and Dream import against a recorded sample before relying on this path. The public Portal HITL tutorial uses a different arm and an ACT policy. [LiveKit Portal](https://github.com/livekit/portal) · [HITL reference](https://github.com/livekit-examples/portal-hitl)
 
-For detection, start with a passive subscriber and compare its capture timestamps, view coverage, and detection latency with Dream's debug trips. A detector can flag an empty grasp, loss of the watcher view, or stalled progress. Associate observations with the current prompt and discard stale results. Keep control and task advancement with the runner. [Robot camera tracks](https://docs.livekit.io/robotics/media/video/video-tracks/)
+For detection, the optional LiveKit observer subscribes to named camera tracks and can run the existing monitor for a selected stage. It logs locally received frames and advisory verdicts. Comparing view coverage and detection latency with Dream debug trips requires paired recordings with a shared capture clock. The runner retains control and task advancement. [Robot camera tracks](https://docs.livekit.io/robotics/media/video/video-tracks/)

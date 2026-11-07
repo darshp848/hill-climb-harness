@@ -82,7 +82,7 @@ def test_plan_vars_defaults_and_override(tmp_path):
 
 
 def test_full_plan_watcher_stages():
-    plan = load_plan(Path(__file__).resolve().parent.parent / "plans" / "hill_climb_full.yaml", {"color": "white"})
+    plan = load_plan(Path(__file__).resolve().parent.parent / "plans" / "hill_climb_full.yaml")
     names = [s.name for s in plan.stages]
     assert names.index("unplug_cable") < names.index("plug_loose_cable") < names.index("stack_two")
     plug = plan.stages[names.index("plug_loose_cable")]

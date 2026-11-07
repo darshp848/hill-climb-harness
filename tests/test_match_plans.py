@@ -21,7 +21,7 @@ def test_substitute_missing_var_is_an_error():
 
 @pytest.mark.parametrize("name", ["hill_climb_sprint.yaml", "hill_climb_full.yaml"])
 def test_match_plans_load_and_follow_the_rules(name):
-    plan = load_plan(PLANS / name, {"color": "orange"})
+    plan = load_plan(PLANS / name)
     assert plan.verifier == "monitor"            # no human input after "go"
     assert plan.confirm >= 2                     # a false "done" is a DQ
     assert plan.time_budget_s <= 300
@@ -34,12 +34,15 @@ def test_match_plans_load_and_follow_the_rules(name):
     assert all(s.on_fail not in ("skip", "abandon") for s in gated)
     assert all(s.stage_budget_s is not None for s in plan.stages)
     assert all(s.verifier == "monitor" for s in plan.stages)
-    assert "{color}" not in " ".join(s.prompt + s.success for s in plan.stages)
+    stack = next(s for s in plan.stages if s.name == "clear_of_stack")
+    assert "four inches" in stack.success and "three seconds after release" in stack.success
 
 
-def test_full_plan_needs_the_color():
-    with pytest.raises(ValueError, match="color"):
-        load_plan(PLANS / "hill_climb_full.yaml")
+def test_full_plan_uses_shared_golf_balls_after_stack():
+    plan = load_plan(PLANS / "hill_climb_full.yaml")
+    first_ball = next(s for s in plan.stages if s.name == "ball_1")
+    assert first_ball.requires_stage == "clear_of_stack"
+    assert "shared golf ball" in first_ball.prompt and "both black 8-balls" in first_ball.prompt
 
 
 def test_done_message_printed_on_success(tmp_path, capsys):
