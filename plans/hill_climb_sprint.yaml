@@ -15,20 +15,22 @@ task: >-
   Hill Climb relay: first unplug one USB cable from the hub and put it down, then stack blocks into a
   free-standing tower at least 3 layers (6 inches) tall and move the arms away from it.
   Do not touch the blocks before a cable is unplugged. Do not touch the ping-pong balls.
-checkpoint: null            # set to your dream-1-ft:... fine-tune
+checkpoint: dreamlabs/dream-1-beta   # base Dream-1; a Metal/Maker station has no default model. Set your dream-1-ft:... fine-tune here
 time_budget_s: 295          # 5-minute match; a little margin for the start
 check_every_s: 3.0
 verifier: monitor
 confirm: 2
 done_message: "STAGES 1 AND 2 PASSED: CALL STOP NOW"
-claude: {model: claude-haiku-5-5, max_tokens: 600, history_frames: 6}
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks before answering
 
 stages:
   - name: unplug_cable
-    prompt: "unplug a USB cable from the hub"
-    success: "Is at least one USB cable that started in the hub now fully pulled out of the hub?"
+    # The end cable nearest the working arm: a clear approach (no neighbouring plug in the fingers' way), an unblocked
+    # view for the overhead and wrist cameras, and the shortest reach. Middle cables got wire grabs and half grips.
+    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
     expect: "A gripper closes on the plug of a cable in the hub and pulls it straight out until the plug is clear."
-    timeout_s: 45
+    timeout_s: 60
     max_attempts: 8
     min_run_s: 4
     settle_s: 4
