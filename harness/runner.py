@@ -22,6 +22,8 @@ _SLEEP_STEP_S = 0.25
 STALL_RISE = 0.05          # progress must rise by this much to reset the stall clock
 REGRESSION_DROP = 0.3      # a drop this far below the attempt's max counts as a failing verdict
 FAIL_MIN_FRACTION = 0.5
+REWRITE_COOLDOWN_S = 15.0  # no monitor-written prompt sooner than this after any prompt change
+REWRITE_MAX = 3            # monitor-written prompts per attempt
 DONE_WINDOW_S = 15.0       # two done verdicts this close pass the stage, flickers in between notwithstanding
 EXTEND_S = 20.0            # one timeout extension while the monitor sees the gripper on the target    # a monitor "failing" ends an attempt only after this share of timeout_s
 SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-manual verifier
@@ -288,6 +290,7 @@ class Runner:
         gate = max(stage.min_run_s, stage.effective_settle())   # no verifier and no stall clock before this
         consec_done = consec_fail = consec_stalled = 0
         last_done_t: float | None = None   # a done verdict sticks: a second one within DONE_WINDOW_S passes
+        rewrites, last_prompt_t = 0, 0.0
         extended = False                   # one timeout extension while the gripper is on the target
         max_p: float | None = None
         rise_ref = last_rise = None
@@ -340,6 +343,13 @@ class Runner:
                 self._log_verdict(stage, attempt, elapsed, verdict, saved, st, last_trip)
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
+                if (monitor and self.plan.rewrite_prompts and verdict.next_prompt and verdict.done is not True
+                        and rewrites < REWRITE_MAX and elapsed - last_prompt_t >= REWRITE_COOLDOWN_S
+                        and elapsed >= gate):
+                    rewrites, last_prompt_t = rewrites + 1, elapsed
+                    self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, prompt=verdict.next_prompt,
+                                   reason=verdict.reason)
+                    self._issue(verdict.next_prompt, "monitor next_prompt")
                 if monitor:
                     self._note_progress(stage, verdict, st)
                     if verdict.recovery is not None:

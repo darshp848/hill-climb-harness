@@ -36,6 +36,7 @@ class MonitorVerdict(Verdict):
     recovery: int | None = None  # index into the stage's recovery list
     scene_ok: bool | None = None
     holding: dict | None = None
+    next_prompt: str | None = None  # the monitor's own instruction for the robot (plan.rewrite_prompts)
 
 
 class Verifier(Protocol):
@@ -164,7 +165,9 @@ MONITOR_INSTRUCTION = (
 MONITOR_SCHEMA = (
     '{"stage_done": bool, "progress": 0..1, "status": "ok"|"stalled"|"failing", '
     '"holding": {"left": str, "right": str}, "recovery": <index into the recovery menu or null>, '
-    '"scene_ok": bool, "confidence": 0..1, "reason": str}')
+    '"scene_ok": bool, "confidence": 0..1, "reason": str, "next_prompt": str|null}\n'
+    'next_prompt: only when the robot is on the wrong object or wrong step, or plainly stuck, write ONE short '
+    'instruction for the robot (max 200 characters, plain words, following the system rules). Otherwise null.')
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -219,8 +222,10 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
             done = True
         else:
             reason = f"low confidence: {reason}"
+    nxt = obj.get("next_prompt")
+    nxt = nxt.strip()[:300] if isinstance(nxt, str) and nxt.strip() else None
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
-                          recovery=rec, scene_ok=scene, holding=holding)
+                          recovery=rec, scene_ok=scene, holding=holding, next_prompt=nxt)
 
 
 def _zoom(jpeg: bytes, box: list[float], scale: float = 2.0) -> bytes | None:
@@ -371,8 +376,11 @@ class MonitorVerifier:
             content.append({"type": "image", "source": {
                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
-        return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": content}]}
+        payload = {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
+                   "messages": [{"role": "user", "content": content}]}
+        if getattr(self.plan, "system_prompt", ""):
+            payload["system"] = self.plan.system_prompt
+        return payload
 
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         try:

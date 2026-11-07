@@ -755,3 +755,16 @@ def test_no_stall_after_done(fake, write_plan, tmp_path):
     sv = Script([mv(True, progress=1.0), mv(None, "ok", progress=1.0), mv(None, "ok", progress=1.0), mv(True, progress=1.0)],
                 repeat=False)
     assert build(fake, path, tmp_path, sv).run().ok
+
+
+def test_system_prompt_and_next_prompt(write_plan, tmp_path):
+    from harness.plan import load_plan
+    from harness.verifiers import MonitorVerifier, parse_monitor_reply
+    path = write_plan([stage("a")], system_prompt="Remove the cables right to left.", rewrite_prompts=True)
+    plan = load_plan(path)
+    assert plan.rewrite_prompts and "right to left" in plan.system_prompt
+    v = parse_monitor_reply('<json>{"stage_done": false, "progress": 0.2, "status": "ok", "holding": {}, '
+                            '"recovery": null, "scene_ok": true, "confidence": 0.8, "reason": "wrong cable", '
+                            '"next_prompt": "unplug the rightmost cable instead"}</json>', 0)
+    assert v.next_prompt == "unplug the rightmost cable instead"
+

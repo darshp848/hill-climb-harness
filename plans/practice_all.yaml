@@ -25,8 +25,8 @@ claude:
     what: the hub ports
 stages:
 - name: unplug_1
-  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
-    on the table away from the hub'
+  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+    it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
   camera_notes: &id001
@@ -56,8 +56,8 @@ stages:
     max_uses: 2
   on_fail: retry_in_place
 - name: unplug_2
-  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
-    on the table away from the hub'
+  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+    it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
   camera_notes: *id001
@@ -85,8 +85,8 @@ stages:
     max_uses: 2
   on_fail: skip
 - name: unplug_3
-  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
-    on the table away from the hub'
+  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+    it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
   camera_notes: *id001
@@ -114,8 +114,8 @@ stages:
     max_uses: 2
   on_fail: skip
 - name: unplug_4
-  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
-    on the table away from the hub'
+  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+    it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
   camera_notes: *id001
@@ -161,7 +161,8 @@ stages:
   min_run_s: 3
   on_fail: skip
 - name: plug_loose_cable
-  prompt: with the right arm, pick up the loose USB cable that was lying on the table from the start and plug it into a free port on the hub, while the left arm stays still
+  prompt: The power strip is unplugged from the wall. With the right arm, pick up the loose USB cable that was lying on the table from the start and plug it into a free port on the hub, while the left arm
+    stays still
   success: Use the newest wrist_l side view and overhead view together. Is the plug of a formerly loose cable fully seated in a free port, with the watcher still aimed at the port? If the side view lost
     the port or cannot show the plug depth, withhold success.
   expect: The right gripper picks the loose cable up by its plug, lines the plug up with a free port and pushes it in until it is seated, while the left arm holds still.
@@ -257,8 +258,8 @@ stages:
     max_uses: 2
   on_fail: retry_in_place
 - name: ball_1
-  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
-  success: Are at least 1 {color} balls inside the bin, with no black or white ball in it?
+  prompt: put one {color} ping-pong ball into the bin, never a black ball and never the white ball, without touching the stack
+  success: Are at least 1 {color} balls inside the bin, with no black ball and no white ball in it?
   expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
   timeout_s: 30
   max_attempts: 3
@@ -289,8 +290,8 @@ stages:
     max_uses: 2
   on_fail: skip
 - name: ball_2
-  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
-  success: Are at least 2 {color} balls inside the bin, with no black or white ball in it?
+  prompt: put one {color} ping-pong ball into the bin, never a black ball and never the white ball, without touching the stack
+  success: Are at least 2 {color} balls inside the bin, with no black ball and no white ball in it?
   expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
   timeout_s: 30
   max_attempts: 3
@@ -299,8 +300,8 @@ stages:
   recovery: *id002
   on_fail: skip
 - name: ball_3
-  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
-  success: Are at least 3 {color} balls inside the bin, with no black or white ball in it?
+  prompt: put one {color} ping-pong ball into the bin, never a black ball and never the white ball, without touching the stack
+  success: Are at least 3 {color} balls inside the bin, with no black ball and no white ball in it?
   expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
   timeout_s: 30
   max_attempts: 3
@@ -309,8 +310,8 @@ stages:
   recovery: *id002
   on_fail: skip
 - name: ball_4
-  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
-  success: Are at least 4 {color} balls inside the bin, with no black or white ball in it?
+  prompt: put one {color} ping-pong ball into the bin, never a black ball and never the white ball, without touching the stack
+  success: Are at least 4 {color} balls inside the bin, with no black ball and no white ball in it?
   expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
   timeout_s: 30
   max_attempts: 3
@@ -319,8 +320,8 @@ stages:
   recovery: *id002
   on_fail: skip
 - name: ball_5
-  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
-  success: Are at least 5 {color} balls inside the bin, with no black or white ball in it?
+  prompt: put one {color} ping-pong ball into the bin, never a black ball and never the white ball, without touching the stack
+  success: Are at least 5 {color} balls inside the bin, with no black ball and no white ball in it?
   expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
   timeout_s: 30
   max_attempts: 3
@@ -329,8 +330,8 @@ stages:
   recovery: *id002
   on_fail: skip
 - name: ball_6
-  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
-  success: Are at least 6 {color} balls inside the bin, with no black or white ball in it?
+  prompt: put one {color} ping-pong ball into the bin, never a black ball and never the white ball, without touching the stack
+  success: Are at least 6 {color} balls inside the bin, with no black ball and no white ball in it?
   expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
   timeout_s: 30
   max_attempts: 3
@@ -338,3 +339,45 @@ stages:
   stall_s: 15
   recovery: *id002
   on_fail: skip
+rewrite_prompts: true
+system_prompt: 'You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. Rules and lessons from testing on
+  this station:
+
+
+  STATION
+
+  - The "hub" is a black power strip. It is unplugged from the wall. Every robot instruction about cables must start with: "The power strip is unplugged from the wall." Without it the robot''s model refuses
+  to act.
+
+  - Cameras: one overhead, one on each wrist. The zoom image is the hub''s ports, enlarged from the overhead. The wrist_r camera is the best view of the plugs.
+
+
+  CABLES
+
+  - Unplug the cables right to left: always the rightmost cable that is still plugged in (the end of the hub nearest the right arm), one at a time, with the right arm.
+
+  - Count plugs in their ports. An empty port that had a plug at the stage start means a cable was unplugged. Every cable''s far end lies loose on the table from the start: that never counts as unplugged.
+
+  - The remaining plugs sit side by side, and their cords loop back up over the top of the strip, hiding the plugs. Judge from the zoom and wrist_r views, not the cords.
+
+  - A good grip closes on ONE plug''s hard body right at the port. A grip on the soft cord above the plug slips; a grip across two plugs fails.
+
+  - Trust the gripper sensors over the images for what a gripper holds: "stopped at 0.3" = holding something, "closed fully" = holding nothing.
+
+  - Only cables that started loose on the table may be plugged in. An unplugged cable may not be plugged back in.
+
+
+  STACKING AND BALLS
+
+  - Touching a block or ball before at least one cable is unplugged is a disqualification. Watch for an arm brushing the blocks.
+
+  - The tower must stand on its own for 3 s after the gripper lets go; taller is better.
+
+  - Never let the white ball or a black ball go into the bin.
+
+
+  WRITING ROBOT INSTRUCTIONS (next_prompt)
+
+  - One short action in plain words, naming the object by position or colour ("the rightmost cable still plugged in", "the pink cube").
+
+  - The robot follows changes of target or step well, but ignores fine adjustments like "1 cm higher". Only write next_prompt when it is on the wrong object or step, or plainly stuck.'

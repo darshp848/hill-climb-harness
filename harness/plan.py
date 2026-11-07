@@ -16,7 +16,7 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "system_prompt", "rewrite_prompts"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "expect",
                "cameras", "camera_notes", "history_cameras", "required_cameras", "requires_stage"}
@@ -82,6 +82,8 @@ class Plan:
     confirm: int = 1
     claude_user: dict[str, Any] = field(default_factory=dict)  # only the keys the plan file set
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
+    system_prompt: str = ""      # the monitor's system prompt: house rules and lessons from testing
+    rewrite_prompts: bool = False  # let the monitor write the robot's next prompt (next_prompt), with guard rails
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -261,9 +263,17 @@ def parse_plan(data: Any) -> Plan:
     done_message = data.get("done_message", "") or ""
     if not isinstance(done_message, str):
         raise ValueError("plan.done_message: must be a string")
+    system_prompt = data.get("system_prompt", "") or ""
+    if not isinstance(system_prompt, str):
+        raise ValueError("plan.system_prompt: must be a string")
+    rewrite = data.get("rewrite_prompts", False)
+    if not isinstance(rewrite, bool):
+        raise ValueError("plan.rewrite_prompts: must be true or false")
     return Plan(
         task=task,
         done_message=done_message,
+        system_prompt=system_prompt.strip(),
+        rewrite_prompts=rewrite,
         stages=stages,
         checkpoint=checkpoint,
         time_budget_s=float(_num(data.get("time_budget_s", 900.0), "plan.time_budget_s")),
