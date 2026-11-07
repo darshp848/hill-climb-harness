@@ -223,6 +223,24 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
                           recovery=rec, scene_ok=scene, holding=holding)
 
 
+def _zoom(jpeg: bytes, box: list[float], scale: float = 2.0) -> bytes | None:
+    """Crop `box` (fractions) out of a JPEG and enlarge it. None when OpenCV is not installed (zoom is optional)."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    im = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if im is None:
+        return None
+    h, w = im.shape[:2]
+    c = im[int(box[1] * h):int(box[3] * h), int(box[0] * w):int(box[2] * w)]
+    if c.size == 0:
+        return None
+    c = cv2.resize(c, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    return cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+
+
 class MonitorVerifier:
     """Claude-backed stage monitor: frame history in, structured verdict out (DESIGN_v2.md section 1).
 
@@ -237,7 +255,8 @@ class MonitorVerifier:
         user = plan.claude_user
         self.plan = plan
         self.model = model or plan.claude.get("model", "claude-haiku-5-5")
-        self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 600))
+        self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 4000))
+        self.grip_note = ""   # set by the runner from /arms before each check (station_addons)
         self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
         if transport is None:
             key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
@@ -293,6 +312,8 @@ class MonitorVerifier:
         if stage.camera_notes:
             lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
             lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]
+        if getattr(self, "grip_note", ""):
+            lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
         lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
         menu = stage.menu()
@@ -337,13 +358,20 @@ class MonitorVerifier:
             else:
                 self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
         images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
+        zoom = self.plan.claude.get("zoom")   # {"box": [x0, y0, x1, y1]} fractions of the overhead: e.g. the hub
+        if zoom and overhead is not None:
+            start = self._first.get(overhead[0])
+            for tag, jpeg in ((("stage start", start[1]),) if start else ()) + (("newest", overhead[1]),):
+                z = _zoom(jpeg, zoom["box"])
+                if z:
+                    images.append((f"ZOOM on {zoom.get('what', 'the hub')} from the overhead camera ({tag})", z))
         content: list[dict[str, Any]] = []
         for label, jpeg in images:
             content.append({"type": "text", "text": label})
             content.append({"type": "image", "source": {
                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
-        return {"model": self.model, "max_tokens": self.max_tokens,
+        return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
                 "messages": [{"role": "user", "content": content}]}
 
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:

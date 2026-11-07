@@ -123,6 +123,14 @@ class StationClient:
     def reset(self) -> dict[str, Any]:
         return self._post("/reset", {})
 
+    def grippers(self) -> dict[str, Any]:
+        """GET /arms (station_addons/sitecustomize.py): each gripper's measured opening (0 closed .. 1 open), the
+        commanded opening and the effort. {} when the station runs without the add-on, so nothing depends on it."""
+        try:
+            return self._request("GET", "/arms")
+        except Exception:  # noqa: BLE001 - optional route
+            return {}
+
     def wait_for_state(self, states: set[str], timeout_s: float, poll_s: float = 0.5) -> dict[str, Any]:
         """Polls /status until its state is in `states`. Raises TimeoutError."""
         deadline = time.monotonic() + timeout_s
