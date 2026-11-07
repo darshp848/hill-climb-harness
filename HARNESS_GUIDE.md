@@ -312,6 +312,20 @@ It prints:
 
 It's an estimate. The trace doesn't keep measured torque or current, and the tool point defaults to the wrist-roll joint, so pass `--tcp` for the jaw tip.
 
+### Measured torque: `python -m harness.can_torque`
+
+Every Damiao motor answers each command with a state frame: position, velocity, torque (its own estimate from current) and temperatures. Dream's driver reads these frames, but neither its HTTP API nor its trace exposes the torque, so the harness can't read it through Dream. You can still listen passively on the station's CAN link while a run goes. This never sends a frame:
+
+```bash
+ip -details -brief link show type can                 # are the arms on SocketCAN links (can_left / can_right)?
+candump -L -n 4000 can_right > right.log              # listen only, during an attempt
+python -m harness.can_torque right.log [--csv out.csv]
+```
+
+It prints per joint: the median and peak torque, its share of the motor's torque scale, the peak temperature and any fault frames. Only the gripper row tells you the squeeze directly.
+
+If the adapters are CANables in slcan mode (a `/dev/tty…` serial device), the port is exclusive to Dream's agent and can't be listened to. In that case, use `harness.force` on the trace instead.
+
 ## 9. Checklist on the day
 
 1. `python -m pytest -q` passes. Then run `--mock --scenario arm_dies` once to watch it stop safely.
