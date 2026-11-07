@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -13,13 +14,14 @@ import yaml
 
 VERIFIERS = ("manual", "claude", "time", "claude+manual", "monitor", "monitor+manual")
 RECOVERY_KINDS = ("retry", "reset")
-ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
+ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort", "abandon")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "match"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "expect",
-               "cameras", "camera_notes", "history_cameras", "required_cameras", "requires_stage"}
+               "cameras", "camera_notes", "history_cameras", "required_cameras", "requires_stage",
+               "stage_budget_s", "reserve_after_s"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -56,6 +58,8 @@ class Stage:
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     required_cameras: list[str] = field(default_factory=list)  # distinct current trips must include these views
     requires_stage: str | None = None  # skip this stage if the named earlier stage failed
+    stage_budget_s: float | None = None  # includes all attempts, observations and recoveries
+    reserve_after_s: float = 0.0  # stop optional work early to leave time for later stages
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if camera_matches(role, k)), "")
@@ -67,6 +71,12 @@ class Stage:
 
     def effective_settle(self) -> float:
         return self.min_run_s if self.settle_s is None else self.settle_s
+
+
+@dataclass(frozen=True)
+class MatchRules:
+    gates: tuple[str, str]  # unplug, then free-standing stack
+    stop_reserve_s: float
 
 
 @dataclass
@@ -82,6 +92,7 @@ class Plan:
     confirm: int = 1
     claude_user: dict[str, Any] = field(default_factory=dict)  # only the keys the plan file set
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
+    match: MatchRules | None = None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -95,8 +106,8 @@ def _roles(value: Any, where: str) -> list[str]:
 def _num(value: Any, where: str, *, integer: bool = False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or (integer and not isinstance(value, int)):
         raise ValueError(f"{where}: must be {'an integer' if integer else 'a number'}, got {value!r}")
-    if value <= 0:
-        raise ValueError(f"{where}: must be positive, got {value!r}")
+    if value <= 0 or not math.isfinite(value):
+        raise ValueError(f"{where}: must be finite and positive, got {value!r}")
     return value
 
 
@@ -219,6 +230,11 @@ def parse_plan(data: Any) -> Plan:
         if not isinstance(notes, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.strip()
                                                   for k, v in notes.items()):
             raise ValueError(f"{label}.camera_notes: must map camera role names to non-empty text")
+        on_fail = _enum(raw.get("on_fail", "retry_in_place"), ON_FAIL, f"{label}.on_fail")
+        budget = raw.get("stage_budget_s")
+        reserve = raw.get("reserve_after_s")
+        if reserve is not None and on_fail != "abandon":
+            raise ValueError(f"{label}.reserve_after_s: only optional stages can reserve time")
         stages.append(
             Stage(
                 name=name,
@@ -229,7 +245,7 @@ def parse_plan(data: Any) -> Plan:
                 min_run_s=float(_num(raw.get("min_run_s", 4.0), f"{label}.min_run_s")),
                 verifier=_enum(raw.get("verifier", default_verifier), VERIFIERS, f"{label}.verifier"),
                 recovery=recs,
-                on_fail=_enum(raw.get("on_fail", "retry_in_place"), ON_FAIL, f"{label}.on_fail"),
+                on_fail=on_fail,
                 stall_s=None if stall is None else float(_num(stall, f"{label}.stall_s")),
                 settle_s=None if settle is None else float(_num(settle, f"{label}.settle_s")),
                 skip_if_done=skip_if_done,
@@ -239,6 +255,8 @@ def parse_plan(data: Any) -> Plan:
                 history_cameras=hist,
                 required_cameras=required,
                 requires_stage=prerequisite,
+                stage_budget_s=None if budget is None else float(_num(budget, f"{label}.stage_budget_s")),
+                reserve_after_s=0.0 if reserve is None else float(_num(reserve, f"{label}.reserve_after_s")),
             )
         )
 
@@ -261,19 +279,47 @@ def parse_plan(data: Any) -> Plan:
     done_message = data.get("done_message", "") or ""
     if not isinstance(done_message, str):
         raise ValueError("plan.done_message: must be a string")
+    time_budget = float(_num(data.get("time_budget_s", 900.0), "plan.time_budget_s"))
+    confirm = int(_num(data.get("confirm", 1), "plan.confirm", integer=True))
+    match = _match_rules(data.get("match"), stages, time_budget, confirm)
     return Plan(
         task=task,
         done_message=done_message,
         stages=stages,
         checkpoint=checkpoint,
-        time_budget_s=float(_num(data.get("time_budget_s", 900.0), "plan.time_budget_s")),
+        time_budget_s=time_budget,
         check_every_s=float(_num(data.get("check_every_s", 3.0), "plan.check_every_s")),
         verifier=default_verifier,
         claude=claude,
         cameras_for_check=list(cams),
-        confirm=int(_num(data.get("confirm", 1), "plan.confirm", integer=True)),
+        confirm=confirm,
         claude_user=claude_user,
+        match=match,
     )
+
+
+def _match_rules(raw: Any, stages: list[Stage], time_budget: float, confirm: int) -> MatchRules | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"gates", "stop_reserve_s"}:
+        raise ValueError("plan.match: expected gates and stop_reserve_s")
+    reserve = float(_num(raw.get("stop_reserve_s", 5), "plan.match.stop_reserve_s"))
+    if not reserve < time_budget <= 300:
+        raise ValueError("plan.match: time_budget_s must exceed stop_reserve_s and be at most 300")
+    names = [stage.name for stage in stages]
+    gates = raw.get("gates")
+    if (not isinstance(gates, list) or len(gates) != 2 or any(gate not in names for gate in gates)
+            or names.index(gates[0]) >= names.index(gates[1])):
+        raise ValueError("plan.match.gates: name two distinct stages in unplug, stack order")
+    optional = {stage.name for stage in stages if stage.on_fail == "abandon"}
+    if optional.intersection(gates):
+        raise ValueError("plan.match.gates: gates must be required stages")
+    if confirm < 2 or any(s.verifier != "monitor" or s.skip_if_done for s in stages):
+        raise ValueError("plan.match: use monitor, at least two confirmations, and no entry skips")
+    if any(s.on_fail in ("skip", "home_and_retry") or
+           (s.name not in optional and s.requires_stage in optional) for s in stages):
+        raise ValueError("plan.match: only optional stages can be abandoned; homing and legacy skips are disabled")
+    return MatchRules((gates[0], gates[1]), reserve)
 
 
 _VAR = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

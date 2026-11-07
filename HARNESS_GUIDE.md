@@ -136,12 +136,12 @@ stages:
         when: "the cube was dropped or knocked over"
         settle_s: 8
       - "move the arm back above the cube"   # a plain v1 string still works
-    on_fail: retry_in_place              # retry_in_place | home_and_retry | skip | abort
+    on_fail: retry_in_place              # retry_in_place | home_and_retry | skip | abort | abandon
 ```
 
 ### How a run flows
 
-- **Starting.** The first stage starts the run. Each later stage changes the prompt live (`/prompt`), with no stop in between. If the run has ended, the harness starts a new one.
+- **Starting.** The first stage starts the run. Each later stage changes the prompt live (`/prompt`), with no stop in between. If the station goes idle, a match plan ends. Other plans can start a new run.
 - **When an attempt fails,** the harness picks the next recovery:
   - the monitor's suggestion, if that item still has uses left;
   - otherwise the next unused item;
@@ -150,10 +150,11 @@ stages:
   When the menu is used up, `on_fail` takes over:
   - `retry_in_place` runs the recovery prompt, then the stage prompt again.
   - `home_and_retry` does stop, home, start.
-  - `skip` marks the stage failed and moves on.
-  - `abort` stops the run.
+  - `skip` marks the stage failed and moves on after the first failure.
+  - `abort` stops the run after the first failure.
+  - `abandon` retries within `max_attempts` and `stage_budget_s`, then records optional work as abandoned and proceeds to the next eligible stage.
 
-  When the attempts run out, `skip` moves on and anything else fails the run.
+  `stage_budget_s` includes retries, recovery, and verification. An optional stage can use `reserve_after_s` to leave time for later work.
 - **Rules from the papers:**
   - Ask for at least 2 confirmations (`confirm: 2`) before accepting a success. A false success is expensive.
   - A "failing" verdict only counts after 50% of the timeout.
@@ -169,7 +170,7 @@ stages:
 | `plans/example_hill_climb_v2.yaml` | Uses every v2 field, with comments |
 | `plans/sim_fruit_bowl.yaml` | For the MuJoCo sim scene (apple, orange, banana, bowl, plate) |
 | `plans/hill_climb_sprint.yaml` | **Match plan.** Unplug 1 cable, put it down, then stack 2, stack 3, move clear. Then it prints "CALL STOP NOW". |
-| `plans/hill_climb_full.yaml` | The sprint stages, then up to 8 balls of your colour. Needs `--var color=<colour>`. |
+| `plans/hill_climb_full.yaml` | Required unplug and stack, optional watcher-assisted plug, then up to 8 balls of your colour. Needs `--var color=<colour>`. |
 
 ## 6b. Match rules and how the plans follow them (from `hillclimb_rubric_v2.pdf`)
 
@@ -186,10 +187,12 @@ What the rules mean for the harness:
 - **No human input after "go".** In a match, use only `verifier: monitor` (the plans set it). Typing `y`/`n` is human input and gets you DQ'd, so never use `manual` or `monitor+manual` in a match. Don't use `time` either: it would move on without the pass bar being met.
 - **A false "done" is a DQ.** Touching a later stage's objects before the pass bar is met is a DQ. That's why the plans:
   - require `confirm: 2`,
-  - never use `on_fail: skip` on Stages 1-2 (they retry until the clock runs out),
-  - make the last stack check need two "done" verdicts 3 s apart.
+  - end the run if a required stage exhausts its allocation,
+  - ask for fresh evidence of a stack at least six inches and three layers tall, stable for three seconds after release.
 - **Stop early.** Stopping right after Stage 2 usually wins. A ball pays only if it takes under 10 s (it costs 5 bonus points of clock), and an extra block pays only if it takes under 20 s. So the sprint plan ends after the stack and prints `CALL STOP NOW`, and the designated member says "stop" out loud. Use the full plan only if practice shows balls are fast.
-- The run time budget is 295 s.
+- The match budget is 300 s. After preflight, the runner allocates up to 295 s for work and reserves the final 5 s for requesting stop. The full plan preserves 173 s for clearance and stack while attempting the optional plug. It stops chasing balls after the first unverified count.
+
+See [the match design](MATCH_DESIGN.md) for timing, simulator coverage, and the LiveKit training and observation paths.
 
 ```bash
 python -m harness plans/hill_climb_sprint.yaml --live

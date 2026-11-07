@@ -86,7 +86,7 @@ def test_full_plan_watcher_stages():
     names = [s.name for s in plan.stages]
     assert names.index("unplug_cable") < names.index("plug_loose_cable") < names.index("stack_two")
     plug = plan.stages[names.index("plug_loose_cable")]
-    assert plug.history_cameras == ["wrist_l"] and "right arm" in plug.prompt and plug.on_fail == "skip"
+    assert plug.history_cameras == ["wrist_l"] and "right arm" in plug.prompt and plug.on_fail == "abandon"
     assert plug.requires_stage == "watcher_into_place"
     assert plug.required_cameras == ["overhead", "wrist_l"]
 

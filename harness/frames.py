@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -39,14 +40,17 @@ class FrameSource:
         self.last_error: str | None = None
         self._cache: CameraTrip | None = None
 
-    def _get_json(self, route: str) -> Any:
-        with urllib.request.urlopen(self.base_url + route, timeout=self.timeout_s) as resp:
+    def _get_json(self, route: str, timeout_s: float | None = None) -> Any:
+        timeout = self.timeout_s if timeout_s is None else min(self.timeout_s, timeout_s)
+        if timeout <= 0:
+            raise TimeoutError("camera request budget expired")
+        with urllib.request.urlopen(self.base_url + route, timeout=timeout) as resp:
             return json.loads(resp.read())
 
-    def latest_n(self) -> int | None:
+    def latest_n(self, *, timeout_s: float | None = None) -> int | None:
         """Number of the newest round trip, or None."""
         try:
-            trips = self._get_json("/trips")
+            trips = self._get_json("/trips", timeout_s)
             self.last_error = None
             if isinstance(trips, list) and trips:
                 return int(trips[-1]["n"])
@@ -54,15 +58,21 @@ class FrameSource:
             self.last_error = f"{type(exc).__name__}: {exc}"
         return None
 
-    def latest(self) -> dict[str, bytes]:
+    def latest(self, *, timeout_s: float | None = None) -> dict[str, bytes]:
         """role -> JPEG bytes: the newest frame of each camera in the newest round trip. {} if none."""
-        trip = self.latest_trip(fallback=True)
+        trip = (self.latest_trip(fallback=True) if timeout_s is None
+                else self.latest_trip(fallback=True, timeout_s=timeout_s))
         return dict(trip.frames) if trip is not None else {}
 
-    def latest_trip(self, *, fallback: bool = False) -> CameraTrip | None:
+    def latest_trip(self, *, fallback: bool = False, timeout_s: float | None = None) -> CameraTrip | None:
         """Read frames and prompt from the same trip. Evidence checks use only the newest trip."""
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+
+        def read(route: str) -> Any:
+            return self._get_json(route, None if deadline is None else deadline - time.monotonic())
+
         try:
-            trips = self._get_json("/trips")
+            trips = read("/trips")
             if not isinstance(trips, list) or not trips:
                 self.last_error = None
                 return None
@@ -72,7 +82,7 @@ class FrameSource:
                     self.last_error = None
                     return self._cache
                 try:
-                    trip = self._get_json(f"/trip/{n}")
+                    trip = read(f"/trip/{n}")
                 except urllib.error.HTTPError as exc:
                     if exc.code == 404:
                         continue

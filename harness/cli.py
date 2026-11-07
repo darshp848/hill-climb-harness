@@ -21,7 +21,7 @@ SAFETY = """\
 LIVE RUN. This drives the real robot through the station agent.
   - Keep your hand on the e-stop for the whole run.
   - Make sure the workspace is clear of people and loose objects.
-  - Ctrl+C (or typing s + Enter) stops the run; the arms hold where they are."""
+  - Ctrl+C requests a stop; the station holds the arms in place."""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -57,6 +57,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"plan error: {exc}", file=sys.stderr)
         return 2
     if args.verifier:
+        if plan.match and args.verifier != "monitor":
+            print("match plans require the monitor verifier", file=sys.stderr)
+            return 2
         for stage in plan.stages:
             stage.verifier = args.verifier
 
@@ -93,9 +96,12 @@ def main(argv: list[str] | None = None) -> int:
         manual = None
         verifiers: dict[str, Verifier] = {}
         try:
-            # One stdin reader serves y/n answers and the s + Enter stop.
-            manual = ManualVerifier(on_stop=lambda: holder["r"].request_stop())
-            for name in {s.verifier for s in plan.stages} | {"manual"}:
+            names = {s.verifier for s in plan.stages}
+            if not plan.match:
+                # One stdin reader serves y/n answers and the s + Enter stop.
+                manual = ManualVerifier(on_stop=lambda: holder["r"].request_stop())
+                names.add("manual")
+            for name in names:
                 verifiers[name] = make_verifier(name, plan, manual=manual)
         except ValueError as exc:
             print(f"verifier error: {exc}", file=sys.stderr)
@@ -109,16 +115,19 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             pass
         mode = "DRY RUN" if dry else ("MOCK" if args.mock else "LIVE")
-        print(f"{mode}: {plan.task or '(no task)'}  [{len(plan.stages)} stages]  type s + Enter to stop")
+        controls = "" if plan.match else "  type s + Enter to stop"
+        print(f"{mode}: {plan.task or '(no task)'}  [{len(plan.stages)} stages]{controls}")
         try:
             result = runner.run()
         except StationError as exc:
             print(f"station error: {exc.message}", file=sys.stderr)
             return 1
         for r in result.stages:
-            print(f"  {'ok  ' if r.ok else 'FAIL'} {r.name:<20} attempts={r.attempts} {r.seconds:6.1f}s  {r.reason}")
+            label = "ok" if r.ok else ("SKIP" if r.abandoned else "FAIL")
+            print(f"  {label:<4} {r.name:<20} attempts={r.attempts} {r.seconds:6.1f}s  {r.reason}")
         print(f"{'SUCCESS' if result.ok else 'FAILED'}: {result.reason}  ({result.seconds:.1f}s)  log: {log.path}")
-        if result.ok and plan.done_message:
+        call_stop = result.match_gates_passed and result.stop_confirmed if plan.match else result.ok
+        if call_stop and plan.done_message:
             bar = "#" * (len(plan.done_message) + 8)
             print(f"\a\n{bar}\n#   {plan.done_message}   #\n{bar}\n")
         if not dry and not args.mock:

@@ -16,7 +16,8 @@ task: >-
   free-standing tower at least 3 layers (6 inches) tall and move the arms away from it.
   Do not touch the blocks before a cable is unplugged. Do not touch the ping-pong balls.
 checkpoint: null            # set to your dream-1-ft:... fine-tune
-time_budget_s: 295          # 5-minute match; a little margin for the start
+time_budget_s: 300
+match: {gates: [unplug_cable, clear_of_stack], stop_reserve_s: 5}
 check_every_s: 3.0
 verifier: monitor
 confirm: 2
@@ -29,6 +30,8 @@ stages:
     success: "Is at least one USB cable that started in the hub now fully pulled out of the hub?"
     expect: "A gripper closes on the plug of a cable in the hub and pulls it straight out until the plug is clear."
     timeout_s: 45
+    stage_budget_s: 75
+    required_cameras: [overhead]
     max_attempts: 8
     min_run_s: 4
     settle_s: 4
@@ -44,6 +47,7 @@ stages:
     success: "Are both grippers empty, with the unplugged cable lying on the table outside the hub?"
     expect: "The arm moves the loose cable away from the hub, lowers it to the table and opens."
     timeout_s: 25
+    stage_budget_s: 30
     max_attempts: 4
     min_run_s: 3
     recovery:
@@ -56,6 +60,7 @@ stages:
     success: "Is one block resting on top of another block, with no gripper holding it?"
     expect: "An arm picks up a block and sets it squarely on another block, then opens."
     timeout_s: 50
+    stage_budget_s: 65
     max_attempts: 6
     min_run_s: 4
     stall_s: 20
@@ -70,6 +75,7 @@ stages:
     success: "Is the stack three blocks tall, standing on its own with no gripper touching it?"
     expect: "An arm picks up a third block and places it on the two-block stack without knocking it, then opens."
     timeout_s: 50
+    stage_budget_s: 70
     max_attempts: 6
     min_run_s: 4
     stall_s: 20
@@ -81,9 +87,11 @@ stages:
 
   - name: clear_of_stack
     prompt: "move the arms up and away from the stack without touching it"
-    success: "Is the stack at least three blocks tall and standing on its own, with both arms clear of it?"
+    success: "Is the stack at least six inches and three layers tall, free-standing for three seconds after release, with both arms clear? Withhold success if the views cannot establish the height, release, or stability."
     expect: "Both arms rise and move back; the stack stays standing."
     timeout_s: 20
+    stage_budget_s: 30
+    required_cameras: [overhead]
     max_attempts: 3
     min_run_s: 3
     recovery:

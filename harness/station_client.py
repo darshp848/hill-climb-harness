@@ -46,7 +46,8 @@ class StationClient:
         if self._log is not None:
             self._log(message)
 
-    def _request(self, method: str, route: str, body: dict | None = None) -> dict[str, Any]:
+    def _request(self, method: str, route: str, body: dict | None = None, *,
+                 timeout_s: float | None = None) -> dict[str, Any]:
         data = None
         headers = {"Accept": "application/json"}
         if method == "POST":
@@ -54,7 +55,8 @@ class StationClient:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.base_url + route, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+            timeout = self.timeout_s if timeout_s is None else min(self.timeout_s, timeout_s)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             raw = exc.read()
@@ -70,11 +72,11 @@ class StationClient:
             raise StationError(0, f"unexpected reply from {route}")
         return payload
 
-    def _post(self, route: str, body: dict) -> dict[str, Any]:
+    def _post(self, route: str, body: dict, *, timeout_s: float | None = None) -> dict[str, Any]:
         if self.dry_run:
             self._say(f"DRY RUN: would POST {route} {json.dumps(body)}")
             return self._simulate(route, body)
-        return self._request("POST", route, body)
+        return self._request("POST", route, body, timeout_s=timeout_s)
 
     def _simulate(self, route: str, body: dict) -> dict[str, Any]:
         if route == "/start":
@@ -93,11 +95,11 @@ class StationClient:
         return status
 
     # -- API -----------------------------------------------------------------------------------
-    def status(self) -> dict[str, Any]:
+    def status(self, *, timeout_s: float | None = None) -> dict[str, Any]:
         """GET /status. In dry run an unreachable station yields a synthetic status flagged
         "_synthetic": True, and the state reflects the simulated POSTs."""
         try:
-            status = self._request("GET", "/status")
+            status = self._request("GET", "/status", timeout_s=timeout_s)
         except StationError:
             if not self.dry_run:
                 raise
@@ -105,17 +107,18 @@ class StationClient:
         self.last_status = status
         return self._overlay(dict(status)) if self.dry_run else status
 
-    def start(self, prompt: str, checkpoint: str | None = None) -> dict[str, Any]:
+    def start(self, prompt: str, checkpoint: str | None = None, *,
+              timeout_s: float | None = None) -> dict[str, Any]:
         body: dict[str, Any] = {"prompt": prompt}
         if checkpoint:
             body["checkpoint"] = checkpoint
-        return self._post("/start", body)
+        return self._post("/start", body, timeout_s=timeout_s)
 
-    def set_prompt(self, prompt: str) -> dict[str, Any]:
-        return self._post("/prompt", {"prompt": prompt})
+    def set_prompt(self, prompt: str, *, timeout_s: float | None = None) -> dict[str, Any]:
+        return self._post("/prompt", {"prompt": prompt}, timeout_s=timeout_s)
 
-    def stop(self) -> dict[str, Any]:
-        return self._post("/stop", {})
+    def stop(self, *, timeout_s: float | None = None) -> dict[str, Any]:
+        return self._post("/stop", {}, timeout_s=timeout_s)
 
     def home(self) -> dict[str, Any]:
         return self._post("/home", {})
