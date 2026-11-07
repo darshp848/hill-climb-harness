@@ -64,7 +64,8 @@ class OracleVerifier:
                 return MonitorVerdict(False, 1.0, "oracle: a black 8-ball is in our bin", status="failing",
                                       recovery=0, scene_ok=False)
             done = ref["golf_in_bin"] > base["golf_in_bin"]
-            return MonitorVerdict(done, 1.0, f"oracle: {ref['golf_in_bin']} golf balls in bin", scene_ok=True)
+            return MonitorVerdict(True if done else None, 1.0, f"oracle: {ref['golf_in_bin']} golf balls in bin",
+                                  status="ok", scene_ok=True)
         if ref["eight_in_bin"]:   # a reset prompt for the 8-ball runs under the ball stage's name only
             return MonitorVerdict(None, 1.0, "oracle: 8-ball in bin", scene_ok=False)
         tower = ref["tower_in"] * h.INCH
@@ -90,8 +91,10 @@ class OracleVerifier:
             done = ref["stage2_at"] is not None and self._near(snap, bodies[top]) > CLEAR_M
         else:
             return MonitorVerdict(None, 0.0, f"oracle: no rule for {name}")
-        return MonitorVerdict(done, 1.0, f"oracle: {name} {'met' if done else 'not met'}",
-                              scene_ok=self._open(snap))
+        # Like the real monitor (parse_monitor_reply), "not met yet" is done=None with status ok, never done=False:
+        # a False verdict would end every attempt after two checks and re-send the prompt mid-motion.
+        return MonitorVerdict(True if done else None, 1.0, f"oracle: {name} {'met' if done else 'not met'}",
+                              status="ok", scene_ok=self._open(snap))
 
 
 def run_match(args: argparse.Namespace, n: int, out: Path) -> dict[str, Any]:
