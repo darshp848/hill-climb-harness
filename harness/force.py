@@ -45,6 +45,7 @@ LINKS = (((0.0, 0.0, 0.06675), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
 # Gripper: motor kp 20 N*m/rad (metal.py), stroke 0..137.5 motor degrees (metal_gripper.LIMITS_DEG), held at
 # the arm's `gripper_hold_torque_nm` (0.1..2.0 N*m at the motor, makers_hold.py; 0.5 is the default).
 GRIP_KP = 20.0
+SUSTAIN_S = 0.5
 GRIP_STROKE_RAD = math.radians(137.5)
 
 
@@ -189,11 +190,18 @@ def report(out, base, *, arm, hold_torque_nm, t_from=None, t_to=None) -> str:
         mags = [abs(r["tau"][j]) for r in sel]
         lines.append(f"{name:<14}{kp:>6.0f}{max(mags):>16.2f}{_pct(mags, 90):>8.2f}"
                      f"{100 * max(mags) / TMAX[model]:>10.0f}%")
-    forces = [r["force_n"] for r in sel if not math.isnan(r["force_n"])]
-    peak = max(sel, key=lambda r: r["force_n"] if not math.isnan(r["force_n"]) else -1)
+    forces = [r["force_n"] if not math.isnan(r["force_n"]) else 0.0 for r in sel]
+    # A one-tick spike (a fast move opening a big tracking gap for a moment) is not a pull: the headline peak is
+    # the highest force held for SUSTAIN_S (a rolling median), and the raw one-tick peak is shown beside it.
+    k = max(1, int(round(SUSTAIN_S / max(1e-3, statistics.median(
+        b["t_s"] - a["t_s"] for a, b in zip(sel, sel[1:])) if len(sel) > 1 else 0.05))))
+    rolled = [statistics.median(forces[i:i + k]) for i in range(max(1, len(forces) - k + 1))]
+    i_best = max(range(len(rolled)), key=rolled.__getitem__)
+    held = sel[i_best + k // 2] if i_best + k // 2 < len(sel) else sel[i_best]
     lines += ["", f"hand force estimate: median {statistics.median(forces):.1f} N, p90 {_pct(forces, 90):.1f} N, "
-                  f"peak {peak['force_n']:.1f} N at t = {peak['t_s'] - t0:.1f} s "
-                  f"(x {peak['force'][0]:+.1f}, y {peak['force'][1]:+.1f}, z {peak['force'][2]:+.1f} N, base frame)"]
+                  f"highest held for {SUSTAIN_S:g} s: {rolled[i_best]:.1f} N at t = {held['t_s'] - t0:.1f} s "
+                  f"(x {held['force'][0]:+.1f}, y {held['force'][1]:+.1f}, z {held['force'][2]:+.1f} N, base frame); "
+                  f"one-tick peak {max(forces):.1f} N (fast moves spike this; not a pull)"]
     grips = [r for r in sel if r["grip_nm"] is not None]
     if grips:
         capped = sum(r["grip_capped"] for r in grips)

@@ -10,6 +10,11 @@ dreamlabs 1.0.37): byte 0 = status << 4 | id, then position (16 bit), velocity (
 and rotor temperature. The torque is the motor's own estimate from its phase current, so unlike
 `harness.force` (which rebuilds the commanded torque from the trace) this is what the joint actually produced.
 
+No candump on the station? `--listen` does the same listen with the Python standard library (a raw SocketCAN
+socket; it only receives, never sends, and needs nothing installed):
+
+    python3 harness/can_torque.py --listen can_follower_r --seconds 15 > right.log
+
 If the arms are on a CANable in slcan mode (a /dev/tty... serial device), the port is exclusive to Dream's agent
 and cannot be listened to alongside it; this tool then has nothing to read.
 """
@@ -100,11 +105,43 @@ def report(frames: list[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def listen(channel: str, seconds: float, out=sys.stdout) -> int:
+    """Receive-only capture on a SocketCAN link, written in candump -L format. Sends nothing."""
+    import socket
+    import struct
+    import time
+
+    sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+    sock.bind((channel,))
+    sock.settimeout(0.5)
+    end, n = time.time() + seconds, 0
+    try:
+        while time.time() < end:
+            try:
+                frame = sock.recv(16)
+            except socket.timeout:
+                continue
+            can_id, dlc = struct.unpack("=IB3x", frame[:8])
+            out.write(f"({time.time():.6f}) {channel} {can_id & 0x1FFFFFFF:03X}#{frame[8:8 + dlc].hex().upper()}\n")
+            n += 1
+    finally:
+        sock.close()
+    return n
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m harness.can_torque", description=__doc__.split("\n\n")[0])
-    p.add_argument("capture", help="candump output (candump -L can_right > right.log)")
+    p.add_argument("capture", nargs="?", help="candump output (candump -L can_right > right.log)")
+    p.add_argument("--listen", metavar="CHANNEL", help="capture from this SocketCAN link instead (receive only)")
+    p.add_argument("--seconds", type=float, default=15.0, help="how long --listen captures")
     p.add_argument("--csv", default=None, help="also write every decoded state frame here")
     a = p.parse_args(argv)
+    if a.listen:
+        n = listen(a.listen, a.seconds)
+        print(f"captured {n} frames from {a.listen}", file=sys.stderr)
+        return 0 if n else 1
+    if not a.capture:
+        p.error("give a capture file, or --listen CHANNEL")
     try:
         frames = parse(Path(a.capture).read_text(encoding="utf-8", errors="replace").splitlines())
     except OSError as exc:
