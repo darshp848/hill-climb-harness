@@ -67,7 +67,8 @@ def test_full_match_wall_clock(tmp_path):
         assert results["unplug_cable"].attempts == 2
         assert results["watcher_into_place"].abandoned and results["plug_loose_cable"].attempts == 0
         assert results["ball_1"].ok and results["ball_8"].abandoned
-        assert "insufficient time" in results["ball_8"].reason
+        # Cut by the clock: either never started (under one check left) or started and stopped at the cutoff.
+        assert results["ball_8"].reason in ("insufficient time for a verification check", "stage time budget exhausted")
         posts = fake.posts()
 
         # Observe the remaining stop reserve through the end of the match.
