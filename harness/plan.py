@@ -14,9 +14,10 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
-               "stall_s", "settle_s", "skip_if_done", "expect"}
+               "stall_s", "settle_s", "skip_if_done", "expect",
+               "cameras", "camera_notes", "history_cameras"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -48,6 +49,12 @@ class Stage:
     settle_s: float | None = None  # None = min_run_s
     skip_if_done: bool = False
     expect: str | None = None
+    cameras: list[str] = field(default_factory=list)          # roles this stage's checks see; empty = plan's
+    camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
+    history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
+
+    def note_for(self, role: str) -> str:
+        return next((n for k, n in self.camera_notes.items() if k in role), "")
 
     def menu(self) -> list[Recovery]:
         """The recovery list with v1 string items wrapped as legacy Recovery entries."""
@@ -71,6 +78,14 @@ class Plan:
     confirm: int = 1
     claude_user: dict[str, Any] = field(default_factory=dict)  # only the keys the plan file set
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
+
+
+def _roles(value: Any, where: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(c, str) and c.strip() for c in value):
+        raise ValueError(f"{where}: must be a list of camera role names")
+    return [c.strip() for c in value]
 
 
 def _num(value: Any, where: str, *, integer: bool = False) -> float:
@@ -187,6 +202,12 @@ def parse_plan(data: Any) -> Plan:
         expect = raw.get("expect")
         if expect is not None:
             expect = _text(expect, f"{label}.expect")
+        cams = _roles(raw.get("cameras"), f"{label}.cameras")
+        hist = _roles(raw.get("history_cameras"), f"{label}.history_cameras")
+        notes = raw.get("camera_notes") or {}
+        if not isinstance(notes, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.strip()
+                                                  for k, v in notes.items()):
+            raise ValueError(f"{label}.camera_notes: must map camera role names to non-empty text")
         stages.append(
             Stage(
                 name=name,
@@ -202,6 +223,9 @@ def parse_plan(data: Any) -> Plan:
                 settle_s=None if settle is None else float(_num(settle, f"{label}.settle_s")),
                 skip_if_done=_bool(raw.get("skip_if_done", False), f"{label}.skip_if_done"),
                 expect=expect,
+                cameras=cams,
+                camera_notes={k: v.strip() for k, v in notes.items()},
+                history_cameras=hist,
             )
         )
 
@@ -255,8 +279,21 @@ def substitute(text: str, variables: dict[str, str] | None) -> str:
 
 
 def load_plan(path: str | Path, variables: dict[str, str] | None = None) -> Plan:
-    """Reads and validates a plan YAML file. Raises ValueError (or OSError if unreadable)."""
-    text = substitute(Path(path).read_text(encoding="utf-8"), variables)
+    """Reads and validates a plan YAML file. Raises ValueError (or OSError if unreadable).
+
+    {name} placeholders are filled from the plan's own `vars:` defaults, then from `variables` (--var wins)."""
+    text = Path(path).read_text(encoding="utf-8")
+    merged: dict[str, str] = {}
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError:
+        raw = None  # placeholders may sit where YAML can't parse them; the substituted text is checked below
+    if isinstance(raw, dict) and raw.get("vars") is not None:
+        if not isinstance(raw["vars"], dict) or not all(isinstance(k, str) for k in raw["vars"]):
+            raise ValueError("plan.vars: must map names to values")
+        merged.update({k: str(v) for k, v in raw["vars"].items()})
+    merged.update(variables or {})
+    text = substitute(text, merged)
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:

@@ -209,9 +209,9 @@ class Runner:
                 seen.add(id(v))
                 fn(prompt)
 
-    def _frames_for_check(self) -> dict[str, bytes]:
+    def _frames_for_check(self, stage: Stage | None = None) -> dict[str, bytes]:
         frames = self.frames.latest()
-        wanted = self.plan.cameras_for_check
+        wanted = (stage.cameras if stage is not None and stage.cameras else None) or self.plan.cameras_for_check
         if wanted:
             frames = {r: j for r, j in frames.items() if any(w in r for w in wanted)}
         return frames
@@ -262,7 +262,7 @@ class Runner:
             if st.get("state") == "idle":
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
             if elapsed >= gate:
-                frames = self._frames_for_check()
+                frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
                 self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
@@ -329,7 +329,7 @@ class Runner:
             st = self._poll_health()
             elapsed = self._clock() - t0
             if elapsed >= settle:
-                frames = self._frames_for_check()
+                frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 self._note_progress(stage, verdict, st)
                 ok = getattr(verdict, "scene_ok", None)
@@ -396,7 +396,7 @@ class Runner:
 
     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
         """skip_if_done: one synchronous look before the prompt is sent."""
-        frames = self._frames_for_check()
+        frames = self._frames_for_check(stage)
         verdict = self._ask(verifier, stage, frames, 0.0, sync=True)
         done = verdict.done is True and (verdict.immediate or (frames and verdict.confidence >= SKIP_MIN_CONFIDENCE))
         self.log.event("entry_check", stage=stage.name, done=verdict.done, confidence=verdict.confidence,

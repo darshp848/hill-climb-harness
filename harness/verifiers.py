@@ -249,8 +249,8 @@ class MonitorVerifier:
         self._busy = False
         self._result: MonitorVerdict | None = None
         self._stage: str | None = None
-        self._first: tuple[float, bytes] | None = None
-        self._history: list[tuple[float, bytes]] = []
+        self._first: dict[str, tuple[float, bytes]] = {}
+        self._history: dict[str, list[tuple[float, bytes]]] = {}
         self._last_prompt: str | None = None
         self._thread: threading.Thread | None = None
 
@@ -287,6 +287,9 @@ class MonitorVerifier:
         lines.append(f"Current stage question: {stage.success}")
         if stage.expect:
             lines.append(f"What correct behaviour looks like: {stage.expect}")
+        if stage.camera_notes:
+            lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
+            lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
         lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
         menu = stage.menu()
@@ -302,23 +305,35 @@ class MonitorVerifier:
     def _build(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> dict[str, Any] | None:
         """Builds the request and advances the frame history. Caller holds the lock."""
         if stage.name != self._stage:
-            self._stage, self._first, self._history = stage.name, None, []
+            self._stage, self._first, self._history = stage.name, {}, {}
             self._gen += 1
             self._result = None
         overhead, wrists = self._split(frames)
         if overhead is None and not wrists:
             return None
+        # Roles with a kept history: the overhead view, plus any the stage lists in history_cameras
+        # (e.g. the wrist camera of an arm that is only watching, for a second viewpoint on depth).
+        tracked = ([overhead] if overhead is not None else []) + [
+            (r, j) for r, j in wrists.items() if any(h in r for h in stage.history_cameras)]
+        tracked_roles = {r for r, _ in tracked}
+
+        def label(t: float, role: str, tag: str = "") -> str:
+            name = "overhead" if overhead is not None and role == overhead[0] else role
+            note = stage.note_for(role)
+            return f"t=+{t:.0f}s {name}" + (f" [{note}]" if note else "") + (f" ({tag})" if tag else "")
+
         images: list[tuple[str, bytes]] = []
-        if self._first is not None:
-            images.append((f"t=+{self._first[0]:.0f}s overhead (stage start)", self._first[1]))
-        images += [(f"t=+{t:.0f}s overhead", j) for t, j in self._history]
-        if overhead is not None:
-            images.append((f"t=+{elapsed_s:.0f}s overhead (newest)", overhead[1]))
-            if self._first is None:
-                self._first = (elapsed_s, overhead[1])
+        for role, _ in tracked:
+            if role in self._first:
+                images.append((label(self._first[role][0], role, "stage start"), self._first[role][1]))
+            images += [(label(t, role), j) for t, j in self._history.get(role, [])]
+            images.append((label(elapsed_s, role, "newest"), frames[role]))
+        for role, _ in tracked:
+            if role not in self._first:
+                self._first[role] = (elapsed_s, frames[role])
             else:
-                self._history = (self._history + [(elapsed_s, overhead[1])])[-self.history_frames:]
-        images += [(f"t=+{elapsed_s:.0f}s {r} (newest)", j) for r, j in wrists.items()]
+                self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
+        images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
         content: list[dict[str, Any]] = []
         for label, jpeg in images:
             content.append({"type": "text", "text": label})
@@ -350,7 +365,7 @@ class MonitorVerifier:
         with self._lock:
             payload = None if self._busy else self._build(stage, frames, elapsed_s)
             if self._stage != stage.name:  # busy, so _build did not run
-                self._stage, self._first, self._history = stage.name, None, []
+                self._stage, self._first, self._history = stage.name, {}, {}
                 self._gen += 1
                 self._result = None
             verdict, self._result = self._result, None

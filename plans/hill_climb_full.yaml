@@ -24,6 +24,10 @@ check_every_s: 3.0
 verifier: monitor
 confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"
+# Which arm plugs the loose cable in and which one only watches with its wrist camera (a second viewpoint,
+# because the overhead camera is poor at depth). Override at the match: --var work_arm=left --var watch_arm=right
+# --var work_cam=wrist_l --var watch_cam=wrist_r
+vars: {work_arm: right, watch_arm: left, work_cam: wrist_r, watch_cam: wrist_l}
 claude: {model: claude-haiku-5-5, max_tokens: 600, history_frames: 6}
 
 stages:
@@ -52,6 +56,46 @@ stages:
     recovery:
       - {name: release, kind: reset, prompt: "open both grippers and move the arms up",
          when: "the cable is still held or tangled on the gripper", settle_s: 5, max_uses: 3}
+    on_fail: retry_in_place
+
+  # Optional +20 per cable: plug a LOOSE cable (one that started on the table) into a free hub port.
+  # Stage 1's pass bar is already met, so these are allowed; on_fail skip keeps them from eating the clock.
+  - name: watcher_into_place
+    prompt: "move the {watch_arm} arm beside the hub so its camera looks at the hub ports from the side, without touching anything"
+    success: "Does the {watch_cam} camera show the hub's free ports from the side, with the {watch_arm} gripper touching nothing?"
+    expect: "The {watch_arm} arm rises and parks a short distance from the hub, its wrist camera pointed at the ports from the side."
+    camera_notes:
+      "{watch_cam}": "wrist camera of the {watch_arm} arm, which should end up looking at the hub ports from the side"
+    timeout_s: 15
+    max_attempts: 1
+    min_run_s: 3
+    on_fail: skip             # no watcher is fine; the plug-in stage still has the top and gripper views
+
+  - name: plug_loose_cable
+    prompt: "with the {work_arm} arm, plug the loose USB cable on the table into a free port on the hub while the {watch_arm} arm stays still"
+    success: "Is a cable that was lying loose on the table now plugged fully into a free hub port, with the plug seated?"
+    expect: "The {work_arm} gripper picks the loose cable up by its plug, lines the plug up with a free port and pushes it in until it is seated, while the {watch_arm} arm holds still."
+    history_cameras: ["{watch_cam}"]
+    camera_notes:
+      "scene": "top view: shows which port and the left-right alignment; poor at depth and insertion"
+      "{watch_cam}": "side view from the {watch_arm} arm, which is only watching: use it for the plug's distance to the port, its height and whether it is pushed fully in"
+      "{work_cam}": "close view from the gripper doing the plugging"
+    timeout_s: 40
+    max_attempts: 2
+    min_run_s: 4
+    stall_s: 15
+    recovery:
+      - {name: realign, kind: retry, when: "the plug is held and near the port but not lined up", max_uses: 1}
+      - {name: back_off, kind: reset, prompt: "move the {work_arm} arm up and away from the hub while holding the cable",
+         when: "the plug is jammed against the hub or pushing the hub", settle_s: 4, max_uses: 1}
+    on_fail: skip             # +20 is worth it only if it is fast (it costs 1 point of clock per 2 s)
+
+  - name: release_before_stack
+    prompt: "open both grippers and move both arms up, away from the hub"
+    success: "Are both grippers empty and clear of the hub and cables?"
+    timeout_s: 15
+    max_attempts: 2
+    min_run_s: 3
     on_fail: retry_in_place
 
   - name: stack_two

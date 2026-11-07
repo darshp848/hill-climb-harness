@@ -201,6 +201,30 @@ Still unclear in the rubric (ask the organizers):
 - Is an outside model (Claude) as the harness's checker allowed? The rubric bans only human input and teleop.
 - Does pressing Enter to start the harness at "go" count as keyboard input?
 
+## 6c. A watcher arm for the cable plug-in (second camera view)
+
+The overhead camera is poor at depth, so it can't tell whether a plug is lined up with the port or pushed in. In `hill_climb_full.yaml`, the plug-in has three stages:
+
+1. `watcher_into_place` asks Dream-1 to park the other arm beside the hub, with its wrist camera looking at the ports from the side. This stage is optional (`on_fail: skip`).
+2. `plug_loose_cable` has one arm plug the cable in while the watcher holds still. The monitor gets:
+   - the frame history of the watcher's wrist camera, not only of the overhead camera (`history_cameras`),
+   - a note per camera saying what it shows (`camera_notes`), so it judges depth from the side view.
+3. `release_before_stack` opens both grippers and lifts the arms clear before the stack.
+
+You choose the arms with `--var work_arm=left --var watch_arm=right --var work_cam=wrist_l --var watch_cam=wrist_r`. The defaults are: right arm works, left arm watches.
+
+The new stage fields work in any plan:
+
+| Field | What it does |
+| --- | --- |
+| `cameras` | The camera roles this stage's checks see. This overrides the plan's `cameras_for_check`. |
+| `history_cameras` | Extra roles whose frame history the monitor keeps. |
+| `camera_notes` | Maps a role to a sentence telling the monitor what that view shows. |
+
+Plans can also set defaults with `vars:`. `--var` overrides them.
+
+**Limit:** the harness can't move an arm itself. Dream-1 has to do the watcher pose from the prompt, and base Dream-1 may ignore "stay still" or "park beside the hub". To make it reliable, record teleop demos of the watcher pose for the fine-tune. Skipping it costs nothing: if the watcher never gets into place, the stage times out after 15 s and the plug-in still runs with the overhead and gripper views.
+
 ## 7. Test in simulation (before the robot)
 
 `sim_station.py` serves the same API (8091) and debug view (8093), driven by Dream's MuJoCo YAM simulator (`dream_examples/yam_mujoco`). The harness can't tell it apart from a real station, and nothing physical moves, so `--live` is safe here. Note that the Hill Climb uses Metal arms, while the sim is YAM only. That makes it a test of the harness logic and prompts, not of the real task.
