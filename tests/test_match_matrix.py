@@ -38,6 +38,7 @@ CASES = (
     Case("unknown_required_reset", True, True, True, "ball_1"),
     Case("ball_failure", True, True, True, "ball_2"),
     Case("eight_ball_in_bin", True, True, True, "ball_2"),
+    Case("cable_never_released", True, True, True, "ball_1"),
     Case("arm_fault", False, False, True, "raise_stack", ("clear_of_stack", "ball_1")),
     Case("prompt_ack_missing", False, False, True, "watcher_into_place", ("plug_loose_cable", "stack_two")),
     Case("work_cutoff", True, True, True, "ball_8"),
@@ -118,6 +119,8 @@ class Judge:
                 return MonitorVerdict(None, 1, "8-ball out of the bin", scene_ok=True)
             if not any(command[1] == remove for command in self.fixture.commands):
                 return MonitorVerdict(False, 1, "a black 8-ball is in our bin", status="failing", recovery=0)
+        if case == "cable_never_released" and stage.name in ("put_cable_down", "release_before_stack"):
+            return Verdict(None)   # the relay-table sim: Dream-1 keeps holding the unplugged plug
         if case == "ball_failure" and stage.name == "ball_1":
             return Verdict(False, 1, "ball outcome did not meet the success question")
 
@@ -189,6 +192,10 @@ def test_full_v4_decision_matrix(case, tmp_path):
         ball = [i for i, c in enumerate(fixture.commands) if c[1] == fixture.prompts["ball_1"]]
         remove = next(i for i, c in enumerate(fixture.commands) if "8-ball out of our bin" in (c[1] or ""))
         assert ball[0] < remove < ball[1] and results["ball_1"].ok and results["ball_1"].attempts == 2
+    elif case.name == "cable_never_released":
+        assert results["put_cable_down"].abandoned and results["release_before_stack"].abandoned
+        assert results["stack_two"].ok and results["clear_of_stack"].ok
+        assert results["put_cable_down"].seconds <= 20.5 and results["release_before_stack"].seconds <= 15.5
     elif case.name == "ball_failure":
         assert results["ball_1"].abandoned and results["ball_2"].ok
     elif case.name == "late_gate_verdict":

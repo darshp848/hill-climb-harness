@@ -28,9 +28,11 @@ def test_match_plans_load_and_follow_the_rules(name):
     assert plan.match is not None and plan.match.gates == ("unplug_cable", "clear_of_stack")
     assert plan.match.stop_reserve_s == 5
     assert plan.done_message
-    optional = ("ball_", "watcher_into_place", "plug_loose_cable")   # after Stage 1 passed: skipping is safe
+    # After Stage 1 passed, skipping these is safe; housekeeping must never block the stack.
+    optional = ("ball_", "watcher_into_place", "plug_loose_cable", "put_cable_down", "release_before_stack")
+    assert all(s.on_fail == "abandon" for s in plan.stages if s.name.startswith(optional))
     gated = [s for s in plan.stages if not s.name.startswith(optional)]
-    assert [s.name for s in gated][:2] == ["unplug_cable", "put_cable_down"]
+    assert [s.name for s in gated][:2] == ["unplug_cable", "stack_two"]
     assert all(s.on_fail not in ("skip", "abandon") for s in gated)
     assert all(s.stage_budget_s is not None for s in plan.stages)
     assert all(s.verifier == "monitor" for s in plan.stages)

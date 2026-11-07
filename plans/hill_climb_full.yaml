@@ -49,14 +49,17 @@ stages:
     prompt: "put the USB cable down on the table away from the hub and open the gripper"
     success: "Are both grippers empty, with the unplugged cable out of the hub (on the table, or dropped off it)?"
     expect: "The arm moves the loose cable away from the hub, lowers it to the table and opens."
-    timeout_s: 25
-    stage_budget_s: 30
-    max_attempts: 4
+    timeout_s: 15
+    stage_budget_s: 20
+    max_attempts: 2
     min_run_s: 3
     recovery:
       - {name: release, kind: reset, prompt: "open both grippers and move the arms up",
-         when: "the cable is still held or tangled on the gripper", settle_s: 5, max_uses: 3}
-    on_fail: retry_in_place
+         when: "the cable is still held or tangled on the gripper", settle_s: 5, max_uses: 1}
+    # Optional: the rubric only needs one cable out before the blocks, and holding a cable is allowed. In the
+    # relay-table sim Dream-1 kept holding the plug in 8 of 8 matches, which blocked the stack for the rest
+    # of the match when this stage was required.
+    on_fail: abandon
 
   # Optional +20 per cable: plug a LOOSE cable (one that started on the table) into a free hub port.
   # Reserve the remaining mandatory clearance and stack allocations before optional cable work.
@@ -104,10 +107,10 @@ stages:
     prompt: "open both grippers and move both arms up, away from the hub"
     success: "Are both grippers empty and clear of the hub and cables?"
     timeout_s: 15
-    stage_budget_s: 18
-    max_attempts: 2
+    stage_budget_s: 15
+    max_attempts: 1
     min_run_s: 3
-    on_fail: retry_in_place
+    on_fail: abandon   # housekeeping, like put_cable_down: never let it block the stack
 
   - name: stack_two
     prompt: "put a block on top of another block"
