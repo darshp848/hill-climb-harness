@@ -21,7 +21,9 @@ MAX_CAMERA_AGE_S = 2.0
 _SLEEP_STEP_S = 0.25
 STALL_RISE = 0.05          # progress must rise by this much to reset the stall clock
 REGRESSION_DROP = 0.3      # a drop this far below the attempt's max counts as a failing verdict
-FAIL_MIN_FRACTION = 0.5    # a monitor "failing" ends an attempt only after this share of timeout_s
+FAIL_MIN_FRACTION = 0.5
+DONE_WINDOW_S = 15.0       # two done verdicts this close pass the stage, flickers in between notwithstanding
+EXTEND_S = 20.0            # one timeout extension while the monitor sees the gripper on the target    # a monitor "failing" ends an attempt only after this share of timeout_s
 SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-manual verifier
 MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prompt change
 
@@ -216,8 +218,27 @@ class Runner:
             frames = {r: j for r, j in frames.items() if any(w in r for w in wanted)}
         return frames
 
+    def _grip_note(self) -> str:
+        """Grip by feel from /arms: commanded closed and stopped partway -> holding; closed fully -> empty."""
+        getter = getattr(self.station, "grippers", None)
+        arms = getter() if getter else {}
+        notes = []
+        for side, g in sorted((arms or {}).items()):
+            cmd, got = g.get("commanded_gripper"), g.get("gripper")
+            if cmd is None or got is None:
+                continue
+            if cmd > 0.15:
+                notes.append(f"{side} gripper open ({got:.2f})")
+            elif got <= 0.06:
+                notes.append(f"{side} gripper closed fully on nothing ({got:.2f}): it is NOT holding anything")
+            else:
+                notes.append(f"{side} gripper commanded closed but stopped at {got:.2f}: it is holding something")
+        return "; ".join(notes)
+
     def _ask(self, verifier: Verifier, stage: Stage, frames: dict[str, bytes], elapsed: float, *,
              sync: bool = False) -> Verdict:
+        if hasattr(verifier, "grip_note"):
+            verifier.grip_note = self._grip_note()
         fn = getattr(verifier, "check_now", verifier.check) if sync else verifier.check
         try:
             return fn(stage, frames, elapsed)
@@ -252,6 +273,8 @@ class Runner:
         confirm = self.plan.confirm
         gate = max(stage.min_run_s, stage.effective_settle())   # no verifier and no stall clock before this
         consec_done = consec_fail = consec_stalled = 0
+        last_done_t: float | None = None   # a done verdict sticks: a second one within DONE_WINDOW_S passes
+        extended = False                   # one timeout extension while the gripper is on the target
         max_p: float | None = None
         rise_ref = last_rise = None
         hint: int | None = None
@@ -264,6 +287,7 @@ class Runner:
             if elapsed >= gate:
                 frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
+                self._last_verdict = verdict
                 saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
                 self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
@@ -274,7 +298,7 @@ class Runner:
                         hint = verdict.recovery
                     p = verdict.progress
                     if p is not None:
-                        if max_p is not None and p <= max_p - REGRESSION_DROP:
+                        if max_p is not None and p <= max_p - REGRESSION_DROP and last_done_t is None:
                             self.log.event("regression", stage=stage.name, attempt=attempt, progress=p, max_progress=max_p)
                             failing, why = True, f"regressed: progress {p:.2f} vs max {max_p:.2f}"
                         if max_p is None or p > max_p:
@@ -288,12 +312,16 @@ class Runner:
                     consec_fail = 0
                     if verdict.immediate or frames:
                         consec_done += 1
-                        if verdict.immediate or consec_done >= confirm:
+                        recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
+                        last_done_t = elapsed
+                        if verdict.immediate or consec_done >= confirm or recent:
                             return _Attempt(True, verdict.reason or "verified", max_p, hint)
                     else:
                         consec_done = 0
                         self.log.event("no_frames", stage=stage.name, attempt=attempt,
                                        note="done verdict ignored: no frames to back it")
+                elif failing and last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S:
+                    pass                           # one flicker after a done does not undo it
                 elif failing:
                     consec_done = 0
                     consec_fail += 1
@@ -310,7 +338,20 @@ class Runner:
                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
                                 max_p, hint)
             if elapsed >= stage.timeout_s:
+                if not extended and self._on_target(stage):
+                    extended = True
+                    self.log.event("timeout_extended", stage=stage.name, attempt=attempt, extra_s=EXTEND_S)
+                    t0 += EXTEND_S                 # the gripper is on the target and pulling: let it finish
+                    continue
                 return _Attempt(False, f"timeout after {stage.timeout_s:g} s", max_p, hint)
+
+    def _on_target(self, stage: Stage) -> bool:
+        """The last monitor verdict says a gripper holds the stage's object and progress is at least half."""
+        v = getattr(self, "_last_verdict", None)
+        if not isinstance(v, MonitorVerdict) or (v.progress or 0) < 0.5 or v.status == "failing":
+            return False
+        held = " ".join(str(x) for x in (v.holding or {}).values()).lower()
+        return any(w in held for w in ("plug", "cable", "block", "cube", "connector"))
 
     def _hold(self, seconds: float) -> None:
         t0 = self._clock()

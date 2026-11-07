@@ -211,7 +211,7 @@ def test_monitor_payload_contents_and_history():
         v = mon.check_now(st, frames(i), 3.0 * i)
         assert v.done is None and v.status == "ok"
     first, last = t.payloads[0], t.payloads[-1]
-    assert last["model"] == "claude-haiku-5-5" and last["max_tokens"] == 600
+    assert last["model"] == "claude-haiku-5-5" and last["max_tokens"] == 4000   # 600 truncated Haiku 5.5 replies
     content = last["messages"][0]["content"]
     labels = [b["text"] for b in content if b["type"] == "text"][:-1]
     assert labels[0] == "t=+0s overhead (stage start)"
@@ -347,7 +347,16 @@ def test_confirm_two_needs_consecutive_done(fake, write_plan, tmp_path):
     sv = Script([mv(True), mv(None, "ok"), mv(True), mv(True)], repeat=False)
     result = build(fake, path, tmp_path, sv).run()
     assert result.ok, result.reason
-    assert len(sv.calls) == 4          # a done, then an "ok, not done" resets the count, then two in a row
+    assert len(sv.calls) == 3          # kaushik-fixes: a second done within DONE_WINDOW_S passes despite the flicker
+
+
+def test_done_far_apart_still_needs_confirm(fake, write_plan, tmp_path, monkeypatch):
+    """Two done verdicts further apart than DONE_WINDOW_S do not pass on their own."""
+    import harness.runner as R
+    monkeypatch.setattr(R, "DONE_WINDOW_S", 0.0)
+    path = write_plan([stage("a")], confirm=2)
+    sv = Script([mv(True), mv(None, "ok"), mv(True), mv(True)], repeat=False)
+    assert build(fake, path, tmp_path, sv).run().ok and len(sv.calls) == 4
 
 
 def test_confirm_ignores_in_flight_ticks(fake, write_plan, tmp_path):

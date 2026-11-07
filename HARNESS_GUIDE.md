@@ -341,3 +341,53 @@ If the adapters are CANables in slcan mode (a `/dev/tty…` serial device), the 
 - How do we start the harness at "go" without it counting as keyboard input?
 - Can the harness change the prompt live during a match, or is it one prompt per run?
 - Is Ethernet hard mode on, and how tall is one block (are 3 layers already 6 inches)?
+
+## 9. Findings from station tests on nuck-5 (Metal arms, base Dream-1), 7 Nov 2026
+
+Measured on the real station; the run logs and frames are in each run's `runs/<ts>/`.
+
+**Grip force is a station setting, not a prompt.** A Metal gripper holds every grasp at `gripper_hold_torque_nm`
+(station.yaml, per arm). Dream's default is 0.5 N·m, which held a foam block but let a seated USB plug slide out of
+the fingers on every pull. At **1.5 N·m** (Dream accepts 0.1–2.0) the first clean unplug came within 140 s. `grip_force_cap`
+does nothing on Metal: the arm reports no gripper effort, so that regulator never engages. Ask Dream's staff before
+changing either.
+
+**What a successful unplug takes** (`python -m harness.force` on the trace): a full squeeze *and* a firm pull straight
+along the port, about 48 N along x. Failed tries pulled 5–18 N, pressing down into the hub or sideways, or never
+squeezed (0.47 N·m). The speed clamps were never the limit (0% clamped). The remaining gap is the model's motion,
+so it needs demos.
+
+**Judge fixes made here**
+- `max_tokens` 600 → 4000 and `output_config.effort: low`. With 600, Haiku 5.5 (which thinks before it answers) cut
+  off every reply, and the harness never got a single verdict.
+- A done verdict sticks: two done reads within `DONE_WINDOW_S` (15 s) pass even with a flicker between them, and a
+  "regression" can no longer end an attempt after a done. One run lost 106 s re-trying an unplug that had already
+  happened.
+- One timeout extension (`EXTEND_S`, 20 s) when the monitor sees the gripper on the target with progress ≥ 0.5. An
+  attempt was cut off mid-pull at 45 s.
+- The unplug question is now start-vs-now ("compared with the stage-start image…"). Absolute counts ("how many are
+  in the hub") flip between 1 and 2 on identical frames.
+- Gripper feel: `station_addons/sitecustomize.py` adds a read-only `GET /arms` to Dream's station API (start the
+  station with `PYTHONPATH=<repo>/station_addons dreamcli robot up --view --view-port 8093`; Dream's files are
+  untouched). Each check then tells the monitor "commanded closed but stopped at 0.31: holding something" or
+  "closed fully on nothing". The harness works without it.
+- Plans name `checkpoint: dreamlabs/dream-1-beta`: a Metal station has no default model, so `/start` refuses without
+  one.
+
+**Prompts.** Base Dream-1 does better with one short task-level prompt than with step-by-step sub-prompts: every
+`/prompt` switch starts a fresh episode, and narrow wording ("the pink stick") made it grab the wrong object. The unplug
+now targets **the end cable nearest the working arm**, for a clear approach and an unblocked view. A watcher-arm prompt
+does move the other arm, but in one test it knocked a block. Touching a stage-2 object before the unplug passes is a
+DQ, so watcher prompts should keep it on the hub side.
+
+**Dream refuses some prompts** (HTTP 400 DA-4000): "plug the cable into the power strip" (an electrical hazard, unless
+the strip really is unplugged and the prompt says so), and any prompt while a person's hand is on the object. Keep hands
+off the table during a run; that is a DQ in the match anyway.
+
+**Zero-shot results.** It stacks 2–4 cubes, reaches and grasps the right cable most of the time, and puts a cable down.
+It does not yet seat a plug, stand a stick in a hole, or unplug reliably (about 1 in 6 tries at 1.5 N·m).
+
+**Demos with the biggest payoff.** Record only the hard part. Teleop the arm to about 5 cm in front of the end plug,
+press A, then grip the plug or its black strain relief fully, pause, pull straight out along the port, open (5–8 s,
+about 35 episodes), plus 3–5 full episodes so the approach joins on. Then about 15 three-layer stacks: centred, slow
+release, back off. Then about 10 recoveries: re-grip after a slip, put a knocked block back.
