@@ -89,7 +89,7 @@ stages:
       "{watch_cam}": "side view from the {watch_arm} arm, which is only watching: use it for the plug's distance to the port, its height and whether it is pushed fully in"
       "{work_cam}": "close view from the gripper doing the plugging"
     timeout_s: 12
-    stage_budget_s: 20
+    stage_budget_s: 30
     reserve_after_s: 173
     max_attempts: 2
     min_run_s: 4

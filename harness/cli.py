@@ -126,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
             label = "ok" if r.ok else ("SKIP" if r.abandoned else "FAIL")
             print(f"  {label:<4} {r.name:<20} attempts={r.attempts} {r.seconds:6.1f}s  {r.reason}")
         print(f"{'SUCCESS' if result.ok else 'FAILED'}: {result.reason}  ({result.seconds:.1f}s)  log: {log.path}")
-        call_stop = result.match_gates_passed and result.stop_confirmed if plan.match else result.ok
+        call_stop = result.ok
+        if plan.match:
+            call_stop = result.match_gates_passed and result.stop_confirmed and result.seconds < plan.time_budget_s
         if call_stop and plan.done_message:
             bar = "#" * (len(plan.done_message) + 8)
             print(f"\a\n{bar}\n#   {plan.done_message}   #\n{bar}\n")

@@ -153,12 +153,16 @@ class Runner:
         except TimeoutError as exc:
             ok, reason = False, str(exc)
             self._safe_stop(reason)
+        seconds = self._clock() - self._t0
         gates_passed = None
         if self.plan.match:
             gates_passed = set(self.plan.match.gates) <= {r.name for r in results if r.ok}
             if ok and not self._stop_confirmed:
                 ok, reason = False, "station stop was not confirmed"
-        result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason,
+            if self._stop_confirmed and seconds >= self.plan.time_budget_s:
+                late = "station stop acknowledged after the match deadline"
+                ok, reason = False, late if ok else f"{reason}. {late}"
+        result = RunResult(ok=ok, stages=results, seconds=seconds, reason=reason,
                            match_gates_passed=gates_passed, stop_confirmed=self._stop_confirmed)
         self.log.update_manifest(end_time=datetime.now(timezone.utc).isoformat(), ok=ok, reason=reason)
         self.log.event("run_end", ok=ok, reason=reason, seconds=result.seconds)
@@ -459,8 +463,9 @@ class Runner:
 
     def _reset_scene(self, stage: Stage, rec: Recovery, verifier: Verifier) -> tuple[bool, str]:
         """kind reset: run the recovery prompt, then wait (up to the cap) for the verifier's scene_ok."""
-        cap = min(stage.timeout_s / 2, 20.0)
-        settle = min(rec.settle_s, cap)
+        verification_window = min(stage.timeout_s / 2, 20.0)
+        settle = rec.settle_s if self.plan.match else min(rec.settle_s, verification_window)
+        cap = settle + verification_window if self.plan.match else verification_window
         t0 = self._clock()
         scene: bool | None = None
         while True:
@@ -492,10 +497,12 @@ class Runner:
                     return False, f"scene still not ok after recovery {rec.name!r}"
                 return True, "scene ok" if scene else "no scene verdict, assumed ok"
 
-    def _pick_recovery(self, stage: Stage, uses: dict[int, int], last: int | None, hint: int | None) -> int | None:
+    def _pick_recovery(self, stage: Stage, uses: dict[int, int], last: int | None, hint: int | None,
+                       *, reset_required: bool = False) -> int | None:
         menu = stage.menu()
         usable = [i for i, r in enumerate(menu)
                   if uses.get(i, 0) < r.max_uses and i != last
+                  and (not reset_required or r.kind == "reset")
                   and (not r.legacy or stage.on_fail in ("retry_in_place", "abandon"))]
         if hint in usable:
             return hint
@@ -523,7 +530,7 @@ class Runner:
         self.log.event("recovery", stage=stage.name, name=rec.name, kind=rec.kind, prompt=rec.prompt, attempt=attempt)
         outcome, reason, ok = "ok", "", True
         try:
-            if rec.legacy:
+            if rec.legacy and not self.plan.match:
                 self._issue(rec.prompt, f"recovery {rec.name}")
                 self._hold(min(stage.timeout_s / 2, 20.0))
             elif rec.kind == "reset":
@@ -607,20 +614,24 @@ class Runner:
             if stage.on_fail == "skip":
                 self.log.event("stage_skipped", stage=stage.name, reason=reason)
                 return StageResult(stage.name, False, attempts, self._clock() - t0, reason)
+            reset_required = False
             while True:   # choose a recovery; a reset that leaves the scene broken burns an attempt
                 if attempts >= stage.max_attempts:
                     return self._exhausted(active, reason)
                 remaining = self._check_global()
                 if stage.on_fail == "abandon" and remaining <= max(stage.min_run_s, stage.effective_settle()):
                     return self._abandon(active, "insufficient time to verify another attempt")
-                idx = self._pick_recovery(stage, uses, last_rec, hint)
+                idx = self._pick_recovery(stage, uses, last_rec, hint, reset_required=reset_required)
                 if idx is None:
+                    if reset_required:
+                        return self._exhausted(active, reason)
                     break
                 uses[idx] = uses.get(idx, 0) + 1
                 last_rec = idx
                 scene_ok, rreason = self._recover(stage, verifier, attempts, idx)
                 if scene_ok:
                     break
+                reset_required = self.plan.match is not None
                 attempts += 1
                 active.attempts = attempts
                 reason, hint = rreason, None
