@@ -37,6 +37,7 @@ IDLE, STARTING, RUNNING, STOPPING, HOMING, RESETTING, ERROR = (
 MAX_BODY_BYTES = 64 * 1024
 API_TIMEOUT_S = 60.0
 ARMS = ("left", "right")
+SCENE_BODIES = ("apple", "banana", "orange", "water_bottle", "bowl", "plate")
 
 
 class _Refused(Exception):
@@ -177,6 +178,7 @@ class SimStation:
         self.calls: list[tuple[str, str, Any]] = []
         self.env: Any = None
         self.hold: dict[str, Any] | None = None  # the targets held while idle
+        self._poses: dict[str, Any] = {}  # sim-only ground truth, refreshed after every physics step
         self._servers: list[ThreadingHTTPServer] = []
         self._threads: list[threading.Thread] = []
         self.api_url = ""
@@ -312,6 +314,7 @@ class SimStation:
     def _sim_main(self, ready: threading.Event) -> None:
         try:
             self.env = self.yam_env.YamEnv()
+            self._track_poses(self.env)
             self.hold = self._current_targets()
             self._render()
         except Exception as exc:  # pragma: no cover
@@ -337,6 +340,33 @@ class SimStation:
                 self.env.close()
             except Exception:
                 pass
+
+    def _track_poses(self, env: Any) -> None:
+        """Wrap env.step/env.reset so every physics update refreshes the ground-truth snapshot behind /objects."""
+        step, reset = env.step, env.reset
+
+        def stepped(*args: Any, **kwargs: Any) -> Any:
+            out = step(*args, **kwargs)
+            self._snap_poses()
+            return out
+
+        def was_reset(*args: Any, **kwargs: Any) -> Any:
+            out = reset(*args, **kwargs)
+            self._snap_poses()
+            return out
+
+        env.step, env.reset = stepped, was_reset
+        self._snap_poses()
+
+    def _snap_poses(self) -> None:
+        data = self.env.data
+        bodies = {name: [round(float(v), 4) for v in data.body(name).xpos] for name in SCENE_BODIES}
+        tcp = {side: [round(float(v), 4) for v in data.site(f"{side}_tcp").xpos] for side in ARMS}
+        state = self.env.state()
+        joints = {side: [round(float(v), 4) for v in state[side]] for side in ARMS}
+        snap = {"t": round(float(data.time), 3), "bodies": bodies, "tcp": tcp, "joints": joints}
+        with self._lock:
+            self._poses = snap
 
     def _current_targets(self) -> dict[str, Any]:
         state = self.env.state()
@@ -574,10 +604,13 @@ class SimStation:
             def do_GET(self) -> None:
                 route = self.path.split("?", 1)[0]
                 sim.calls.append(("GET", route, None))
-                if route != "/status":
-                    self._reply(404, {"error": f"no such route: GET {self.path}"})
-                else:
+                if route == "/status":
                     self._reply(200, sim._status())
+                elif route == "/objects":  # sim only: ground-truth poses for offline benchmarks, never the harness
+                    with sim._lock:
+                        self._reply(200, dict(sim._poses))
+                else:
+                    self._reply(404, {"error": f"no such route: GET {self.path}"})
 
             def do_POST(self) -> None:
                 route = self.path.split("?", 1)[0]
