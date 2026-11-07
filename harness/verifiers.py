@@ -1,0 +1,432 @@
+"""Stage verifiers: decide from camera frames (or a person's keypress) whether a stage worked."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import sys
+import threading
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import IO, Any, Protocol
+
+from .plan import Plan, Stage
+
+CLAUDE_URL = "https://api.anthropic.com/v1/messages"
+MIN_CONFIDENCE = 0.7
+
+
+@dataclass
+class Verdict:
+    done: bool | None  # None = can't tell yet
+    confidence: float = 0.0
+    reason: str = ""
+    # True for a person's key press or the clock: needs no frames and is never debounced by plan.confirm.
+    immediate: bool = False
+
+
+@dataclass
+class MonitorVerdict(Verdict):
+    progress: float | None = None
+    status: str | None = None  # ok | stalled | failing
+    recovery: int | None = None  # index into the stage's recovery list
+    scene_ok: bool | None = None
+    holding: dict | None = None
+
+
+class Verifier(Protocol):
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict: ...
+
+
+class ManualVerifier:
+    """A person watches the robot and types y (done) or n (failed now) + Enter.
+
+    A background thread reads lines. `s` + Enter calls on_stop (the CLI wires it to Runner.request_stop).
+    """
+
+    def __init__(self, input_stream: IO[str] | None = None, *, on_stop: Callable[[], None] | None = None,
+                 out: IO[str] | None = None):
+        self._stream = input_stream if input_stream is not None else sys.stdin
+        self._on_stop = on_stop
+        self._out = out if out is not None else sys.stdout
+        self._lock = threading.Lock()
+        self._pending: str | None = None
+        self._announced: set[str] = set()
+        self._thread = threading.Thread(target=self._read_loop, name="manual-verifier", daemon=True)
+        self._thread.start()
+
+    def _read_loop(self) -> None:
+        try:
+            for line in self._stream:
+                key = line.strip().lower()
+                if key in ("y", "n"):
+                    with self._lock:
+                        self._pending = key
+                elif key == "s" and self._on_stop is not None:
+                    self._on_stop()
+        except (ValueError, OSError):
+            return
+
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        if stage.name not in self._announced:
+            self._announced.add(stage.name)
+            print(f"\n[stage {stage.name}] {stage.success}\n  type y = done, n = failed, s = stop everything (then Enter)",
+                  file=self._out, flush=True)
+        with self._lock:
+            key, self._pending = self._pending, None
+        if key == "y":
+            return Verdict(True, 1.0, "operator typed y", immediate=True)
+        if key == "n":
+            return Verdict(False, 1.0, "operator typed n", immediate=True)
+        return Verdict(None, 0.0, "waiting for operator")
+
+
+class ClaudeVerifier:
+    """Asks a Claude vision model a yes/no question about the cameras.
+
+    The API key is read from ANTHROPIC_API_KEY, sent only to api.anthropic.com in the x-api-key
+    header, and never logged or printed. A model "done: false" means "not yet", so it returns
+    Verdict(None, ...); only a confident "done: true" ends a stage.
+    """
+
+    def __init__(self, model: str = "claude-haiku-5-5", max_tokens: int = 200, api_key: str | None = None,
+                 timeout_s: float = 30.0):
+        key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise ValueError("ClaudeVerifier needs ANTHROPIC_API_KEY to be set")
+        self._api_key = key
+        self.model = model
+        self.max_tokens = max_tokens
+        self.timeout_s = timeout_s
+
+    def __repr__(self) -> str:
+        return f"ClaudeVerifier(model={self.model!r})"
+
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        req = urllib.request.Request(
+            CLAUDE_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+            return json.loads(resp.read())
+
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        if not frames:
+            return Verdict(None, 0.0, "no frames available")
+        content: list[dict[str, Any]] = []
+        for role, jpeg in sorted(frames.items()):
+            content.append({"type": "text", "text": f"Camera: {role}"})
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
+        content.append({"type": "text", "text": (
+            f"{stage.success}\n\nAnswer with JSON only: "
+            '{"done": true|false, "confidence": 0..1, "reason": "..."}')})
+        try:
+            reply = self._post({"model": self.model, "max_tokens": self.max_tokens,
+                                "messages": [{"role": "user", "content": content}]})
+            text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
+            return self._parse(text)
+        except urllib.error.HTTPError as exc:
+            return Verdict(None, 0.0, f"verifier error: HTTP {exc.code}")
+        except Exception as exc:  # any failure means "can't tell"
+            return Verdict(None, 0.0, f"verifier error: {type(exc).__name__}: {str(exc)[:200]}")
+
+    @staticmethod
+    def _parse(text: str) -> Verdict:
+        start = text.find("{")
+        if start < 0:
+            return Verdict(None, 0.0, f"verifier error: no JSON in reply: {text[:100]!r}")
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text[start:])
+            done = obj["done"]
+            confidence = float(obj.get("confidence", 0.0))
+            reason = str(obj.get("reason", ""))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return Verdict(None, 0.0, f"verifier error: unparseable reply: {text[:100]!r}")
+        if done is True and confidence >= MIN_CONFIDENCE:
+            return Verdict(True, confidence, reason)
+        if done is True:
+            return Verdict(None, confidence, f"low confidence: {reason}")
+        return Verdict(None, confidence, f"not yet: {reason}")
+
+
+MONITOR_INSTRUCTION = (
+    "First write 2-4 short questions about the robot and objects that decide this, and answer them from the "
+    "images. Do not call the stage failing unless it is unlikely to finish within the time left. Then output "
+    "JSON only between <json> and </json>:")
+MONITOR_SCHEMA = (
+    '{"stage_done": bool, "progress": 0..1, "status": "ok"|"stalled"|"failing", '
+    '"holding": {"left": str, "right": str}, "recovery": <index into the recovery menu or null>, '
+    '"scene_ok": bool, "confidence": 0..1, "reason": str}')
+Transport = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def anthropic_transport(api_key: str, timeout_s: float = 60.0) -> Transport:
+    """The real HTTP call. The key lives in this closure, goes only in the x-api-key header to api.anthropic.com,
+    and is never logged or printed."""
+
+    def send(payload: dict[str, Any]) -> dict[str, Any]:
+        req = urllib.request.Request(
+            CLAUDE_URL, data=json.dumps(payload).encode("utf-8"), method="POST",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            return json.loads(resp.read())
+
+    return send
+
+
+def _clamp01(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return min(1.0, max(0.0, float(value)))
+
+
+def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
+    """Text between <json> and </json> -> MonitorVerdict. Any problem -> done=None."""
+    def bad(why: str) -> MonitorVerdict:
+        return MonitorVerdict(None, 0.0, f"monitor error: {why}")
+
+    start, end = text.rfind("<json>"), text.rfind("</json>")
+    if start < 0 or end < start:
+        return bad(f"no <json> block in reply: {text[-100:]!r}")
+    try:
+        obj = json.loads(text[start + len("<json>"):end])
+        if not isinstance(obj, dict) or not isinstance(obj.get("stage_done"), bool):
+            return bad("stage_done missing or not a boolean")
+    except ValueError:
+        return bad("unparseable JSON")
+    confidence = _clamp01(obj.get("confidence")) or 0.0
+    status = obj.get("status") if obj.get("status") in ("ok", "stalled", "failing") else None
+    rec = obj.get("recovery")
+    rec = rec if isinstance(rec, int) and not isinstance(rec, bool) and 0 <= rec < menu_len else None
+    scene = obj.get("scene_ok") if isinstance(obj.get("scene_ok"), bool) else None
+    holding = obj.get("holding")
+    if isinstance(holding, dict):
+        holding = {str(k): str(v) for k, v in holding.items()}
+    else:
+        holding = None
+    reason = str(obj.get("reason", ""))
+    done: bool | None = None
+    if obj["stage_done"]:
+        if confidence >= MIN_CONFIDENCE:
+            done = True
+        else:
+            reason = f"low confidence: {reason}"
+    return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
+                          recovery=rec, scene_ok=scene, holding=holding)
+
+
+class MonitorVerifier:
+    """Claude-backed stage monitor: frame history in, structured verdict out (DESIGN_v2.md section 1).
+
+    check() never blocks: it returns the result of an earlier call (once) and starts the next call in a
+    background thread, at most one in flight. Results from before a prompt change or a stage change are
+    discarded. check_now() is the synchronous variant for the entry check and tests.
+    """
+
+    def __init__(self, plan: Plan, *, model: str | None = None, max_tokens: int | None = None,
+                 history_frames: int | None = None, api_key: str | None = None,
+                 transport: Transport | None = None, timeout_s: float = 60.0):
+        user = plan.claude_user
+        self.plan = plan
+        self.model = model or plan.claude.get("model", "claude-haiku-5-5")
+        self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 600))
+        self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
+        if transport is None:
+            key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
+            if not key:
+                raise ValueError("MonitorVerifier needs ANTHROPIC_API_KEY to be set")
+            transport = anthropic_transport(key, timeout_s)
+        self._transport = transport
+        self._lock = threading.Lock()
+        self._gen = 0
+        self._busy = False
+        self._result: MonitorVerdict | None = None
+        self._stage: str | None = None
+        self._first: tuple[float, bytes] | None = None
+        self._history: list[tuple[float, bytes]] = []
+        self._last_prompt: str | None = None
+        self._thread: threading.Thread | None = None
+
+    def __repr__(self) -> str:
+        return f"MonitorVerifier(model={self.model!r})"
+
+    # -- hooks the runner calls -----------------------------------------------------------------
+    def notify_prompt_change(self, prompt: str) -> None:
+        with self._lock:
+            self._last_prompt = prompt
+            self._gen += 1
+            self._result = None
+
+    def wait_idle(self, timeout_s: float = 5.0) -> bool:
+        """Tests: wait for the call in flight (if any)."""
+        t = self._thread
+        if t is not None:
+            t.join(timeout_s)
+        return not self._busy
+
+    # -- frames and payload ---------------------------------------------------------------------
+    @staticmethod
+    def _split(frames: dict[str, bytes]) -> tuple[tuple[str, bytes] | None, dict[str, bytes]]:
+        wrists = {r: j for r, j in sorted(frames.items()) if "wrist" in r}
+        others = [(r, j) for r, j in sorted(frames.items()) if "wrist" not in r]
+        overhead = next(((r, j) for r, j in others if any(k in r for k in ("overhead", "scene", "top"))), None)
+        return (overhead or (others[0] if others else None)), wrists
+
+    def _stage_text(self, stage: Stage, elapsed_s: float) -> str:
+        lines = [f"Overall task: {self.plan.task or '(none given)'}", "Stages:"]
+        for i, st in enumerate(self.plan.stages, 1):
+            mark = "   <-- CURRENT STAGE" if st.name == stage.name else ""
+            lines.append(f"  {i}. {st.name}: {st.prompt}{mark}")
+        lines.append(f"Current stage question: {stage.success}")
+        if stage.expect:
+            lines.append(f"What correct behaviour looks like: {stage.expect}")
+        lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
+        lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
+        menu = stage.menu()
+        if menu:
+            lines.append("Recovery menu (answer `recovery` with an index, or null):")
+            for i, r in enumerate(menu):
+                lines.append(f"  [{i}] {r.name}" + (f": {r.when}" if r.when else ""))
+        else:
+            lines.append("Recovery menu: (empty, answer recovery null)")
+        lines += ["", MONITOR_INSTRUCTION, MONITOR_SCHEMA]
+        return "\n".join(lines)
+
+    def _build(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> dict[str, Any] | None:
+        """Builds the request and advances the frame history. Caller holds the lock."""
+        if stage.name != self._stage:
+            self._stage, self._first, self._history = stage.name, None, []
+            self._gen += 1
+            self._result = None
+        overhead, wrists = self._split(frames)
+        if overhead is None and not wrists:
+            return None
+        images: list[tuple[str, bytes]] = []
+        if self._first is not None:
+            images.append((f"t=+{self._first[0]:.0f}s overhead (stage start)", self._first[1]))
+        images += [(f"t=+{t:.0f}s overhead", j) for t, j in self._history]
+        if overhead is not None:
+            images.append((f"t=+{elapsed_s:.0f}s overhead (newest)", overhead[1]))
+            if self._first is None:
+                self._first = (elapsed_s, overhead[1])
+            else:
+                self._history = (self._history + [(elapsed_s, overhead[1])])[-self.history_frames:]
+        images += [(f"t=+{elapsed_s:.0f}s {r} (newest)", j) for r, j in wrists.items()]
+        content: list[dict[str, Any]] = []
+        for label, jpeg in images:
+            content.append({"type": "text", "text": label})
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
+        content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
+        return {"model": self.model, "max_tokens": self.max_tokens,
+                "messages": [{"role": "user", "content": content}]}
+
+    def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
+        try:
+            reply = self._transport(payload)
+            text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
+            return parse_monitor_reply(text, menu_len)
+        except urllib.error.HTTPError as exc:
+            return MonitorVerdict(None, 0.0, f"monitor error: HTTP {exc.code}")
+        except Exception as exc:  # any failure means "can't tell"
+            return MonitorVerdict(None, 0.0, f"monitor error: {type(exc).__name__}: {str(exc)[:200]}")
+
+    def _run_async(self, gen: int, payload: dict[str, Any], menu_len: int) -> None:
+        verdict = self._call(payload, menu_len)
+        with self._lock:
+            if gen == self._gen:
+                self._result = verdict
+            self._busy = False
+
+    # -- Verifier protocol ----------------------------------------------------------------------
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        with self._lock:
+            payload = None if self._busy else self._build(stage, frames, elapsed_s)
+            if self._stage != stage.name:  # busy, so _build did not run
+                self._stage, self._first, self._history = stage.name, None, []
+                self._gen += 1
+                self._result = None
+            verdict, self._result = self._result, None
+            if payload is not None:
+                self._busy = True
+                self._thread = threading.Thread(target=self._run_async, args=(self._gen, payload, len(stage.menu())),
+                                                name="monitor-call", daemon=True)
+                self._thread.start()
+        if verdict is not None:
+            return verdict
+        if not frames:
+            return Verdict(None, 0.0, "no frames available")
+        return Verdict(None, 0.0, "monitor call in flight")
+
+    def check_now(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        """Synchronous: waits for any call in flight, then asks once and returns that answer."""
+        self.wait_idle(self.plan.claude_user.get("timeout_s", 60.0))
+        with self._lock:
+            payload = self._build(stage, frames, elapsed_s)
+            self._result = None
+        if payload is None:
+            return Verdict(None, 0.0, "no frames available")
+        return self._call(payload, len(stage.menu()))
+
+
+class TimeVerifier:
+    """For stages with no real check: done once 90% of the stage timeout has passed."""
+
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        if elapsed_s >= stage.timeout_s * 0.9:
+            return Verdict(True, 0.5, "time elapsed", immediate=True)
+        return Verdict(None, 0.0, "waiting")
+
+
+class EitherVerifier:
+    """The operator's key press wins; otherwise Claude's verdict. Claude judges, a person can still overrule it."""
+
+    def __init__(self, first: Verifier, second: Verifier) -> None:
+        self.first, self.second = first, second
+
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        verdict = self.first.check(stage, frames, elapsed_s)
+        if verdict.done is not None:
+            return verdict
+        return self.second.check(stage, frames, elapsed_s)
+
+    def check_now(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+        verdict = self.first.check(stage, frames, elapsed_s)
+        if verdict.done is not None:
+            return verdict
+        second = getattr(self.second, "check_now", self.second.check)
+        return second(stage, frames, elapsed_s)
+
+    def notify_prompt_change(self, prompt: str) -> None:
+        for v in (self.first, self.second):
+            fn = getattr(v, "notify_prompt_change", None)
+            if fn is not None:
+                fn(prompt)
+
+
+def make_verifier(name: str, plan: Plan, *, manual: ManualVerifier | None = None,
+                  transport: Transport | None = None) -> Verifier:
+    """Builds a verifier by plan name. `manual` lets the CLI share one stdin reader."""
+    if name == "manual":
+        return manual if manual is not None else ManualVerifier()
+    if name == "claude":
+        return ClaudeVerifier(model=plan.claude.get("model", "claude-haiku-5-5"),
+                              max_tokens=int(plan.claude.get("max_tokens", 200)))
+    if name == "time":
+        return TimeVerifier()
+    if name == "claude+manual":
+        return EitherVerifier(manual if manual is not None else ManualVerifier(),
+                              make_verifier("claude", plan))
+    if name == "monitor":
+        return MonitorVerifier(plan, transport=transport)
+    if name == "monitor+manual":
+        return EitherVerifier(manual if manual is not None else ManualVerifier(),
+                              make_verifier("monitor", plan, transport=transport))
+    raise ValueError(f"unknown verifier {name!r}")
