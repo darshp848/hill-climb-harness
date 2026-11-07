@@ -28,14 +28,30 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 # because the overhead camera is poor at depth). Override at the match: --var work_arm=left --var watch_arm=right
 # --var work_cam=wrist_l --var watch_cam=wrist_r
 vars: {work_arm: right, watch_arm: left, work_cam: wrist_r, watch_cam: wrist_l}
-claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks before answering
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6, zoom: {box: [0.45, 0.25, 0.75, 0.65], what: "the hub ports"}}   # 600 cut off every reply: Haiku 5.5 thinks before answering
 
 stages:
+  - name: watcher_for_unplug
+    prompt: "move the left arm beside the hub so its wrist camera looks at the hub ports from the side, without touching anything"
+    success: "Does the wrist_l camera show the hub's ports from the side, with the left gripper touching nothing?"
+    expect: "The left arm rises and parks a short distance from the hub on the hub side, away from the blocks, its wrist camera pointed at the ports."
+    camera_notes:
+      "wrist_l": "wrist camera of the left arm, which should end up looking at the hub ports from the side"
+    timeout_s: 15
+    max_attempts: 1
+    min_run_s: 3
+    on_fail: skip             # no watcher is fine; the unplug still has the top, zoom and right-wrist views
+
   - name: unplug_cable
     # The end cable nearest the working arm: a clear approach (no neighbouring plug in the fingers' way), an unblocked
     # view for the overhead and wrist cameras, and the shortest reach. Middle cables got wire grabs and half grips.
-    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
-    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
+    prompt: "unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug's hard body right where it goes into the hub, not the cable above it and not the plugs beside it, then pull it straight out along the port"
+    success: "Look only at the hub's ports. Is there now an EMPTY port that had a plug in it at the stage start? Each cable's other end always lies loose on the table from the start, and that does not count."
+    history_cameras: ["wrist_l"]
+    camera_notes:
+      "wrist_l": "side view of the hub ports from the watcher arm, if it got there: count the seated plugs"
+      "wrist_r": "close view of the hub's ports: count the plugs seated in ports here and compare with the stage start"
+      "scene": "top view: every cable's far end lies loose on the table all the time; do not count those as unplugged"
     expect: "A gripper closes on the plug of a cable in the hub and pulls it straight out until the plug is clear."
     timeout_s: 60
     max_attempts: 8
@@ -43,6 +59,8 @@ stages:
     settle_s: 4
     stall_s: 20
     recovery:
+      - {name: one_plug_only, kind: reset, prompt: "open the right gripper and lift it straight up",
+         when: "the gripper is touching or holding more than one plug or cable", settle_s: 5, max_uses: 3}
       - {name: keep_pulling, kind: retry, when: "the gripper is on a plug or right next to the hub", max_uses: 3}
       - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
          when: "the gripper is stuck, holds the wire instead of the plug, or has pushed the hub", settle_s: 6, max_uses: 3}
@@ -67,7 +85,7 @@ stages:
   - &more_unplug
     name: unplug_more_2
     prompt: "unplug the next USB cable along the hub, nearest the right arm"
-    success: "Compared with the stage-start overhead image, is one more cable now fully out of the hub than at the start of this stage?"
+    success: "Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count."
     expect: "A gripper closes on another plug in the hub and pulls it straight out."
     timeout_s: 15
     max_attempts: 1

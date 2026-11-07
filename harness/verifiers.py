@@ -222,6 +222,24 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
                           recovery=rec, scene_ok=scene, holding=holding)
 
 
+def _zoom(jpeg: bytes, box: list[float], scale: float = 2.0) -> bytes | None:
+    """Crop `box` (fractions) out of a JPEG and enlarge it. None when OpenCV is not installed (zoom is optional)."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    im = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if im is None:
+        return None
+    h, w = im.shape[:2]
+    c = im[int(box[1] * h):int(box[3] * h), int(box[0] * w):int(box[2] * w)]
+    if c.size == 0:
+        return None
+    c = cv2.resize(c, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    return cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+
+
 class MonitorVerifier:
     """Claude-backed stage monitor: frame history in, structured verdict out (DESIGN_v2.md section 1).
 
@@ -337,6 +355,13 @@ class MonitorVerifier:
             else:
                 self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
         images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
+        zoom = self.plan.claude.get("zoom")   # {"box": [x0, y0, x1, y1]} fractions of the overhead: e.g. the hub
+        if zoom and overhead is not None:
+            start = self._first.get(overhead[0])
+            for tag, jpeg in ((("stage start", start[1]),) if start else ()) + (("newest", overhead[1]),):
+                z = _zoom(jpeg, zoom["box"])
+                if z:
+                    images.append((f"ZOOM on {zoom.get('what', 'the hub')} from the overhead camera ({tag})", z))
         content: list[dict[str, Any]] = []
         for label, jpeg in images:
             content.append({"type": "text", "text": label})
