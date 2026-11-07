@@ -45,7 +45,7 @@ python -m pytest -q                   # offline, against fake_station.py
 
 ```bash
 # terminal 1: Dream's station agent (leave it running)
-dreamcli robot up --view-port 8093          # YAM fine-tune: dreamcli robot up joint --view-port 8093
+dreamcli robot up --view-port 8093          # Metal fine-tune too; only a YAM fine-tune needs: dreamcli robot up joint
 
 # terminal 2: the harness
 python -m harness plans/<plan>.yaml --dry-run
@@ -168,62 +168,84 @@ stages:
 | `plans/example_hill_climb.yaml` | v1 example (tidy-up placeholder) |
 | `plans/example_hill_climb_v2.yaml` | Uses every v2 field, with comments |
 | `plans/sim_fruit_bowl.yaml` | For the MuJoCo sim scene (apple, orange, banana, bowl, plate) |
-| `plans/hill_climb_sprint.yaml` | **Match plan.** Unplug 1 cable, put it down, then stack 2, stack 3, move clear. Then it prints "CALL STOP NOW". |
-| `plans/hill_climb_full.yaml` | The sprint stages, then up to 8 balls of your colour. Needs `--var color=<colour>`. |
+| `plans/hill_climb_v4.yaml` | **Match plan** for rubric v4: unplug, put the cable down, one plug-in try, stack until the tower is over 4 in, two more blocks, a second plug-in, then up to 8 golf balls. Uses the whole clock. |
 
-## 6b. Match rules and how the plans follow them (from `hillclimb_rubric_v2.pdf`)
+The v2-rubric plans (`hill_climb_sprint.yaml`, `hill_climb_full.yaml`) were removed: they stopped early for a time bonus that v4 no longer pays. They are in git history (`2018fc3`).
+
+## 6b. Match rules and how the plan follows them (from `hillclimb_rubric_v4.pdf`)
 
 The match is a 5-minute 1v1. The stages, in order:
 
-1. **Unplug.** The pass bar is 1 cable out: +10, and +5 for each further unplug. Plugging a loose cable into a free port is +20.
-2. **Stack.** The pass bar is a free-standing stack 3 layers / 6 inches tall that still stands 3 s after release: +20, and +10 for each further block. If the stack falls later, those points are lost.
-3. **Balls.** Own colour +5, other colour -5. A black 8-ball in the bin loses the match.
+1. **Unplug.** The pass bar is 1 cable out of the hub: +10, and +5 for each further one. Each loose cable (one that started on the table) plugged into a free port is +20, up to 4. An unplugged cable may not be plugged back in.
+2. **Stack.** The pass bar is a tower at least 4 inches tall, free-standing 3 s after the gripper lets go: +20, then +3 per full inch at the end, and +10 for the taller tower (Sunday head-to-head only).
+3. **Golf balls.** All one colour, shared by both teams: +5 per ball in your bin at the end. Either of the two black 8-balls in your bin at the end loses the match.
 
-Time bonus: +1 per 2 s left on the clock, but only if Stages 1 and 2 passed and a team member calls "stop".
+There is **no time bonus** in v4. Calling "stop" only ends your run, so the plan uses the whole clock.
 
 What the rules mean for the harness:
 
-- **No human input after "go".** In a match, use only `verifier: monitor` (the plans set it). Typing `y`/`n` is human input and gets you DQ'd, so never use `manual` or `monitor+manual` in a match. Don't use `time` either: it would move on without the pass bar being met.
-- **A false "done" is a DQ.** Touching a later stage's objects before the pass bar is met is a DQ. That's why the plans:
-  - require `confirm: 2`,
-  - never use `on_fail: skip` on Stages 1-2 (they retry until the clock runs out),
-  - make the last stack check need two "done" verdicts 3 s apart.
-- **Stop early.** Stopping right after Stage 2 usually wins. A ball pays only if it takes under 10 s (it costs 5 bonus points of clock), and an extra block pays only if it takes under 20 s. So the sprint plan ends after the stack and prints `CALL STOP NOW`, and the designated member says "stop" out loud. Use the full plan only if practice shows balls are fast.
+- **No human input after "go".** In a match, use only `verifier: monitor` (the plan sets it). Typing `y`/`n` is human input and gets you DQ'd, so never use `manual` or `monitor+manual` in a match. Don't use `time` either: it would move on without the pass bar being met.
+- **A false "done" is a DQ.** Touching a later stage's objects before the pass bar is met is a DQ. That's why the plan:
+  - requires `confirm: 2`,
+  - never skips the pass-bar stages (`unplug_cable`, `stack_2`, `stack_3`, `tower_pass`): they retry until their attempts or the clock run out,
+  - checks the tower twice, 3 s apart.
+- **`on_fail: skip` ends a stage at its first failed attempt**, with no recovery. So every optional stage (put down, plug-ins, extra blocks, balls) is time-boxed by its `timeout_s` alone.
+- **`tower_pass` uses `skip_if_done`.** If the tower is already over 4 in after `stack_3`, no extra block is risked; otherwise it keeps stacking. Measure the blocks before the match.
+- **The black-ball guard stops the run.** None of the trained prompts is safe for a held black ball: opening the gripper over the bin would drop it in. So on every ball check the monitor also answers "Is either gripper holding a black 8-ball, or closed or closing around one?". One yes sends `POST /stop`: the arms hold, so the ball stays in the gripper, out of the bin. The harness prints `BLACK BALL HELD: RUN STOPPED. CALL STOP NOW`, and the designated member calls "stop". See 6d.
 - The run time budget is 295 s.
 
 ```bash
-python -m harness plans/hill_climb_sprint.yaml --live
-python -m harness plans/hill_climb_full.yaml --live --var color=orange   # colour from the coin flip
+python -m harness plans/hill_climb_v4.yaml --live
+python -m harness plans/hill_climb_v4.yaml --live --var plug_cam=wrist_l --var stack_cam=wrist_l   # if you recorded with the left arm
 ```
 
 Still unclear in the rubric (ask the organizers):
 
-- Is an outside model (Claude) as the harness's checker allowed? The rubric bans only human input and teleop.
+- Is an outside model (Claude) as the harness's checker allowed? The rubric bans human input to the policy and teleop.
 - Does pressing Enter to start the harness at "go" count as keyboard input?
 
-## 6c. A watcher arm for the cable plug-in (second camera view)
+## 6c. Prompts must be the task texts you recorded (`python -m harness.tasks`)
 
-The overhead camera is poor at depth, so it can't tell whether a plug is lined up with the port or pushed in. In `hill_climb_full.yaml`, the plug-in has three stages:
+A fine-tune follows the task texts it was trained on, so every prompt the plan can send (each stage's prompt and each recovery prompt) must be one of the texts in your dataset, byte for byte. `TELEOP_PLAN.md` holds the six texts. `plans/hill_climb_v4.yaml` uses only those, and `tests/test_match_plans.py` checks that.
 
-1. `watcher_into_place` asks Dream-1 to park the other arm beside the hub, with its wrist camera looking at the ports from the side. This stage is optional (`on_fail: skip`).
-2. `plug_loose_cable` has one arm plug the cable in while the watcher holds still. The monitor gets:
-   - the frame history of the watcher's wrist camera, not only of the overhead camera (`history_cameras`),
-   - a note per camera saying what it shows (`camera_notes`), so it judges depth from the side view.
-3. `release_before_stack` opens both grippers and lifts the arms clear before the stack.
+To check a plan against what was actually recorded:
 
-You choose the arms with `--var work_arm=left --var watch_arm=right --var work_cam=wrist_l --var watch_cam=wrist_r`. The defaults are: right arm works, left arm watches.
+```bash
+python -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/unplug-v1 ~/hackathon_data/relay-v1
+python -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/ft-v1      # a parent of several datasets works too
+```
 
-The new stage fields work in any plan:
+Per prompt, it prints the episodes and minutes recorded under exactly that text, which stages use it, and `MISSING` (no demos), `low` (fewer than 30) or `ok`. For a missing prompt, it shows the nearest recorded text, and says so when the two differ only in case or spaces. It also lists texts that were recorded but are never prompted. It exits 1 when a prompt has fewer than `--min` episodes (default 1). It only reads `meta/`, never the station.
+
+Run it before you queue the fine-tune, and again whenever you change a prompt.
+
+### Camera fields for a stage
 
 | Field | What it does |
 | --- | --- |
 | `cameras` | The camera roles this stage's checks see. This overrides the plan's `cameras_for_check`. |
-| `history_cameras` | Extra roles whose frame history the monitor keeps. |
+| `history_cameras` | Extra roles whose frame history the monitor keeps (the plug-in stages keep the plugging arm's wrist camera). |
 | `camera_notes` | Maps a role to a sentence telling the monitor what that view shows. |
 
-Plans can also set defaults with `vars:`. `--var` overrides them.
+Plans can also set defaults with `vars:`. `--var` overrides them. In `hill_climb_v4.yaml` the vars only change the monitor's camera notes, never a prompt, so they can't break the match with the recorded texts.
 
-**Limit:** the harness can't move an arm itself. Dream-1 has to do the watcher pose from the prompt, and base Dream-1 may ignore "stay still" or "park beside the hub". To make it reliable, record teleop demos of the watcher pose for the fine-tune. Skipping it costs nothing: if the watcher never gets into place, the stage times out after 15 s and the plug-in still runs with the overhead and gripper views.
+## 6d. A guard: stop the run on a safety question (`guard:`)
+
+A plan can name one yes/no safety question. On the stages it covers, the monitor answers it in every check, beside its usual verdict (the reply's JSON gets a `"guard": bool`). After `confirm` yes answers in a row, the harness sends `POST /stop` and ends the run: the arms hold where they are. It prints the message large, with a bell. A "no" resets the count.
+
+```yaml
+guard:
+  question: "Is either gripper holding a black 8-ball, or closed or closing around one?"
+  stages: [ball_]        # stage-name prefixes it covers; leave out for every stage
+  confirm: 1             # yes answers in a row before it stops (default 1)
+  message: "BLACK BALL HELD: RUN STOPPED. CALL STOP NOW"
+```
+
+- Only the monitor answers it, so the plan's verifier must be `monitor` or `monitor+manual`. If a `--verifier` override leaves a guarded stage without the monitor, the CLI warns that the stage is unguarded.
+- A prefix that matches no stage is rejected, so a typo can't leave the guard covering nothing.
+- A `guard` answer counts even when the rest of the monitor's reply can't be read.
+- The log gets `guard_yes` events (with the count) and one `guard_tripped` event. `summary.json` has `guard_tripped: true`.
+- It only sees what the monitor sees, at the monitor's pace: one answer per `check_every_s`, none during `settle_s` after a prompt change. It is a backstop, not a reflex. A team member still watches, ready to call "stop".
 
 ## 7. Test in simulation (before the robot)
 
@@ -330,10 +352,11 @@ If the adapters are CANables in slcan mode (a `/dev/tty…` serial device), the 
 
 1. `python -m pytest -q` passes. Then run `--mock --scenario arm_dies` once to watch it stop safely.
 2. Run `dreamcli robot up --view-port 8093` on the station. Check that `curl -s localhost:8091/status` shows `idle`, both arms alive, and cameras fresh.
-3. `--dry-run` with your plan: check the printed POSTs and that the frames arrive (`runs/.../*.jpg`).
-4. `--live` with `monitor+manual` or `manual`, a hand on the e-stop and people clear. Correct the monitor with `y`/`n`.
-5. After each run, read `python -m harness.report runs/`. Tune prompts, timeouts and recoveries, and keep the good segments for the fine-tune.
-6. At the end: home the arms yourself, then `dreamcli robot down`.
+3. `python -m harness.tasks <plan> <dataset dirs>` shows no `MISSING` prompt, and the plan's `checkpoint:` is your fine-tune.
+4. `--dry-run` with your plan: check the printed POSTs and that the frames arrive (`runs/.../*.jpg`).
+5. `--live` with `monitor+manual` or `manual`, a hand on the e-stop and people clear. Correct the monitor with `y`/`n`.
+6. After each run, read `python -m harness.report runs/`. Tune prompts, timeouts and recoveries, and keep the good segments for the fine-tune.
+7. At the end: home the arms yourself, then `dreamcli robot down`.
 
 ## 10. Open questions for the organizers
 

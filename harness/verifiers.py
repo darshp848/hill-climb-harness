@@ -35,6 +35,7 @@ class MonitorVerdict(Verdict):
     recovery: int | None = None  # index into the stage's recovery list
     scene_ok: bool | None = None
     holding: dict | None = None
+    guard: bool | None = None  # the plan guard's yes/no answer, on guarded stages only
 
 
 class Verifier(Protocol):
@@ -164,6 +165,7 @@ MONITOR_SCHEMA = (
     '{"stage_done": bool, "progress": 0..1, "status": "ok"|"stalled"|"failing", '
     '"holding": {"left": str, "right": str}, "recovery": <index into the recovery menu or null>, '
     '"scene_ok": bool, "confidence": 0..1, "reason": str}')
+GUARD_SCHEMA = MONITOR_SCHEMA[:-1] + ', "guard": bool}'
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -197,10 +199,13 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
         return bad(f"no <json> block in reply: {text[-100:]!r}")
     try:
         obj = json.loads(text[start + len("<json>"):end])
-        if not isinstance(obj, dict) or not isinstance(obj.get("stage_done"), bool):
-            return bad("stage_done missing or not a boolean")
     except ValueError:
         return bad("unparseable JSON")
+    guard = obj.get("guard") if isinstance(obj, dict) and isinstance(obj.get("guard"), bool) else None
+    if not isinstance(obj, dict) or not isinstance(obj.get("stage_done"), bool):
+        verdict = bad("stage_done missing or not a boolean")
+        verdict.guard = guard   # a safety answer counts even when the rest of the reply is broken
+        return verdict
     confidence = _clamp01(obj.get("confidence")) or 0.0
     status = obj.get("status") if obj.get("status") in ("ok", "stalled", "failing") else None
     rec = obj.get("recovery")
@@ -219,7 +224,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
         else:
             reason = f"low confidence: {reason}"
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
-                          recovery=rec, scene_ok=scene, holding=holding)
+                          recovery=rec, scene_ok=scene, holding=holding, guard=guard)
 
 
 class MonitorVerifier:
@@ -299,7 +304,11 @@ class MonitorVerifier:
                 lines.append(f"  [{i}] {r.name}" + (f": {r.when}" if r.when else ""))
         else:
             lines.append("Recovery menu: (empty, answer recovery null)")
-        lines += ["", MONITOR_INSTRUCTION, MONITOR_SCHEMA]
+        guard = self.plan.guard
+        guarded = guard is not None and guard.covers(stage.name)
+        if guarded:
+            lines.append(f"Safety question, answer it as `guard` (true = yes): {guard.question}")
+        lines += ["", MONITOR_INSTRUCTION, GUARD_SCHEMA if guarded else MONITOR_SCHEMA]
         return "\n".join(lines)
 
     def _build(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> dict[str, Any] | None:

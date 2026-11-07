@@ -59,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.verifier:
         for stage in plan.stages:
             stage.verifier = args.verifier
+    if plan.guard is not None and any(st.verifier not in ("monitor", "monitor+manual")
+                                      for st in plan.stages if plan.guard.covers(st.name)):
+        print("WARNING: plan.guard is only answered by the monitor; guarded stages without it are unguarded",
+              file=sys.stderr)
 
     fake = None
     station_url, view_url = args.station, args.view
@@ -118,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         for r in result.stages:
             print(f"  {'ok  ' if r.ok else 'FAIL'} {r.name:<20} attempts={r.attempts} {r.seconds:6.1f}s  {r.reason}")
         print(f"{'SUCCESS' if result.ok else 'FAILED'}: {result.reason}  ({result.seconds:.1f}s)  log: {log.path}")
+        if result.guard_tripped and plan.guard is not None:
+            bar = "!" * (len(plan.guard.message) + 8)
+            print(f"\a\a\n{bar}\n!   {plan.guard.message}   !\n{bar}\n")
         if result.ok and plan.done_message:
             bar = "#" * (len(plan.done_message) + 8)
             print(f"\a\n{bar}\n#   {plan.done_message}   #\n{bar}\n")

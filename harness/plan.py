@@ -14,7 +14,7 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "expect",
                "cameras", "camera_notes", "history_cameras"}
@@ -65,6 +65,23 @@ class Stage:
         return self.min_run_s if self.settle_s is None else self.settle_s
 
 
+_GUARD_KEYS = {"question", "stages", "confirm", "message"}
+
+
+@dataclass
+class Guard:
+    """A yes/no safety question the monitor answers on every check of the stages it covers. `confirm` yes answers
+    in a row stop the run at once (POST /stop: the arms hold where they are, so a held object stays held)."""
+
+    question: str
+    stages: list[str] = field(default_factory=list)   # stage-name prefixes it covers; empty = every stage
+    confirm: int = 1
+    message: str = "GUARD TRIPPED: RUN STOPPED. CALL STOP NOW"
+
+    def covers(self, stage_name: str) -> bool:
+        return not self.stages or any(stage_name.startswith(p) for p in self.stages)
+
+
 @dataclass
 class Plan:
     task: str
@@ -78,6 +95,7 @@ class Plan:
     confirm: int = 1
     claude_user: dict[str, Any] = field(default_factory=dict)  # only the keys the plan file set
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
+    guard: Guard | None = None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -248,8 +266,17 @@ def parse_plan(data: Any) -> Plan:
     done_message = data.get("done_message", "") or ""
     if not isinstance(done_message, str):
         raise ValueError("plan.done_message: must be a string")
+    guard = _guard(data.get("guard"))
+    if guard is not None and default_verifier not in ("monitor", "monitor+manual"):
+        raise ValueError("plan.guard: needs verifier monitor or monitor+manual (only the monitor answers it)")
+    if guard is not None:
+        names = [st.name for st in stages]
+        for prefix in guard.stages:
+            if not any(n.startswith(prefix) for n in names):
+                raise ValueError(f"plan.guard.stages: {prefix!r} matches no stage name")
     return Plan(
         task=task,
+        guard=guard,
         done_message=done_message,
         stages=stages,
         checkpoint=checkpoint,
@@ -261,6 +288,27 @@ def parse_plan(data: Any) -> Plan:
         confirm=int(_num(data.get("confirm", 1), "plan.confirm", integer=True)),
         claude_user=claude_user,
     )
+
+
+def _guard(raw: Any) -> Guard | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("plan.guard: must be a mapping")
+    extra = set(raw) - _GUARD_KEYS
+    if extra:
+        raise ValueError(f"plan.guard: unknown key(s): {', '.join(sorted(extra))}")
+    question = raw.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("plan.guard.question: must be a non-empty yes/no question")
+    stages = raw.get("stages") or []
+    if not isinstance(stages, list) or not all(isinstance(x, str) and x.strip() for x in stages):
+        raise ValueError("plan.guard.stages: must be a list of stage-name prefixes")
+    message = raw.get("message", Guard.message)
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("plan.guard.message: must be non-empty text")
+    return Guard(question=question.strip(), stages=[x.strip() for x in stages],
+                 confirm=int(_num(raw.get("confirm", 1), "plan.guard.confirm", integer=True)), message=message.strip())
 
 
 _VAR = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

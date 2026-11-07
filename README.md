@@ -23,7 +23,7 @@ Python 3.12+, stdlib + PyYAML only. The design contract is `DESIGN.md`.
 
 ```bash
 source ~/dream-env/bin/activate
-dreamcli robot up --view-port 8093            # YAM fine-tune: dreamcli robot up joint --view-port 8093
+dreamcli robot up --view-port 8093            # Metal fine-tune too; a YAM fine-tune: dreamcli robot up joint ...
 
 python -m harness plans/example_hill_climb.yaml --dry-run    # reads status/frames, prints what it would POST
 python -m harness plans/example_hill_climb.yaml --live       # hand on the e-stop, people clear; type yes
@@ -72,6 +72,18 @@ of the right shape, so the harness, the state machine and the frames can be test
 `MUJOCO_GL=osmesa` (software; `apt install libosmesa6`), which is the automatic default there. Software
 rendering is slow (about 5 s per chunk), so use long stage timeouts or `--verifier time`.
 `pytest tests/test_sim_station.py` covers the scripted mode and skips itself without mujoco.
+
+## Match plan and the fine-tune
+
+`plans/hill_climb_v4.yaml` is the match plan for rubric v4. Its prompts are the six task texts in
+`TELEOP_PLAN.md`, the texts the fine-tune is recorded with. Check that a plan's prompts all have demos:
+
+```bash
+python -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/unplug-v1 ~/hackathon_data/relay-v1
+```
+
+It also has a black-ball `guard:`. On every ball check the monitor answers "is a gripper holding a black 8-ball?",
+and a yes stops the run at once, with the ball still held (HARNESS_GUIDE.md section 6d).
 
 ## Writing a plan
 

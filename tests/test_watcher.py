@@ -65,9 +65,10 @@ def test_plan_vars_defaults_and_override(tmp_path):
     assert load_plan(p, {"arm": "right"}).stages[0].prompt == "use the right arm"
 
 
-def test_full_plan_watcher_stages():
-    plan = load_plan(Path(__file__).resolve().parent.parent / "plans" / "hill_climb_full.yaml", {"color": "white"})
+def test_v4_plan_plug_stage_cameras():
+    plan = load_plan(Path(__file__).resolve().parent.parent / "plans" / "hill_climb_v4.yaml")
     names = [s.name for s in plan.stages]
-    assert names.index("unplug_cable") < names.index("plug_loose_cable") < names.index("stack_two")
-    plug = plan.stages[names.index("plug_loose_cable")]
-    assert plug.history_cameras == ["wrist_l"] and "right arm" in plug.prompt and plug.on_fail == "skip"
+    assert names.index("unplug_cable") < names.index("plug_1") < names.index("stack_2")
+    plug = plan.stages[names.index("plug_1")]
+    assert plug.history_cameras == ["wrist_r"] and plug.on_fail == "skip"
+    assert "wrist_r" in plug.camera_notes

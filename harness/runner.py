@@ -49,6 +49,7 @@ class RunResult:
     stages: list[StageResult] = field(default_factory=list)
     seconds: float = 0.0
     reason: str = ""
+    guard_tripped: bool = False
 
 
 def _err(last_error: Any) -> str:
@@ -60,6 +61,10 @@ def _err(last_error: Any) -> str:
 
 class _Fail(Exception):
     """End the whole run (the station is stopped by the handler)."""
+
+
+class _Guard(Exception):
+    """The plan's guard answered yes `confirm` times in a row: stop at once."""
 
 
 class _Refuse(Exception):
@@ -89,6 +94,7 @@ class Runner:
         self._t0 = self._clock()
         results: list[StageResult] = []
         dry = self.station.dry_run
+        tripped = False
         self.log.update_manifest(start_time=datetime.now(timezone.utc).isoformat())
         self.log.event("run_start", task=self.plan.task, dry_run=dry, stages=[s.name for s in self.plan.stages])
         try:
@@ -100,6 +106,10 @@ class Runner:
             self._safe_stop("end of plan")
         except _Refuse as exc:
             ok, reason = False, f"refused: {exc}"
+        except _Guard as exc:
+            ok, reason = False, str(exc)
+            self._safe_stop(reason)
+            tripped = True
         except _Fail as exc:
             ok, reason = False, str(exc)
             self._safe_stop(reason)
@@ -115,7 +125,8 @@ class Runner:
         except TimeoutError as exc:
             ok, reason = False, str(exc)
             self._safe_stop(reason)
-        result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason)
+        result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason,
+                           guard_tripped=tripped)
         self.log.update_manifest(end_time=datetime.now(timezone.utc).isoformat(), ok=ok, reason=reason)
         self.log.event("run_end", ok=ok, reason=reason, seconds=result.seconds)
         self.log.write_summary({"task": self.plan.task, "dry_run": dry, **asdict(result)})
@@ -241,7 +252,7 @@ class Runner:
 
     def _log_verdict(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, saved: list[str],
                      st: dict[str, Any]) -> None:
-        extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding")
+        extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding", "guard")
                  if getattr(verdict, k, None) is not None}
         self.log.event("verdict", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 2),
                        done=verdict.done, confidence=verdict.confidence, reason=verdict.reason,
@@ -252,6 +263,8 @@ class Runner:
         confirm = self.plan.confirm
         gate = max(stage.min_run_s, stage.effective_settle())   # no verifier and no stall clock before this
         consec_done = consec_fail = consec_stalled = 0
+        guard = self.plan.guard if self.plan.guard is not None and self.plan.guard.covers(stage.name) else None
+        consec_guard = 0
         max_p: float | None = None
         rise_ref = last_rise = None
         hint: int | None = None
@@ -266,6 +279,18 @@ class Runner:
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
                 self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
+                if guard is not None:
+                    answer = getattr(verdict, "guard", None)
+                    if answer is True:
+                        consec_guard += 1
+                        self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
+                                       question=guard.question, reason=verdict.reason)
+                        if consec_guard >= guard.confirm:
+                            self.log.event("guard_tripped", stage=stage.name, attempt=attempt,
+                                           question=guard.question, message=guard.message)
+                            raise _Guard(f"guard tripped in stage {stage.name!r}: {guard.question}")
+                    elif answer is False:
+                        consec_guard = 0
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
                 if monitor:
