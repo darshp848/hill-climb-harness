@@ -22,7 +22,11 @@ cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/h
 | T5 | `put a golf ball in the bin` | the arm nearest the bin | 8-15 s, ends ball released in the bin | 50 |
 | T6 | `open both grippers and move the arms up` | both | 3-6 s | 25 |
 
-T1 is the text already in `unplug-v1`, so its 7 good episodes count. T6 is the harness's one recovery prompt.
+T1 is the text already in `unplug-v1`, so its 7 good episodes count. The harness also uses T1 for an extra unplug
+(+5), so record about 1 in 3 T1 episodes with the end port already empty: the next cable along is then "the end".
+From the station tests (HARNESS_GUIDE.md section 11): a T1 that works squeezes fully, on the plug or its black strain
+relief, pauses, then pulls straight out along the port. Most T1 episodes may start about 5 cm in front of the plug
+(5-8 s each), plus a few full ones from home so the approach joins on. T6 is the harness's one recovery prompt.
 Every other recovery in the plan just re-sends the stage's own prompt, so it needs no extra demos.
 
 ## How to record: chain the episodes
@@ -107,7 +111,7 @@ so the model should be ready around 05:00. Its first call can then take up to 1 
 
 1. Warm the model up early: `dreamcli robot run --checkpoint dream-1-ft:<account>-relay-v1 --task "put a block on
    top of the stack" --dry-run` (the first call may wait up to an hour).
-2. Put the id in `plans/hill_climb_v4.yaml` (`checkpoint:`). Start the agent with `dreamcli robot up --view-port
-   8093`: plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
+2. Put the id in `plans/hill_climb_v4.yaml` (`checkpoint:`). Start the agent with
+   `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up --view --view-port 8093`: plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
 3. Run the harness with `--dry-run`, then `--live` with `--verifier monitor+manual` for practice. Use `monitor`
    alone in a match.

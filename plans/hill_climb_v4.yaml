@@ -19,7 +19,7 @@
 # - on_fail skip ends a stage after its first failed attempt (no recovery), so skip stages are time-boxed by
 #   timeout_s alone.
 #
-# Order: unplug -> put it down -> one plug-in try -> stack to the pass bar -> more height -> second plug-in -> balls.
+# Order: unplug -> put it down -> one extra unplug -> one plug-in try -> stack to the pass bar -> more height -> second plug-in -> balls.
 # Before the match: measure the blocks. tower_pass keeps stacking until the tower is over 4 in, and is skipped at
 # once if stack_3 already got there.
 task: >-
@@ -28,7 +28,7 @@ task: >-
   Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Do not touch the blocks before a
   cable is unplugged. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
   Do not touch the golf balls before the tower passes.
-checkpoint: null            # dream-1-ft:<account>-relay-v1 once it is trained; null = base Dream-1
+checkpoint: dreamlabs/dream-1-beta   # base Dream-1 (a Metal station has no default model); then dream-1-ft:<account>-relay-v1
 time_budget_s: 295          # 5-minute match, a little margin for the start
 check_every_s: 3.0
 verifier: monitor
@@ -37,7 +37,7 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 # Camera roles of the arms you recorded T3 (plug-in) and T4 (stacking) with, for the monitor's notes only.
 # The prompts never name an arm, so changing these does not change what the model is asked.
 vars: {plug_cam: wrist_r, stack_cam: wrist_r}
-claude: {model: claude-haiku-5-5, max_tokens: 600, history_frames: 6}
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
 # Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
 # the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
 # confirm 1, because a ball goes from gripper to bin in a few seconds; a false yes only costs the balls still to come.
@@ -51,9 +51,10 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - name: unplug_cable
     prompt: "unplug the USB cable at the end of the hub nearest the right arm"
-    success: "Is at least one USB cable that started plugged into the hub now fully pulled out of the hub?"
-    expect: "The right gripper closes on the plug at the end of the hub nearest it and pulls it straight out until the plug is clear."
-    timeout_s: 40
+    # start-vs-now: absolute counts ("how many are in the hub") flipped between 1 and 2 on identical frames (station test)
+    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
+    expect: "The right gripper closes fully on the plug at the end of the hub nearest it and pulls it straight out along the port until the plug is clear."
+    timeout_s: 60
     max_attempts: 8
     min_run_s: 4
     settle_s: 4
@@ -71,6 +72,24 @@ stages:
     timeout_s: 20
     min_run_s: 3
     on_fail: skip             # Stage 1 already passed
+
+  # One extra unplug, +5. Same prompt as unplug_cable: once the end port is empty, the end cable nearest the right arm
+  # is the next one along (TELEOP_PLAN: record some T1 with the end port already empty). Then put that cable down too.
+  - name: unplug_more
+    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+    success: "Compared with the stage-start overhead image, is one more cable now fully out of the hub than at the start of this stage?"
+    expect: "The right gripper closes on the next plug along the hub and pulls it straight out."
+    timeout_s: 20
+    min_run_s: 3
+    on_fail: skip
+
+  - name: put_more_down
+    prompt: "put the held cable down on the table away from the hub"
+    success: "Are both grippers empty, with no cable held?"
+    timeout_s: 12
+    min_run_s: 3
+    skip_if_done: true        # nothing held (unplug_more failed or dropped it): skip at once
+    on_fail: skip
 
   - name: plug_1
     prompt: "plug the loose USB cable on the table into a free port on the hub"

@@ -241,7 +241,8 @@ class MonitorVerifier:
         user = plan.claude_user
         self.plan = plan
         self.model = model or plan.claude.get("model", "claude-haiku-5-5")
-        self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 600))
+        self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 4000))
+        self.grip_note = ""   # set by the runner from /arms before each check (station_addons)
         self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
         if transport is None:
             key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
@@ -295,6 +296,8 @@ class MonitorVerifier:
         if stage.camera_notes:
             lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
             lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]
+        if getattr(self, "grip_note", ""):
+            lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
         lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
         menu = stage.menu()
@@ -349,7 +352,7 @@ class MonitorVerifier:
             content.append({"type": "image", "source": {
                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
-        return {"model": self.model, "max_tokens": self.max_tokens,
+        return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
                 "messages": [{"role": "user", "content": content}]}
 
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:

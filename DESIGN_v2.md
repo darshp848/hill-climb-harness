@@ -85,7 +85,7 @@ with confidence >= 0.8 (monitor) or the operator typed y, record the stage ok wi
 
 ## 8. Small things
 
-- `MonitorVerifier` model default `claude-haiku-5-5`; plan `claude.model` overrides; `max_tokens` default 600
+- `MonitorVerifier` model default `claude-haiku-5-5`; plan `claude.model` overrides; `max_tokens` default 4000 (was 600; it cut off every Haiku 5.5 reply)
   (the questions need room).
 - CLI `--verifier` accepts `monitor` and `monitor+manual` (operator key wins, like claude+manual).
 - `ClaudeVerifier` (v1) unchanged.
