@@ -104,11 +104,16 @@ def test_optional_retries_then_abandons_without_losing_match_result(tmp_path):
     assert [c[1] for c in commands] == ["do unplug", "do plug", "do plug", "do stack", "do ball", None]
 
 
-def test_required_exhaustion_never_issues_later_prompt(tmp_path):
-    plan = match([stage("unplug", max_attempts=1), stage("stack"), stage("ball", on_fail="abandon")])
-    result, commands = run(plan, tmp_path, {"unplug": [False, False]})
+def test_required_stage_retries_until_cutoff_and_never_issues_later_prompt(tmp_path):
+    # Nothing later can score until the gate passes, so its attempt cap and stage budget must not end the match.
+    plan = match([stage("unplug", max_attempts=1, stage_budget_s=2), stage("stack"), stage("ball", on_fail="abandon")])
+    result, commands = run(plan, tmp_path, {"unplug": [False] * 500})
     assert not result.ok and not result.match_gates_passed and result.stop_confirmed
-    assert [c[:2] for c in commands] == [("start", "do unplug"), ("stop", None)]
+    assert "work cutoff" in result.reason
+    prompts = [c[1] for c in commands if c[0] != "stop"]
+    assert len(prompts) > 1 and set(prompts) == {"do unplug"}
+    assert [c[0] for c in commands].count("stop") == 1 and commands[-1][0] == "stop"
+    assert 18 <= commands[-1][2] < 20
 
 
 def test_deadline_discards_a_late_positive_verdict(tmp_path):

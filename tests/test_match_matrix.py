@@ -35,8 +35,9 @@ CASES = (
     Case("missing_wrist", True, True, True, "ball_1", ("plug_loose_cable",)),
     Case("verified_plug_reset", True, True, True, "ball_1"),
     Case("unknown_plug_reset", True, True, True, "ball_1"),
-    Case("unknown_required_reset", False, False, True, "unplug_cable", ("stack_two", "ball_1")),
-    Case("ball_failure", True, True, True, "ball_1", ("ball_2",)),
+    Case("unknown_required_reset", True, True, True, "ball_1"),
+    Case("ball_failure", True, True, True, "ball_2"),
+    Case("eight_ball_in_bin", True, True, True, "ball_2"),
     Case("arm_fault", False, False, True, "raise_stack", ("clear_of_stack", "ball_1")),
     Case("prompt_ack_missing", False, False, True, "watcher_into_place", ("plug_loose_cable", "stack_two")),
     Case("work_cutoff", True, True, True, "ball_8"),
@@ -97,6 +98,7 @@ class Judge:
     def __init__(self, fixture):
         self.fixture = fixture
         self.slow = SlowProgress(fixture.clock.read)
+        self.late_sent = False
 
     def check(self, stage, frames, elapsed):
         case = self.fixture.case
@@ -105,7 +107,17 @@ class Judge:
         if case == "unplug_exhaustion" and stage.name == "unplug_cable":
             return Verdict(None)
         if case == "late_gate_verdict" and stage.name == "clear_of_stack":
-            self.fixture.clock.sleep(31)
+            if not self.late_sent:   # one positive verdict that arrives after the attempt timed out
+                self.late_sent = True
+                self.fixture.clock.sleep(31)
+                return Verdict(True, 1, "late")
+            return Verdict(None)
+        if case == "eight_ball_in_bin" and stage.name == "ball_1":
+            remove = stage.menu()[0].prompt
+            if self.fixture.prompt == remove:
+                return MonitorVerdict(None, 1, "8-ball out of the bin", scene_ok=True)
+            if not any(command[1] == remove for command in self.fixture.commands):
+                return MonitorVerdict(False, 1, "a black 8-ball is in our bin", status="failing", recovery=0)
         if case == "ball_failure" and stage.name == "ball_1":
             return Verdict(False, 1, "ball outcome did not meet the success question")
 
@@ -165,8 +177,23 @@ def test_full_v4_decision_matrix(case, tmp_path):
     elif case.name == "verified_plug_reset":
         assert results["plug_loose_cable"].ok and results["plug_loose_cable"].attempts == 2
         assert any(e["event"] == "scene_check" and e["scene_ok"] for e in events)
-    elif case.name in ("unknown_plug_reset", "unknown_required_reset"):
-        stage_name = "plug_loose_cable" if case.name == "unknown_plug_reset" else "unplug_cable"
-        assert sum(c[1] == fixture.prompts[stage_name] for c in fixture.commands) == 1
-        if case.name == "unknown_plug_reset":
-            assert results[stage_name].abandoned
+    elif case.name == "unknown_plug_reset":
+        assert sum(c[1] == fixture.prompts["plug_loose_cable"] for c in fixture.commands) == 1
+        assert results["plug_loose_cable"].abandoned
+    elif case.name == "unknown_required_reset":
+        # An unverified reset on a required gate falls back to a plain retry instead of ending the match.
+        unplug = [i for i, c in enumerate(fixture.commands) if c[1] == fixture.prompts["unplug_cable"]]
+        reset = next(i for i, c in enumerate(fixture.commands) if c[1] == "open both grippers and move the arms up")
+        assert len(unplug) == 2 and unplug[0] < reset < unplug[1] and results["unplug_cable"].ok
+    elif case.name == "eight_ball_in_bin":
+        ball = [i for i, c in enumerate(fixture.commands) if c[1] == fixture.prompts["ball_1"]]
+        remove = next(i for i, c in enumerate(fixture.commands) if "8-ball out of our bin" in (c[1] or ""))
+        assert ball[0] < remove < ball[1] and results["ball_1"].ok and results["ball_1"].attempts == 2
+    elif case.name == "ball_failure":
+        assert results["ball_1"].abandoned and results["ball_2"].ok
+    elif case.name == "late_gate_verdict":
+        # The late "done" is dropped before it is even logged; the attempt times out and the gate never passes.
+        assert not any(e["event"] == "verdict" and e["stage"] == "clear_of_stack" and e["done"] for e in events)
+        assert any(e["event"] == "attempt_end" and e["stage"] == "clear_of_stack" and "timeout" in e["reason"]
+                   for e in events)
+        assert "work cutoff" in result.reason

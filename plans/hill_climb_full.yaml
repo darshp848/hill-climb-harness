@@ -20,7 +20,7 @@ match: {gates: [unplug_cable, clear_of_stack], stop_reserve_s: 5}
 check_every_s: 3.0
 verifier: monitor
 confirm: 2
-done_message: "CORE GATES VERIFIED: CALL STOP NOW"
+done_message: "CORE GATES VERIFIED: CHECK NO 8-BALL IN OUR BIN, THEN CALL STOP"
 # Which arm plugs the loose cable in and which one only watches with its wrist camera (a second viewpoint,
 # because the overhead camera is poor at depth). Override at the match: --var work_arm=left --var watch_arm=right
 # --var work_cam=wrist_l --var watch_cam=wrist_r
@@ -47,7 +47,7 @@ stages:
 
   - name: put_cable_down
     prompt: "put the USB cable down on the table away from the hub and open the gripper"
-    success: "Are both grippers empty, with the unplugged cable lying on the table outside the hub?"
+    success: "Are both grippers empty, with the unplugged cable out of the hub (on the table, or dropped off it)?"
     expect: "The arm moves the loose cable away from the hub, lowers it to the table and opens."
     timeout_s: 25
     stage_budget_s: 30
@@ -153,43 +153,37 @@ stages:
          when: "the stack lost a block or fell", settle_s: 15, max_uses: 2}
     on_fail: retry_in_place
 
+  # Balls have no pass bar and each one scores +5 on its own, so a missed ball must not block the next:
+  # each ball stage needs only the verified stack. The question is relative to the stage-start frame, so a
+  # ball that lands late still counts for the next stage. The real station sends a camera trip every
+  # 3-4 s (last-run.csv: median 3.4 s, p90 4.5 s), and two fresh confirmations need about 12-15 s.
   - &ball
     name: ball_1
     requires_stage: clear_of_stack
     prompt: "put one shared golf ball in our bin; avoid both black 8-balls and keep clear of the stack"
-    success: "Is at least one golf ball resting inside our bin, with no black 8-ball in our bin?"
+    success: "Compared with the stage-start overhead view, is at least one more golf ball now resting inside our bin, with no black 8-ball in our bin?"
     expect: "An arm picks up a golf ball, keeping clear of both black 8-balls and the stack, and drops it into our bin."
-    timeout_s: 10
-    stage_budget_s: 10
-    max_attempts: 1
+    timeout_s: 20
+    stage_budget_s: 30
+    max_attempts: 2
     min_run_s: 3
     required_cameras: [overhead]
+    recovery:
+      # Either 8-ball in our bin at the end loses the match: take it out before anything else.
+      - {name: remove_8ball, kind: reset, prompt: "take the black 8-ball out of our bin and put it on the table away from the bin",
+         when: "a black 8-ball is in our bin", settle_s: 8, max_uses: 2}
     on_fail: abandon
   - <<: *ball
     name: ball_2
-    requires_stage: ball_1
-    success: "Are at least 2 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_3
-    requires_stage: ball_2
-    success: "Are at least 3 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_4
-    requires_stage: ball_3
-    success: "Are at least 4 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_5
-    requires_stage: ball_4
-    success: "Are at least 5 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_6
-    requires_stage: ball_5
-    success: "Are at least 6 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_7
-    requires_stage: ball_6
-    success: "Are at least 7 golf balls resting inside our bin, with no black 8-ball in our bin?"
   - <<: *ball
     name: ball_8
-    requires_stage: ball_7
-    success: "Are at least 8 golf balls resting inside our bin, with no black 8-ball in our bin?"

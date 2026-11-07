@@ -559,10 +559,18 @@ class Runner:
                        reason=verdict.reason, skipped=bool(done))
         return bool(done)
 
+    def _keeps_trying(self, stage: Stage) -> bool:
+        """A required match stage blocks every later object (rubric v4), so giving up early scores nothing:
+        it ignores its stage budget and attempt cap and keeps trying until the work cutoff."""
+        return self.plan.match is not None and stage.on_fail != "abandon"
+
+    def _attempt_cap(self, stage: Stage) -> float:
+        return float("inf") if self._keeps_trying(stage) else stage.max_attempts
+
     def _run_stage(self, stage: Stage, first: bool) -> StageResult:
         started = self._clock()
         deadline = self._work_end - stage.reserve_after_s
-        if stage.stage_budget_s is not None:
+        if stage.stage_budget_s is not None and not self._keeps_trying(stage):
             deadline = min(deadline, started + stage.stage_budget_s)
         active = _StageRun(stage, started, deadline)
         self._active = active
@@ -616,14 +624,14 @@ class Runner:
                 return StageResult(stage.name, False, attempts, self._clock() - t0, reason)
             reset_required = False
             while True:   # choose a recovery; a reset that leaves the scene broken burns an attempt
-                if attempts >= stage.max_attempts:
+                if attempts >= self._attempt_cap(stage):
                     return self._exhausted(active, reason)
                 remaining = self._check_global()
                 if stage.on_fail == "abandon" and remaining <= max(stage.min_run_s, stage.effective_settle()):
                     return self._abandon(active, "insufficient time to verify another attempt")
                 idx = self._pick_recovery(stage, uses, last_rec, hint, reset_required=reset_required)
                 if idx is None:
-                    if reset_required:
+                    if reset_required and not self._keeps_trying(stage):
                         return self._exhausted(active, reason)
                     break
                 uses[idx] = uses.get(idx, 0) + 1
