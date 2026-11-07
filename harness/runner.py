@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .frames import FrameSource
+from .frames import FrameSource, camera_matches
 from .log import RunLog
 from .plan import Plan, Recovery, Stage
 from .station_client import StationClient, StationError
@@ -94,6 +94,11 @@ class Runner:
         try:
             self._preflight()
             for i, stage in enumerate(self.plan.stages):
+                if stage.requires_stage and not any(r.name == stage.requires_stage and r.ok for r in results):
+                    reason = f"prerequisite {stage.requires_stage!r} was not verified"
+                    self.log.event("stage_skipped", stage=stage.name, reason=reason)
+                    results.append(StageResult(stage.name, False, 0, 0.0, reason))
+                    continue
                 results.append(self._run_stage(stage, first=(i == 0)))
             failed = [r.name for r in results if not r.ok]
             ok, reason = (not failed), ("completed" if not failed else f"completed with failed stages: {', '.join(failed)}")
@@ -123,6 +128,8 @@ class Runner:
 
     # -- pieces --------------------------------------------------------------------------------
     def _preflight(self) -> None:
+        if any(s.required_cameras and s.verifier == "time" for s in self.plan.stages):
+            raise _Refuse("stages with required_cameras need a visual verifier")
         dry = self.station.dry_run
         st = self.station.status()
         problems: list[str] = []
@@ -191,9 +198,11 @@ class Runner:
         self.station.start(prompt, self.plan.checkpoint)
         return self._wait({"running"}, START_TIMEOUT_S, "running")
 
-    def _issue(self, prompt: str, why: str, *, force_start: bool = False) -> None:
+    def _issue(self, prompt: str, why: str, *, force_start: bool = False,
+               require_new_trip: bool = False) -> int | None:
         """Gets `prompt` to the robot: set_prompt on a running station, else a fresh start. Logs a prompt_change
         event with the chunk count and tells verifiers (a monitor drops answers computed on the old prompt)."""
+        previous_trip = self.frames.latest_n() if require_new_trip else None
         if force_start or self.station.status().get("state") != "running":
             reply, how = self._start_run(prompt), "start"
         else:
@@ -208,12 +217,15 @@ class Runner:
             if fn is not None and id(v) not in seen:
                 seen.add(id(v))
                 fn(prompt)
+        return previous_trip
 
-    def _frames_for_check(self, stage: Stage | None = None) -> dict[str, bytes]:
-        frames = self.frames.latest()
+    def _frames_for_check(self, stage: Stage | None = None, *,
+                          frames: dict[str, bytes] | None = None) -> dict[str, bytes]:
+        if frames is None:
+            frames = self.frames.latest()
         wanted = (stage.cameras if stage is not None and stage.cameras else None) or self.plan.cameras_for_check
         if wanted:
-            frames = {r: j for r, j in frames.items() if any(w in r for w in wanted)}
+            frames = {r: j for r, j in frames.items() if any(camera_matches(r, w) for w in wanted)}
         return frames
 
     def _ask(self, verifier: Verifier, stage: Stage, frames: dict[str, bytes], elapsed: float, *,
@@ -240,14 +252,16 @@ class Runner:
         self._last_progress = p
 
     def _log_verdict(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, saved: list[str],
-                     st: dict[str, Any]) -> None:
+                     st: dict[str, Any], trip_n: int | None = None) -> None:
         extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding")
                  if getattr(verdict, k, None) is not None}
+        if trip_n is not None:
+            extra["trip"] = trip_n
         self.log.event("verdict", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 2),
                        done=verdict.done, confidence=verdict.confidence, reason=verdict.reason,
                        frames=saved, chunks=st.get("chunks"), **extra)
 
-    def _watch(self, stage: Stage, verifier: Verifier, attempt: int) -> _Attempt:
+    def _watch(self, stage: Stage, verifier: Verifier, attempt: int, last_trip: int | None) -> _Attempt:
         t0 = self._clock()
         confirm = self.plan.confirm
         gate = max(stage.min_run_s, stage.effective_settle())   # no verifier and no stall clock before this
@@ -262,10 +276,44 @@ class Runner:
             if st.get("state") == "idle":
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
             if elapsed >= gate:
-                frames = self._frames_for_check(stage)
+                if stage.required_cameras:
+                    trip = self.frames.latest_trip()
+                    repeated = trip is not None and last_trip is not None and trip.n <= last_trip
+                    frames = self._frames_for_check(stage, frames=trip.frames if trip is not None else {})
+                    problem = None
+                    if trip is None:
+                        problem = "no camera trip available"
+                    elif trip.prompt != stage.prompt:
+                        problem = "camera trip is for a different prompt"
+                    else:
+                        ages = st.get("cameras") or {}
+                        missing = [
+                            role for role in stage.required_cameras
+                            if not any(camera_matches(r, role) for r in frames)
+                            or any(camera_matches(r, role) and (age is None or age > MAX_CAMERA_AGE_S)
+                                   for r, age in ages.items())
+                        ]
+                        if missing:
+                            problem = f"required camera views missing or stale: {', '.join(missing)}"
+                    if trip is not None and not repeated:
+                        last_trip = trip.n
+                    if problem or repeated:
+                        if problem:
+                            consec_done = consec_fail = consec_stalled = 0
+                            notify = getattr(verifier, "notify_prompt_change", None)
+                            if notify is not None:
+                                notify(stage.prompt)
+                        reason = problem or "waiting for a new camera trip"
+                        self.log.event("camera_evidence_wait", stage=stage.name, attempt=attempt,
+                                       trip=trip.n if trip is not None else None, reason=reason)
+                        if elapsed >= stage.timeout_s:
+                            return _Attempt(False, f"timeout after {stage.timeout_s:g} s: {reason}", max_p, hint)
+                        continue
+                else:
+                    frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
-                self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
+                self._log_verdict(stage, attempt, elapsed, verdict, saved, st, last_trip)
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
                 if monitor:
@@ -353,10 +401,10 @@ class Runner:
             return hint
         return usable[0] if usable else None
 
-    def _attempt(self, stage: Stage, verifier: Verifier, attempt: int, prompt: str) -> _Attempt:
+    def _attempt(self, stage: Stage, verifier: Verifier, attempt: int, prompt: str, last_trip: int | None) -> _Attempt:
         t_start = time.time()
         try:
-            out = self._watch(stage, verifier, attempt)
+            out = self._watch(stage, verifier, attempt, last_trip)
         except BaseException as exc:
             self.log.segment(stage=stage.name, attempt=attempt, kind="stage", prompt=prompt, t_start=t_start,
                              t_end=time.time(), outcome="aborted", reason=f"{type(exc).__name__}: {exc}",
@@ -414,13 +462,14 @@ class Runner:
         if stage.skip_if_done and self._entry_check(stage, verifier):
             self.log.event("stage_already_done", stage=stage.name)
             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
-        self._issue(stage.prompt, "stage", force_start=first)
+        require_new_trip = bool(stage.required_cameras)
+        last_trip = self._issue(stage.prompt, "stage", force_start=first, require_new_trip=require_new_trip)
         attempts = 0
         uses: dict[int, int] = {}
         last_rec: int | None = None
         while True:
             attempts += 1
-            out = self._attempt(stage, verifier, attempts, stage.prompt)
+            out = self._attempt(stage, verifier, attempts, stage.prompt, last_trip)
             if out.ok:
                 return StageResult(stage.name, True, attempts, self._clock() - t0, out.reason)
             reason, hint = out.reason, out.recovery_hint
@@ -449,7 +498,7 @@ class Runner:
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
                 self.station.home()
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
-                self._issue(stage.prompt, "retry", force_start=True)
+                last_trip = self._issue(stage.prompt, "retry", force_start=True, require_new_trip=require_new_trip)
             else:
-                self._issue(stage.prompt, "retry")
+                last_trip = self._issue(stage.prompt, "retry", require_new_trip=require_new_trip)
                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="retry_in_place")

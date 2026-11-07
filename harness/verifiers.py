@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
+from .frames import camera_matches
 from .plan import Plan, Stage
 
 CLAUDE_URL = "https://api.anthropic.com/v1/messages"
@@ -274,9 +275,11 @@ class MonitorVerifier:
     # -- frames and payload ---------------------------------------------------------------------
     @staticmethod
     def _split(frames: dict[str, bytes]) -> tuple[tuple[str, bytes] | None, dict[str, bytes]]:
-        wrists = {r: j for r, j in sorted(frames.items()) if "wrist" in r}
-        others = [(r, j) for r, j in sorted(frames.items()) if "wrist" not in r]
-        overhead = next(((r, j) for r, j in others if any(k in r for k in ("overhead", "scene", "top"))), None)
+        wrists = {r: j for r, j in sorted(frames.items())
+                  if any(camera_matches(r, k) for k in ("wrist", "wrist_l", "wrist_r"))}
+        others = [(r, j) for r, j in sorted(frames.items()) if r not in wrists]
+        overhead = next(((r, j) for r, j in others
+                         if any(camera_matches(r, k) for k in ("overhead", "scene", "top"))), None)
         return (overhead or (others[0] if others else None)), wrists
 
     def _stage_text(self, stage: Stage, elapsed_s: float) -> str:
@@ -314,7 +317,7 @@ class MonitorVerifier:
         # Roles with a kept history: the overhead view, plus any the stage lists in history_cameras
         # (e.g. the wrist camera of an arm that is only watching, for a second viewpoint on depth).
         tracked = ([overhead] if overhead is not None else []) + [
-            (r, j) for r, j in wrists.items() if any(h in r for h in stage.history_cameras)]
+            (r, j) for r, j in wrists.items() if any(camera_matches(r, h) for h in stage.history_cameras)]
         tracked_roles = {r for r, _ in tracked}
 
         def label(t: float, role: str, tag: str = "") -> str:

@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .frames import camera_matches
+
 import yaml
 
 VERIFIERS = ("manual", "claude", "time", "claude+manual", "monitor", "monitor+manual")
@@ -17,7 +19,7 @@ MAX_PROMPT_CHARS = 512
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "expect",
-               "cameras", "camera_notes", "history_cameras"}
+               "cameras", "camera_notes", "history_cameras", "required_cameras", "requires_stage"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -52,9 +54,11 @@ class Stage:
     cameras: list[str] = field(default_factory=list)          # roles this stage's checks see; empty = plan's
     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
+    required_cameras: list[str] = field(default_factory=list)  # distinct current trips must include these views
+    requires_stage: str | None = None  # skip this stage if the named earlier stage failed
 
     def note_for(self, role: str) -> str:
-        return next((n for k, n in self.camera_notes.items() if k in role), "")
+        return next((n for k, n in self.camera_notes.items() if camera_matches(role, k)), "")
 
     def menu(self) -> list[Recovery]:
         """The recovery list with v1 string items wrapped as legacy Recovery entries."""
@@ -185,6 +189,9 @@ def parse_plan(data: Any) -> Plan:
         label = f"stage {name!r}"
         if name in seen:
             raise ValueError(f"{label}.name: duplicate stage name")
+        prerequisite = raw.get("requires_stage")
+        if prerequisite is not None and (not isinstance(prerequisite, str) or prerequisite not in seen):
+            raise ValueError(f"{label}.requires_stage: must name an earlier stage")
         seen.add(name)
         unknown = set(raw) - _STAGE_KEYS
         if unknown:
@@ -204,6 +211,10 @@ def parse_plan(data: Any) -> Plan:
             expect = _text(expect, f"{label}.expect")
         cams = _roles(raw.get("cameras"), f"{label}.cameras")
         hist = _roles(raw.get("history_cameras"), f"{label}.history_cameras")
+        required = _roles(raw.get("required_cameras"), f"{label}.required_cameras")
+        skip_if_done = _bool(raw.get("skip_if_done", False), f"{label}.skip_if_done")
+        if required and skip_if_done:
+            raise ValueError(f"{label}: required_cameras cannot be checked before the stage starts")
         notes = raw.get("camera_notes") or {}
         if not isinstance(notes, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.strip()
                                                   for k, v in notes.items()):
@@ -221,11 +232,13 @@ def parse_plan(data: Any) -> Plan:
                 on_fail=_enum(raw.get("on_fail", "retry_in_place"), ON_FAIL, f"{label}.on_fail"),
                 stall_s=None if stall is None else float(_num(stall, f"{label}.stall_s")),
                 settle_s=None if settle is None else float(_num(settle, f"{label}.settle_s")),
-                skip_if_done=_bool(raw.get("skip_if_done", False), f"{label}.skip_if_done"),
+                skip_if_done=skip_if_done,
                 expect=expect,
                 cameras=cams,
                 camera_notes={k: v.strip() for k, v in notes.items()},
                 history_cameras=hist,
+                required_cameras=required,
+                requires_stage=prerequisite,
             )
         )
 

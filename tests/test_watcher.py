@@ -4,8 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stage
+from harness.frames import CameraTrip, FrameSource
+from harness.log import RunLog
 from harness.plan import load_plan, parse_plan
-from harness.verifiers import MonitorVerifier
+from harness.runner import Runner
+from harness.station_client import StationClient
+from harness.verifiers import MonitorVerifier, Verdict
 from test_v2 import JPEG, Transport, reply_text
 
 
@@ -43,6 +48,17 @@ def test_monitor_keeps_history_for_watcher_camera_and_labels_notes():
     assert "Camera notes" in content[-1]["text"] and "side view from the watching arm" in content[-1]["text"]
 
 
+def test_monitor_passes_dream_station_wrist_and_top_images():
+    plan, st = _st(history_cameras=["wrist_l"], camera_notes={"wrist_l": "watcher wrist"})
+    transport = Transport(reply_text())
+    monitor = MonitorVerifier(plan, transport=transport)
+    monitor.check_now(st, {"image_window.top": JPEG, "image_window.left": JPEG}, 2.0)
+    content = transport.payloads[-1]["messages"][0]["content"]
+    assert [b["type"] for b in content] == ["text", "image", "text", "image", "text"]
+    assert "overhead" in content[0]["text"]
+    assert "image_window.left [watcher wrist]" in content[2]["text"]
+
+
 def test_stage_cameras_filter_frames(tmp_path):
     from harness.runner import Runner
 
@@ -71,3 +87,60 @@ def test_full_plan_watcher_stages():
     assert names.index("unplug_cable") < names.index("plug_loose_cable") < names.index("stack_two")
     plug = plan.stages[names.index("plug_loose_cable")]
     assert plug.history_cameras == ["wrist_l"] and "right arm" in plug.prompt and plug.on_fail == "skip"
+    assert plug.requires_stage == "watcher_into_place"
+    assert plug.required_cameras == ["overhead", "wrist_l"]
+
+
+@pytest.mark.parametrize("mode", ["complete", "missing_wrist", "stale_wrist", "old_prompt", "repeated"])
+def test_plug_waits_for_watcher_evidence(fake, write_plan, tmp_path, mode):
+    path = write_plan([
+        stage("watch", timeout_s=0.7, on_fail="skip", required_cameras=["overhead", "wrist_l"]),
+        stage("plug", requires_stage="watch"),
+        stage("stack"),
+    ], confirm=2)
+    plan = load_plan(path)
+    seen = []
+
+    class Evidence(FrameSource):
+        def latest_trip(self, *, fallback=False):
+            trip = super().latest_trip(fallback=fallback)
+            if fallback or trip is None or trip.prompt != "do watch":
+                return trip
+            views = {"image_window.top": trip.frames["scene"]}
+            if mode != "missing_wrist":
+                views["image_window.left"] = trip.frames["wrist_l"]
+            return CameraTrip(1 if mode == "repeated" else trip.n,
+                              "old task" if mode == "old_prompt" else trip.prompt, views)
+
+    class Judge:
+        def check(self, stage, frames, elapsed_s):
+            seen.append((stage.name, set(frames)))
+            return Verdict(True, 1.0, "verified")
+
+    class CameraStatus(StationClient):
+        def status(self):
+            status = super().status()
+            if mode == "stale_wrist" and status.get("prompt") == "do watch":
+                status["cameras"]["left"] = 10
+            return status
+
+    runner = Runner(plan, CameraStatus(fake.api_url), Evidence(fake.view_url),
+                    {"manual": Judge()}, RunLog(tmp_path / "logs"))
+    result = runner.run()
+    assert result.stages[-1].name == "stack" and result.stages[-1].ok
+    watch, plug = result.stages[:2]
+    if mode == "complete":
+        assert watch.ok and plug.ok
+        assert seen[:2] == [("watch", {"image_window.top", "image_window.left"})] * 2
+    else:
+        assert not watch.ok and plug.attempts == 0
+        assert sum(name == "watch" for name, _ in seen) == (1 if mode == "repeated" else 0)
+        assert all(name != "plug" for name, _ in seen)
+        assert not any(body.get("prompt") == "do plug" for _, _, body in fake.posts())
+
+
+def test_time_verifier_cannot_pass_camera_gate(fake, write_plan, tmp_path):
+    plan = load_plan(write_plan([stage("watch", required_cameras=["wrist_l"])], verifier="time"))
+    runner = Runner(plan, StationClient(fake.api_url), FrameSource(fake.view_url), {}, RunLog(tmp_path / "logs"))
+    assert "need a visual verifier" in runner.run().reason
+    assert not fake.posts()

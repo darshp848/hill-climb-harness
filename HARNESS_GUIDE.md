@@ -205,10 +205,8 @@ Still unclear in the rubric (ask the organizers):
 
 The overhead camera is poor at depth, so it can't tell whether a plug is lined up with the port or pushed in. In `hill_climb_full.yaml`, the plug-in has three stages:
 
-1. `watcher_into_place` asks Dream-1 to park the other arm beside the hub, with its wrist camera looking at the ports from the side. This stage is optional (`on_fail: skip`).
-2. `plug_loose_cable` has one arm plug the cable in while the watcher holds still. The monitor gets:
-   - the frame history of the watcher's wrist camera, not only of the overhead camera (`history_cameras`),
-   - a note per camera saying what it shows (`camera_notes`), so it judges depth from the side view.
+1. `watcher_into_place` asks Dream-1 to park the other arm beside the hub. The monitor uses new overhead and watcher-wrist frames to check that the wrist can see a free port from the side.
+2. `plug_loose_cable` starts only after the watcher pose passes. The monitor checks that the plug is seated and the watcher still sees the port. It gets the history of both views and the latest working-wrist frame when available.
 3. `release_before_stack` opens both grippers and lifts the arms clear before the stack.
 
 You choose the arms with `--var work_arm=left --var watch_arm=right --var work_cam=wrist_l --var watch_cam=wrist_r`. The defaults are: right arm works, left arm watches.
@@ -220,10 +218,23 @@ The new stage fields work in any plan:
 | `cameras` | The camera roles this stage's checks see. This overrides the plan's `cameras_for_check`. |
 | `history_cameras` | Extra roles whose frame history the monitor keeps. |
 | `camera_notes` | Maps a role to a sentence telling the monitor what that view shows. |
+| `required_cameras` | Every verification check needs these views from a distinct camera trip for the current prompt. Use a visual verifier. |
+| `requires_stage` | Skip this stage if the named earlier stage did not pass. |
 
 Plans can also set defaults with `vars:`. `--var` overrides them.
 
-**Limit:** the harness can't move an arm itself. Dream-1 has to do the watcher pose from the prompt, and base Dream-1 may ignore "stay still" or "park beside the hub". To make it reliable, record teleop demos of the watcher pose for the fine-tune. Skipping it costs nothing: if the watcher never gets into place, the stage times out after 15 s and the plug-in still runs with the overhead and gripper views.
+Dream-1 controls the watcher pose from the prompt. If the watcher never gets into position, the plan skips the optional plug-in and proceeds to clearing the workspace for stacking.
+
+### Inspect the watcher through DimOS
+
+On Linux or WSL, install the optional dependencies into a Python 3.12 environment and run the viewer from this checkout.
+
+```bash
+uv pip install 'dimos[web]==0.0.15' 'langchain-core>=1.2.22,<2'
+python -m dimos_skills
+```
+
+Connect an MCP client to `http://127.0.0.1:9990/mcp` and call `inspect_watcher` with `arm` set to `left` or `right`. It returns the current station status and labelled JPEGs for the overhead and selected wrist when the latest camera trip matches the active prompt. Use `--station` and `--view` if the simulator uses different ports. This skill reads the station and debug view over HTTP.
 
 ## 7. Test in simulation (before the robot)
 

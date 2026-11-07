@@ -61,20 +61,26 @@ stages:
   # Optional +20 per cable: plug a LOOSE cable (one that started on the table) into a free hub port.
   # Stage 1's pass bar is already met, so these are allowed; on_fail skip keeps them from eating the clock.
   - name: watcher_into_place
-    prompt: "move the {watch_arm} arm beside the hub so its camera looks at the hub ports from the side, without touching anything"
-    success: "Does the {watch_cam} camera show the hub's free ports from the side, with the {watch_arm} gripper touching nothing?"
+    prompt: "park the {watch_arm} arm beside the hub, with its wrist camera looking across the table at the hub ports; keep both grippers clear"
+    success: "Do the newest {watch_cam} and overhead views confirm the watcher is beside the hub, its gripper is clear, and its wrist camera sees a free port side-on? A top-down view does not count."
     expect: "The {watch_arm} arm rises and parks a short distance from the hub, its wrist camera pointed at the ports from the side."
+    cameras: [overhead, "{watch_cam}"]
+    required_cameras: [overhead, "{watch_cam}"]
+    history_cameras: ["{watch_cam}"]
     camera_notes:
       "{watch_cam}": "wrist camera of the {watch_arm} arm, which should end up looking at the hub ports from the side"
     timeout_s: 15
     max_attempts: 1
     min_run_s: 3
-    on_fail: skip             # no watcher is fine; the plug-in stage still has the top and gripper views
+    on_fail: skip             # skip the optional plug-in if the watcher cannot be verified
 
   - name: plug_loose_cable
+    requires_stage: watcher_into_place
     prompt: "with the {work_arm} arm, plug the loose USB cable on the table into a free port on the hub while the {watch_arm} arm stays still"
-    success: "Is a cable that was lying loose on the table now plugged fully into a free hub port, with the plug seated?"
+    success: "Use the newest {watch_cam} side view and overhead view together. Is the plug of a formerly loose cable fully seated in a free port, with the watcher still aimed at the port? If the side view lost the port or cannot show the plug depth, withhold success."
     expect: "The {work_arm} gripper picks the loose cable up by its plug, lines the plug up with a free port and pushes it in until it is seated, while the {watch_arm} arm holds still."
+    cameras: [overhead, "{watch_cam}", "{work_cam}"]
+    required_cameras: [overhead, "{watch_cam}"]
     history_cameras: ["{watch_cam}"]
     camera_notes:
       "scene": "top view: shows which port and the left-right alignment; poor at depth and insertion"
