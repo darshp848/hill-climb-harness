@@ -379,10 +379,11 @@ class Runner:
                         return _Attempt(False, why, max_p, hint)
                 elif verdict.done is not None or monitor:
                     consec_done = consec_fail = 0
-                if stage.stall_s is not None and consec_stalled >= confirm:
+                if stage.stall_s is not None and consec_stalled >= confirm and last_done_t is None:
                     return _Attempt(False, "stalled: monitor says stalled", max_p, hint)
-            if (stage.stall_s is not None and last_rise is not None and elapsed >= gate
-                    and elapsed - last_rise >= stage.stall_s):
+            # No stall once done was seen or progress is at the top: a finished stage cannot "rise" any further.
+            if (stage.stall_s is not None and last_rise is not None and elapsed >= gate and last_done_t is None
+                    and (max_p or 0) < 0.95 and elapsed - last_rise >= stage.stall_s):
                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
                                 max_p, hint)
             if elapsed >= stage.timeout_s:

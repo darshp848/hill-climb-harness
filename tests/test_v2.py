@@ -747,3 +747,11 @@ def test_cli_writes_manifest_and_never_the_key(write_plan, tmp_path, monkeypatch
     assert (run / "segments.jsonl").exists()
     assert "TOPSECRET" not in capsys.readouterr().out
     assert all("TOPSECRET" not in p.read_text() for p in run.iterdir() if p.suffix in (".json", ".jsonl"))
+
+
+def test_no_stall_after_done(fake, write_plan, tmp_path):
+    """A done verdict, then flat progress: the stage still passes on the next done instead of 'stalling'."""
+    path = write_plan([stage("a", stall_s=0.01)], confirm=2)
+    sv = Script([mv(True, progress=1.0), mv(None, "ok", progress=1.0), mv(None, "ok", progress=1.0), mv(True, progress=1.0)],
+                repeat=False)
+    assert build(fake, path, tmp_path, sv).run().ok

@@ -1,0 +1,340 @@
+# PRACTICE (not a match plan): 600 s, every stage gets a try; optional stages skip instead of ending the run.
+task: 'Practice relay: unplug all four USB cables from the hub one at a time, plug the loose cable into a free port, stack blocks three high and move the arms clear, then put {color} ping-pong balls into
+  the bin (never the black or white ball).'
+checkpoint: dreamlabs/dream-1-beta
+time_budget_s: 600
+check_every_s: 3.0
+verifier: monitor
+confirm: 2
+done_message: 'ALL STAGES DONE: CALL STOP NOW'
+vars:
+  work_arm: right
+  watch_arm: left
+  work_cam: wrist_r
+  watch_cam: wrist_l
+claude:
+  model: claude-haiku-5-5
+  max_tokens: 4000
+  history_frames: 6
+  zoom:
+    box:
+    - 0.45
+    - 0.25
+    - 0.75
+    - 0.65
+    what: the hub ports
+stages:
+- name: unplug_1
+  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
+    on the table away from the hub'
+  success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
+  expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
+  camera_notes: &id001
+    wrist_r: 'close view of the hub''s ports: count the plugs seated in ports here and compare with the stage start'
+    scene: 'top view: every cable''s far end lies loose on the table all the time; do not count those as unplugged'
+  timeout_s: 60
+  max_attempts: 4
+  min_run_s: 4
+  settle_s: 4
+  stall_s: 25
+  recovery:
+  - name: one_plug_only
+    kind: reset
+    prompt: open the right gripper and lift it straight up
+    when: the gripper is touching or holding more than one plug or cable
+    settle_s: 5
+    max_uses: 2
+  - name: keep_pulling
+    kind: retry
+    when: the gripper is on a plug or right next to the hub
+    max_uses: 2
+  - name: let_go_and_lift
+    kind: reset
+    prompt: open both grippers and move the arms up
+    when: the gripper holds the soft cable above the plug, is stuck, or has pushed the hub
+    settle_s: 6
+    max_uses: 2
+  on_fail: retry_in_place
+- name: unplug_2
+  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
+    on the table away from the hub'
+  success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
+  expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
+  camera_notes: *id001
+  timeout_s: 60
+  max_attempts: 2
+  min_run_s: 4
+  settle_s: 4
+  stall_s: 25
+  recovery:
+  - name: one_plug_only
+    kind: reset
+    prompt: open the right gripper and lift it straight up
+    when: the gripper is touching or holding more than one plug or cable
+    settle_s: 5
+    max_uses: 2
+  - name: keep_pulling
+    kind: retry
+    when: the gripper is on a plug or right next to the hub
+    max_uses: 2
+  - name: let_go_and_lift
+    kind: reset
+    prompt: open both grippers and move the arms up
+    when: the gripper holds the soft cable above the plug, is stuck, or has pushed the hub
+    settle_s: 6
+    max_uses: 2
+  on_fail: skip
+- name: unplug_3
+  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
+    on the table away from the hub'
+  success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
+  expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
+  camera_notes: *id001
+  timeout_s: 60
+  max_attempts: 2
+  min_run_s: 4
+  settle_s: 4
+  stall_s: 25
+  recovery:
+  - name: one_plug_only
+    kind: reset
+    prompt: open the right gripper and lift it straight up
+    when: the gripper is touching or holding more than one plug or cable
+    settle_s: 5
+    max_uses: 2
+  - name: keep_pulling
+    kind: retry
+    when: the gripper is on a plug or right next to the hub
+    max_uses: 2
+  - name: let_go_and_lift
+    kind: reset
+    prompt: open both grippers and move the arms up
+    when: the gripper holds the soft cable above the plug, is stuck, or has pushed the hub
+    settle_s: 6
+    max_uses: 2
+  on_fail: skip
+- name: unplug_4
+  prompt: 'unplug the USB cable at the end of the hub nearest the right arm: grip only that one plug''s hard body right where it goes into the hub, then pull it straight out along the port and put it down
+    on the table away from the hub'
+  success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
+  expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
+  camera_notes: *id001
+  timeout_s: 60
+  max_attempts: 2
+  min_run_s: 4
+  settle_s: 4
+  stall_s: 25
+  recovery:
+  - name: one_plug_only
+    kind: reset
+    prompt: open the right gripper and lift it straight up
+    when: the gripper is touching or holding more than one plug or cable
+    settle_s: 5
+    max_uses: 2
+  - name: keep_pulling
+    kind: retry
+    when: the gripper is on a plug or right next to the hub
+    max_uses: 2
+  - name: let_go_and_lift
+    kind: reset
+    prompt: open both grippers and move the arms up
+    when: the gripper holds the soft cable above the plug, is stuck, or has pushed the hub
+    settle_s: 6
+    max_uses: 2
+  on_fail: skip
+- name: watcher_into_place
+  prompt: park the left arm beside the hub, with its wrist camera looking across the table at the hub ports; keep both grippers clear
+  success: Do the newest wrist_l and overhead views confirm the watcher is beside the hub, its gripper is clear, and its wrist camera sees a free port side-on? A top-down view does not count.
+  expect: The left arm rises and parks a short distance from the hub, its wrist camera pointed at the ports from the side.
+  cameras:
+  - overhead
+  - wrist_l
+  required_cameras:
+  - overhead
+  - wrist_l
+  history_cameras:
+  - wrist_l
+  camera_notes:
+    wrist_l: wrist camera of the left arm, which should end up looking at the hub ports from the side
+  timeout_s: 30
+  max_attempts: 1
+  min_run_s: 3
+  on_fail: skip
+- name: plug_loose_cable
+  prompt: with the right arm, pick up the loose USB cable that was lying on the table from the start and plug it into a free port on the hub, while the left arm stays still
+  success: Use the newest wrist_l side view and overhead view together. Is the plug of a formerly loose cable fully seated in a free port, with the watcher still aimed at the port? If the side view lost
+    the port or cannot show the plug depth, withhold success.
+  expect: The right gripper picks the loose cable up by its plug, lines the plug up with a free port and pushes it in until it is seated, while the left arm holds still.
+  cameras:
+  - overhead
+  - wrist_l
+  - wrist_r
+  required_cameras:
+  - overhead
+  - wrist_l
+  history_cameras:
+  - wrist_l
+  camera_notes:
+    scene: 'top view: shows which port and the left-right alignment; poor at depth and insertion'
+    wrist_l: 'side view from the left arm, which is only watching: use it for the plug''s distance to the port, its height and whether it is pushed fully in'
+    wrist_r: close view from the gripper doing the plugging
+  timeout_s: 60
+  max_attempts: 2
+  min_run_s: 4
+  stall_s: 15
+  recovery:
+  - name: realign
+    kind: retry
+    when: the plug is held and near the port but not lined up
+    max_uses: 1
+  - name: back_off
+    kind: reset
+    prompt: move the right arm up and away from the hub while holding the cable
+    when: the plug is jammed against the hub or pushing the hub
+    settle_s: 4
+    max_uses: 1
+  on_fail: skip
+- name: release_before_stack
+  prompt: open both grippers and move both arms up, away from the hub
+  success: Are both grippers empty and clear of the hub and cables?
+  timeout_s: 25
+  max_attempts: 1
+  min_run_s: 3
+  on_fail: skip
+- name: stack_two
+  prompt: put a block on top of another block
+  success: Is one block resting on top of another block, with no gripper holding it?
+  expect: An arm picks up a block and sets it squarely on another block, then opens.
+  timeout_s: 50
+  max_attempts: 6
+  min_run_s: 4
+  stall_s: 20
+  recovery:
+  - name: keep_going
+    kind: retry
+    when: a block is held or the top block sits on the base
+    max_uses: 3
+  - name: reopen
+    kind: reset
+    prompt: open both grippers and move the arms up
+    when: a block was dropped, knocked over, or the gripper is stuck
+    settle_s: 6
+    max_uses: 3
+  on_fail: retry_in_place
+- name: stack_three
+  prompt: put another block on top of the stack
+  success: Is the stack three blocks tall, standing on its own with no gripper touching it?
+  expect: An arm picks up a third block and places it on the two-block stack without knocking it, then opens.
+  timeout_s: 50
+  max_attempts: 6
+  min_run_s: 4
+  stall_s: 20
+  recovery:
+  - name: keep_going
+    kind: retry
+    when: the stack is still standing and a block is held or near the top
+    max_uses: 3
+  - name: rebuild
+    kind: reset
+    prompt: put a block on top of another block
+    when: the stack fell over
+    settle_s: 15
+    max_uses: 2
+  on_fail: retry_in_place
+- name: clear_of_stack
+  prompt: move the arms up and away from the stack without touching it
+  success: Is the stack at least three blocks tall and standing on its own, with both arms clear of it?
+  expect: Both arms rise and move back; the stack stays standing.
+  timeout_s: 20
+  max_attempts: 3
+  min_run_s: 3
+  recovery:
+  - name: rebuild
+    kind: reset
+    prompt: put another block on top of the stack
+    when: the stack lost a block or fell
+    settle_s: 15
+    max_uses: 2
+  on_fail: retry_in_place
+- name: ball_1
+  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
+  success: Are at least 1 {color} balls inside the bin, with no black or white ball in it?
+  expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
+  timeout_s: 30
+  max_attempts: 3
+  min_run_s: 3
+  stall_s: 15
+  recovery: &id002
+  - name: drop_black
+    kind: reset
+    prompt: put the black ball down on the table far from the bin
+    when: a gripper is holding the black ball
+    settle_s: 5
+    max_uses: 3
+  - name: remove_black
+    kind: reset
+    prompt: take the black ball out of the bin and put it on the table
+    when: the black ball is inside the bin
+    settle_s: 10
+    max_uses: 3
+  - name: drop_wrong
+    kind: reset
+    prompt: put the ball down on the table away from the bin
+    when: a gripper is holding a ball that is not {color}
+    settle_s: 5
+    max_uses: 3
+  - name: keep_going
+    kind: retry
+    when: a {color} ball is held or close to the gripper
+    max_uses: 2
+  on_fail: skip
+- name: ball_2
+  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
+  success: Are at least 2 {color} balls inside the bin, with no black or white ball in it?
+  expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
+  timeout_s: 30
+  max_attempts: 3
+  min_run_s: 3
+  stall_s: 15
+  recovery: *id002
+  on_fail: skip
+- name: ball_3
+  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
+  success: Are at least 3 {color} balls inside the bin, with no black or white ball in it?
+  expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
+  timeout_s: 30
+  max_attempts: 3
+  min_run_s: 3
+  stall_s: 15
+  recovery: *id002
+  on_fail: skip
+- name: ball_4
+  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
+  success: Are at least 4 {color} balls inside the bin, with no black or white ball in it?
+  expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
+  timeout_s: 30
+  max_attempts: 3
+  min_run_s: 3
+  stall_s: 15
+  recovery: *id002
+  on_fail: skip
+- name: ball_5
+  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
+  success: Are at least 5 {color} balls inside the bin, with no black or white ball in it?
+  expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
+  timeout_s: 30
+  max_attempts: 3
+  min_run_s: 3
+  stall_s: 15
+  recovery: *id002
+  on_fail: skip
+- name: ball_6
+  prompt: put one {color} ping-pong ball into the bin, never the black ball and never the white ball, without touching the stack
+  success: Are at least 6 {color} balls inside the bin, with no black or white ball in it?
+  expect: An arm picks up one {color} ball, avoiding the black ball and the stack, and drops it into the bin.
+  timeout_s: 30
+  max_attempts: 3
+  min_run_s: 3
+  stall_s: 15
+  recovery: *id002
+  on_fail: skip
