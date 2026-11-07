@@ -274,6 +274,44 @@ The report gives:
 - the most common failure reasons
 - a "possible false success" count, as a lead rather than proof
 
+## 8b. How hard is it pulling? (`python -m harness.force`)
+
+No firmware change is needed to see the force, and none is needed to change it. On a Metal arm, the force comes from Dream's host software (dreamlabs 1.0.37, `robots/metal.py`), which runs each joint motor in Damiao MIT mode:
+
+> torque = kp × (target − angle) − kd × velocity + gravity feedforward
+
+The gains, from base to wrist:
+
+| | Joints 1–3 | Joint 4 (wrist flex) | Joints 5–6 (wrist yaw, roll) | Gripper |
+| --- | --- | --- | --- | --- |
+| kp (N·m/rad) | 100 | 50 | 20 | 20 |
+| kd | 5 | 5 | 0.6 | 0.6 |
+
+Three things in the station config cap the force:
+- the gripper's squeeze, `gripper_hold_torque_nm`: 0.1–2.0 N·m at the motor, 0.5 by default;
+- the loop's `grip_force_cap` (0.65);
+- the speed and step clamps (`max_ee_speed_m_s` 0.6), which stop the target from running far ahead of the hand.
+
+None of these is firmware, and they belong to the station. Ask Dream's staff before changing them.
+
+After an attempt, copy Dream's trace `~/.dreamlabs/last-run.csv` off the station. It has one row per tick, with the measured and commanded angles of every joint and the gripper. Then run:
+
+```bash
+python -m harness.force last-run.csv --arm r --from 12 --to 20 [--tcp 0 0 0.12] [--hold-torque 0.5] [--csv out.csv]
+```
+
+It prints:
+- the PD torque per joint, and its share of each motor's MIT torque scale;
+- the force at the hand, through the arm's Jacobian;
+- the gripper's squeeze, and how often it sits at the hold limit;
+- the share of ticks that were clamped;
+- a reading of which limit you hit:
+  - **the grip:** the cable slips in the jaws;
+  - **the clamps:** the target can't lead the hand far enough;
+  - **the model:** it simply isn't asking for a hard pull. The fix is demos that pull harder.
+
+It's an estimate. The trace doesn't keep measured torque or current, and the tool point defaults to the wrist-roll joint, so pass `--tcp` for the jaw tip.
+
 ## 9. Checklist on the day
 
 1. `python -m pytest -q` passes. Then run `--mock --scenario arm_dies` once to watch it stop safely.
