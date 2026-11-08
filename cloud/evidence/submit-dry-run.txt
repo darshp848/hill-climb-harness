@@ -1,0 +1,4 @@
+Will submit Spot job hill-climb-pilot-v1: 10 matches, 10 tasks, parallelism 8, judge oracle.
+Each task runs 1 sequential matches on e2-highcpu-2; Spot retries may repeat paid Dream inference.
+Job config: cloud\generated\job.json
+DRY RUN: gcloud batch jobs submit hill-climb-pilot-v1 --location us-central1 --config 'cloud\generated\job.json' --project hill-climb-sims --quiet

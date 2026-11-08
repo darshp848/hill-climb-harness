@@ -1,0 +1,180 @@
+"""Run one isolated, real-time sim match. Scripted policy is for offline validation only."""
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import hashlib
+import importlib.metadata
+import json
+import os
+import signal
+import threading
+import time
+from pathlib import Path
+
+import psutil
+
+from cloud.judge import DelayedOracle
+from harness.detect import TableDetector
+from harness.frames import FrameSource
+from harness.live_guard import LiveFrames, LiveGuard
+from harness.log import RunLog
+from harness.plan import load_plan
+from harness.runner import Runner
+from harness.start_pose import StartPoses
+from harness.station_client import StationClient
+from harness.verifiers import MonitorVerifier, anthropic_transport
+from sim_station import SimStation
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def sim_text(value):
+    """Adapt real-table colour instructions while retaining plan structure and timings."""
+    if isinstance(value, str):
+        for old, new in [("white or black ball", "black ball"),
+                         ("white ball or a black", "black"),
+                         ("white ball, any black ball", "black ball"),
+                         ("white ball, a black ball", "black ball"),
+                         ("white ball", "black ball"),
+                         ("coloured golf ball", "white golf ball"),
+                         ("orange ball", "white golf ball")]:
+            value = value.replace(old, new)
+        return value
+    if dataclasses.is_dataclass(value):
+        for field in dataclasses.fields(value):
+            setattr(value, field.name, sim_text(getattr(value, field.name)))
+    elif isinstance(value, list):
+        return [sim_text(x) for x in value]
+    elif isinstance(value, dict):
+        return {k: sim_text(v) for k, v in value.items()}
+    return value
+
+
+def prepare_plan(path, skip=()):
+    plan = sim_text(load_plan(path))
+    plan.stages = [s for s in plan.stages if not any(s.name.startswith(x) for x in skip)]
+    if not plan.stages or any(s.verifier != "monitor" for s in plan.stages):
+        raise ValueError("cloud matches require monitor-only stages and no human input")
+    if not plan.guard or plan.time_budget_s > 300:
+        raise ValueError("cloud matches require a guard and a budget no longer than 300s")
+    plan.claude_user["parallel"] = 2
+    # Read-only practice lessons, as in --match. Adapt their ball colours too.
+    lesson = ROOT / "lessons/operator.md"
+    if lesson.exists():
+        plan.system_prompt += "\n" + sim_text(lesson.read_text(encoding="utf-8"))
+    plan.system_prompt += ("\nSIM SCENE: the robot is a pair of YAM arms. Six WHITE golf balls are legal; "
+                           "two BLACK 8-balls are illegal. The hub is silver. The bin is white. "
+                           "Judge the rendered scene, not the physical station photographs.")
+    return plan
+
+
+def run_match(args):
+    print(f"Will create one {args.policy}/{args.judge} match and logs under {args.out}", flush=True)
+    os.environ["HARNESS_CLAUDE_BACKEND"] = "api"
+    if args.judge == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
+        raise ValueError("USER ACTION NEEDED: supply ANTHROPIC_API_KEY through Secret Manager")
+    plan_path = ROOT / args.plan
+    plan = prepare_plan(plan_path, args.skip)
+    detector = TableDetector.from_file(ROOT / args.detect)
+    log = RunLog(args.out)
+    proc = psutil.Process()
+    started, cpu0 = time.monotonic(), time.process_time()
+    peak = [proc.memory_info().rss]
+    done = threading.Event()
+
+    def sample():
+        while not done.wait(0.2):
+            peak[0] = max(peak[0], proc.memory_info().rss)
+
+    thread = threading.Thread(target=sample, daemon=True)
+    thread.start()
+    sim = None
+    runner = None
+    summary = None
+    try:
+        sim = SimStation(policy=args.policy, scene="hill_climb", realtime=True,
+                         api_port=0, view_port=0, max_trips=4).start()
+        station = StationClient(sim.api_url)
+        station.reset()
+        mon = (DelayedOracle(plan, sim.api_url, args.seed) if args.judge == "oracle" else
+               MonitorVerifier(plan, transport=anthropic_transport(os.environ["ANTHROPIC_API_KEY"])))
+        mon.annotator, mon.legend = detector.annotate_frames, detector.legend()
+        frames = FrameSource(sim.view_url, station_url=sim.api_url)
+        runner = Runner(plan, station, frames, {"monitor": mon}, log)
+        runner.fast_guard = detector.guard
+        if args.judge == "oracle":
+            def stage_baseline(event, fields):
+                if event == "stage_start":
+                    with sim._lock:
+                        mon.oracle.start[fields["stage"]] = dict(sim._poses["referee"])
+            log.listeners.append(stage_baseline)
+        live = LiveFrames(sim.api_url)
+        if set(live.probe()) != {"wrist_l", "wrist_r"}:
+            raise RuntimeError("live guard wrist-camera probe failed")
+        runner.live_guard = LiveGuard(live.grab, detector.guard, station.stop,
+                                      rate_hz=10, confirm_frames=3, log=log.event)
+        if plan.start_pose:
+            runner.start_poses = StartPoses.load(ROOT / "plans" / plan.start_pose.reference)
+        plan_data = dataclasses.asdict(plan)
+        log.update_manifest(match=True, policy=args.policy, judge=args.judge, seed=args.seed,
+                            label=args.label, scene="hill_climb", scene_randomisation="none",
+                            detector=args.detect, live_guard=True, operator=False,
+                            plan_sha256=hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+                            effective_plan=plan_data, sim_colour_adaptation=True,
+                            versions={p: importlib.metadata.version(p) for p in ("mujoco", "dreamlabs")})
+        runner.live_guard.start()
+        signal.signal(signal.SIGTERM, lambda *_: runner.request_stop())
+        match_start = time.monotonic()
+        result = runner.run()
+        # An early harness finish holds the arms through the rest of the scoring clock.
+        while time.monotonic() - match_start < 300 and not runner._stop_event.is_set():
+            time.sleep(min(0.25, 300 - (time.monotonic() - match_start)))
+        with sim._lock:
+            ref = dict(sim._poses["referee"])
+        summary = {"schema_version": 1, "scenario": "hill_climb", "label": args.label,
+                   "seed": args.seed, "policy": args.policy, "judge": args.judge,
+                   "harness": dataclasses.asdict(result), "referee": ref,
+                   "stages": [dataclasses.asdict(s) for s in result.stages],
+                   "match_wall_s": time.monotonic() - match_start,
+                   "complete": not runner._stop_event.is_set() and time.monotonic() - match_start >= 299,
+                   "monitor_calls": getattr(mon, "calls", mon._seq),
+                   "milestones": {"stage1_at": ref["stage1_at"], "stage2_at": ref["stage2_at"],
+                                  "first_touch": ref["first_touch"]},
+                   "effective_plan_sha256": hashlib.sha256(json.dumps(plan_data, sort_keys=True).encode()).hexdigest(),
+                   "versions": {p: importlib.metadata.version(p) for p in ("mujoco", "dreamlabs")},
+                   "source_revision": os.environ.get("SOURCE_REVISION", "local")}
+    finally:
+        if runner and runner.live_guard:
+            runner.live_guard.close()
+        if sim:
+            sim.close()
+        done.set()
+        thread.join()
+    summary["metrics"] = {"wall_s": round(time.monotonic() - started, 3),
+                          "cpu_s": round(time.process_time() - cpu0, 3),
+                          "peak_rss_mib": round(peak[0] / 2**20, 2),
+                          "host_cpu_count": os.cpu_count(), "platform": os.name}
+    target = Path(args.out) / "match.json"
+    target.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps({"result": str(target), "metrics": summary["metrics"], "referee": summary["referee"]}), flush=True)
+    return summary
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--policy", choices=["dream", "scripted"], default="dream")
+    p.add_argument("--judge", choices=["oracle", "api"], default="oracle")
+    p.add_argument("--plan", default="plans/hill_climb_v4.yaml")
+    p.add_argument("--skip", action="append", default=[])
+    p.add_argument("--detect", default="plans/sim_table_colors.yaml")
+    p.add_argument("--match", action="store_true", default=True)
+    p.add_argument("--live-guard", action="store_true", default=True)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--label", default="hill_climb_v4")
+    p.add_argument("--out", type=Path, default=Path("/out"))
+    return p
+
+
+if __name__ == "__main__":
+    run_match(parser().parse_args())

@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 IDLE, STARTING, RUNNING, STOPPING, HOMING, RESETTING, ERROR = (
     "idle", "starting", "running", "stopping", "homing", "resetting", "error")
@@ -191,6 +191,7 @@ class SimStation:
         self.env: Any = None
         self.hold: dict[str, Any] | None = None  # the targets held while idle
         self._poses: dict[str, Any] = {}  # sim-only ground truth, refreshed after every physics step
+        self._arms: dict[str, Any] = {}
         self._servers: list[ThreadingHTTPServer] = []
         self._threads: list[threading.Thread] = []
         self.api_url = ""
@@ -198,7 +199,7 @@ class SimStation:
         # live visualizers: the latest camera renders (GET /live on the view port) and the native MuJoCo viewer
         self._images: dict[str, Any] = {}
         self._images_n = 0
-        self._jpeg_cache: dict[str, tuple[int, bytes]] = {}
+        self._jpeg_cache: dict[tuple[str, int | None], tuple[int, bytes]] = {}
         self.viewer_wanted = viewer
         self._viewer: Any = None
         self._viewer_panel: Any = None
@@ -459,11 +460,12 @@ class SimStation:
             print(f"sim_station: viewer closed ({type(exc).__name__}: {exc})", file=sys.stderr, flush=True)
             self._viewer = None
 
-    def _camera_jpeg(self, name: str) -> bytes | None:
+    def _camera_jpeg(self, name: str, width: int | None = None) -> bytes | None:
         """The newest render of one camera as JPEG, encoded at most once per render."""
         with self._lock:
             rgb, n = self._images.get(name), self._images_n
-            cached = self._jpeg_cache.get(name)
+            key = (name, width)
+            cached = self._jpeg_cache.get(key)
         if rgb is None:
             return None
         if cached and cached[0] == n:
@@ -473,10 +475,16 @@ class SimStation:
         from PIL import Image
 
         buf = io.BytesIO()
-        Image.fromarray(rgb).save(buf, format="JPEG", quality=80)
+        im = Image.fromarray(rgb)
+        if width and width < im.width:
+            im = im.resize((width, max(1, round(im.height * width / im.width))))
+        im.save(buf, format="JPEG", quality=80)
         data = buf.getvalue()
         with self._lock:
-            self._jpeg_cache[name] = (n, data)
+            # Keep only the current render, with bounded user-selected widths.
+            self._jpeg_cache = {k: v for k, v in self._jpeg_cache.items() if v[0] == n}
+            if len(self._jpeg_cache) < 32:
+                self._jpeg_cache[key] = (n, data)
         return data
 
     def _live_state(self) -> dict[str, Any]:
@@ -501,6 +509,13 @@ class SimStation:
             snap["referee"] = self._referee.report(data)
         with self._lock:
             self._poses = snap
+            self._arms = {
+                side: {"gripper": float(state[side][6]),
+                       "commanded_gripper": float(self.np.clip(
+                           data.actuator(f"{side}_finger_1").ctrl[0] / 0.0475, 0, 1)),
+                       "gripper_effort": None,
+                       "positions_rad": [float(v) for v in state[side][:6]]}
+                for side in ARMS}
 
     def _current_targets(self) -> dict[str, Any]:
         state = self.env.state()
@@ -740,6 +755,30 @@ class SimStation:
                 sim.calls.append(("GET", route, None))
                 if route == "/status":
                     self._reply(200, sim._status())
+                elif route == "/arms":
+                    with sim._lock:
+                        self._reply(200, dict(sim._arms))
+                elif route.startswith("/frame/") and route.endswith(".jpg"):
+                    camera = route[len("/frame/"):-4]
+                    name = {"scene": "top", "overhead": "top", "wrist_l": "left", "wrist_r": "right"}.get(camera)
+                    try:
+                        value = parse_qs(urlsplit(self.path).query).get("w", [None])[0]
+                        width = None if value is None else int(value)
+                        if width is not None and not 1 <= width <= 4096:
+                            raise ValueError()
+                    except ValueError:
+                        self._reply(400, {"error": "w must be an integer between 1 and 4096"})
+                        return
+                    jpeg = sim._camera_jpeg(name, width) if name else None
+                    if jpeg is None:
+                        self._reply(404, {"error": "camera not found"})
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(jpeg)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(jpeg)
                 elif route == "/objects":  # sim only: ground-truth poses for offline benchmarks, never the harness
                     with sim._lock:
                         self._reply(200, dict(sim._poses))

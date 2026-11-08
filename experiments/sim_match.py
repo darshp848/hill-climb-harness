@@ -69,14 +69,19 @@ class OracleVerifier:
         return any(b.startswith("eight_") and pos[2] > h.TABLE_Z + h.EIGHT_R + 0.01 and self._near(snap, pos) < 0.05
                    for b, pos in snap["bodies"].items())
 
-    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> MonitorVerdict:
-        snap = get(self.url, "/objects")
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float,
+              *, snapshot: dict | None = None) -> MonitorVerdict:
+        snap = snapshot if snapshot is not None else get(self.url, "/objects")
         ref, bodies = snap["referee"], snap["bodies"]
         base = self.start.setdefault(stage.name, ref)
         name = stage.name
+        name = {"cable_unplug": "unplug_cable", "cable_unplug_more": "unplug_more",
+                "cable_put_down": "put_cable_down", "cable_put_more_down": "put_more_down"}.get(name, name)
         tower = ref["tower_in"] * h.INCH
         held_out = [b for b in bodies if b.startswith("plugged_") and self._near(snap, bodies[b]) <= 0.05]
-        if name in ("unplug_cable", "unplug_more"):
+        if stage.skip_unless and stage.success == stage.skip_unless:
+            done = self._open(snap) and not held_out
+        elif name in ("unplug_cable", "unplug_more"):
             done = ref["unplugged"] > base["unplugged"]
         elif name in ("put_cable_down", "put_more_down"):
             done = self._open(snap) and not held_out
@@ -94,7 +99,8 @@ class OracleVerifier:
         elif name.startswith("higher_"):
             done = tower >= base["tower_in"] * h.INCH + 0.04 and self._tower_clear(snap)
         elif name.startswith("ball_"):
-            need = int(name.split("_")[1])
+            relative = "one more" in stage.success.lower()
+            need = base["golf_in_bin"] + 1 if relative else int(name.split("_")[1])
             done = ref["golf_in_bin"] >= need and not ref["eight_in_bin"]
         else:
             return MonitorVerdict(None, 0.0, f"oracle: no rule for {name}")

@@ -1,0 +1,18 @@
+# Explicit build-context allowlist. Never upload local credentials, runs or .git.
+*
+!cloud/
+!cloud/**
+!harness/
+!harness/**
+!sim_scenes/
+!sim_scenes/**
+!plans/
+!plans/**
+!experiments/
+!experiments/sim_match.py
+!sim_station.py
+cloud/evidence/**
+cloud/generated/**
+**/__pycache__/**
+**/.env
+**/credentials

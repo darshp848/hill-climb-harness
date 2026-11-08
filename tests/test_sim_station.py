@@ -102,6 +102,29 @@ def test_bad_requests(sim):
     assert call(sim, "POST", "/nope", {})[0] == 404
 
 
+def test_light_frames_and_measured_arms(sim):
+    from PIL import Image
+    from harness.frames import FrameSource
+    from harness.station_client import StationClient
+
+    settle(sim)
+    for cam in ("scene", "wrist_l", "wrist_r"):
+        for width, expected in [(320, (320, 180)), (4096, (640, 360))]:
+            with urllib.request.urlopen(sim.api_url + f"/frame/{cam}.jpg?w={width}") as response:
+                assert response.headers["Content-Type"] == "image/jpeg"
+                im = Image.open(io.BytesIO(response.read()))
+                assert im.size == expected and np.asarray(im).std() > 5
+    assert set(FrameSource(sim.view_url, station_url=sim.api_url).latest()) == {"scene", "wrist_l", "wrist_r"}
+    assert call(sim, "GET", "/frame/missing.jpg")[0] == 404
+    for width in ("nope", "0", "-1", "4097"):
+        assert call(sim, "GET", f"/frame/scene.jpg?w={width}")[0] == 400
+    arms = StationClient(sim.api_url).grippers()
+    assert set(arms) == {"left", "right"}
+    for arm in arms.values():
+        assert 0 <= arm["gripper"] <= 1 and 0 <= arm["commanded_gripper"] <= 1
+        assert len(arm["positions_rad"]) == 6 and arm["gripper_effort"] is None
+
+
 def test_run_prompt_frames_stop_home_reset(sim):
     settle(sim)
     code, status = call(sim, "POST", "/start", {"prompt": "put the apple in the bowl"})
