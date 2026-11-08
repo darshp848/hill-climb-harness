@@ -25,7 +25,9 @@ task: >-
   more the same way). Never plug a cable in. Stage 2: stack the blocks into a free-standing tower more than 4 inches
   (10 cm) tall. Do not touch the blocks before a cable is unplugged. Stage 3: put {ball}s into the white bin, never
   the white ball or a black ball, without touching the tower. Do not touch the balls before the tower passes.
-checkpoint: dreamlabs/dream-1-beta
+# Base Dream-1 by default. The fine-tune of 7-8 Nov: --var model=dream-1-ft:bb4b9e5f-relay-final --no-rewrite
+# (only with that account's DREAM_API_KEY in dreamcli's shell).
+checkpoint: "{model}"
 time_budget_s: 295
 check_every_s: 3.0
 # Darsh's operator decisions (docs/decisions.pdf): per-stage technique + error detection, the retry rule
@@ -41,6 +43,7 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 #   --var unplug="unplug the USB cable at the end of the hub nearest the right arm"
 #   --var put_down="put the held cable down on the table away from the hub"
 vars:
+  model: dreamlabs/dream-1-beta
   stack_cam: wrist_r
   ball: coloured golf ball   # green, yellow or orange (Darsh's decisions); the white ball and black balls are illegal
   unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
