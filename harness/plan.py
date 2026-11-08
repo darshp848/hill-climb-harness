@@ -11,17 +11,21 @@ import yaml
 
 VERIFIERS = ("manual", "claude", "time", "claude+manual", "monitor", "monitor+manual")
 RECOVERY_KINDS = ("retry", "reset")
-ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
+# retry_then_skip: retry in place (recovery menu as usual) up to max_attempts, then move on instead of ending the run.
+# Darsh's rule (decisions.pdf): "if a task fails more than twice, move on; three times if it is worth a lot".
+ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort", "retry_then_skip")
 MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
               "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first",
-              "write_prompts", "rewrite_max", "rewrite_cooldown_s", "stop_on_pass", "hands_off", "lock_prompt"}
+              "write_prompts", "rewrite_max", "rewrite_cooldown_s", "stop_on_pass", "hands_off", "lock_prompt",
+              "prompt_engine"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
                "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check",
-               "grip_assist", "write_prompt", "retry_prompt", "writer_notes"}
+               "grip_assist", "write_prompt", "retry_prompt", "writer_notes",
+               "template", "slots", "variants", "not_after_s"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 _GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
               "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s"}
@@ -122,6 +126,15 @@ class Stage:
     # Extra rules for the stage-prompt writer on this stage (plan.write_prompts). It may answer SKIP (nothing it can
     # do here, e.g. no legal ball within reach): the stage is then skipped.
     writer_notes: str | None = None
+    # plan.prompt_engine: the template this stage's instruction is composed from, and its default slot options
+    # (also the fallback). `prompt` stays the intent the monitor reads and the text a verbatim run sends.
+    template: str | None = None
+    slots: dict[str, str] = field(default_factory=dict)
+    # More templates for later tries of the same stage: try n uses ([template] + variants)[(n - 1) % len].
+    variants: list[str] = field(default_factory=list)
+    # Match clock (s since run start) after which this optional stage is not started or retried: leaves time for the
+    # stages after it. Only on skip / retry_then_skip stages (a pass bar can't be left).
+    not_after_s: float | None = None
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -220,6 +233,7 @@ class Plan:
     # live: a noisy fast monitor ended 7 stacking attempts in 4 min, each with "open both grippers ...", which made
     # Dream drop the cube it held.
     hands_off: bool = False
+    prompts: Any = None            # harness.prompt_engine.Library from plan.prompt_engine, or None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -308,6 +322,24 @@ def _recovery_item(raw: Any, j: int, label: str, seen: set[str]) -> str | Recove
         raise ValueError(f"{where}.name: duplicate recovery name {item.name!r}")
     seen.add(item.name)
     return item
+
+
+def _variants(raw: Any, template: Any, label: str) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(v, str) and v.strip() for v in raw):
+        raise ValueError(f"{label}.variants: must be a list of template ids")
+    if not template:
+        raise ValueError(f"{label}.variants: needs a stage template")
+    return [v.strip() for v in raw]
+
+
+def _not_after(raw: dict, label: str) -> float | None:
+    if raw.get("not_after_s") is None:
+        return None
+    if raw.get("on_fail") not in ("skip", "retry_then_skip"):
+        raise ValueError(f"{label}.not_after_s: only on on_fail skip or retry_then_skip stages (a pass bar can't be left)")
+    return float(_num(raw["not_after_s"], f"{label}.not_after_s"))
 
 
 def parse_plan(data: Any) -> Plan:
@@ -400,6 +432,10 @@ def parse_plan(data: Any) -> Plan:
                 write_prompt=_bool(raw.get("write_prompt", True), f"{label}.write_prompt"),
                 retry_prompt=None if raw.get("retry_prompt") is None else _prompt(raw["retry_prompt"], f"{label}.retry_prompt"),
                 writer_notes=None if raw.get("writer_notes") is None else _text(raw["writer_notes"], f"{label}.writer_notes"),
+                template=None if raw.get("template") is None else _text(raw["template"], f"{label}.template"),
+                slots=_slot_defaults(raw.get("slots"), label),
+                variants=_variants(raw.get("variants"), raw.get("template"), label),
+                not_after_s=_not_after(raw, label),
             )
         )
 
@@ -439,7 +475,16 @@ def parse_plan(data: Any) -> Plan:
     prefix = data.get("prompt_prefix", "") or ""
     if not isinstance(prefix, str):
         raise ValueError("plan.prompt_prefix: must be a string")
+    from harness.prompt_engine import parse_library   # here: prompt_engine imports nothing from plan
+    prompts = parse_library(data.get("prompt_engine"), stages)
+    if prompts is not None and prompts.mode == "verbatim":
+        on = [k for k in ("rewrite_prompts", "write_prompts") if data.get(k)] + (["tower_prompts"] if data.get("tower_prompts") else [])
+        if on:
+            raise ValueError(f"plan.prompt_engine: mode verbatim (fine-tune) sends recorded texts only; turn off {on}")
+    if prompts is not None and prompts.mode == "compose" and data.get("write_prompts"):
+        raise ValueError("plan: write_prompts (free text) and prompt_engine compose are two prompt writers; pick one")
     return Plan(
+        prompts=prompts,
         task=task,
         guard=guard,
         system_prompt=system_prompt.strip(),
@@ -465,6 +510,14 @@ def parse_plan(data: Any) -> Plan:
         confirm=int(_num(data.get("confirm", 1), "plan.confirm", integer=True)),
         claude_user=claude_user,
     )
+
+
+def _slot_defaults(raw: Any, label: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+        raise ValueError(f"{label}.slots: must map slot names to option strings")
+    return {k: " ".join(v.split()) for k, v in raw.items()}
 
 
 def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
