@@ -402,13 +402,19 @@ class Runner:
         """Grip by feel from /arms: commanded closed and stopped partway -> holding; closed fully -> empty."""
         getter = getattr(self.station, "grippers", None)
         arms = getter() if getter else {}
+        # The station leaves commanded_gripper null until a run commands it; a gripper shut to <= 0.06 holds nothing
+        # either way (one holding a plug or block stops partway).
         self._empty_sides = {side for side, g in (arms or {}).items()
-                             if g.get("commanded_gripper") is not None and g.get("gripper") is not None
-                             and g["commanded_gripper"] <= 0.15 and g["gripper"] <= 0.06}
+                             if g.get("gripper") is not None and g["gripper"] <= 0.06
+                             and (g.get("commanded_gripper") is None or g["commanded_gripper"] <= 0.15)}
         notes = []
         for side, g in sorted((arms or {}).items()):
             cmd, got = g.get("commanded_gripper"), g.get("gripper")
-            if cmd is None or got is None:
+            if got is None:
+                continue
+            if cmd is None:
+                notes.append(f"{side} gripper closed fully on nothing ({got:.2f}): it is NOT holding anything"
+                             if got <= 0.06 else f"{side} gripper opening {got:.2f}")
                 continue
             if cmd > 0.15:
                 notes.append(f"{side} gripper open ({got:.2f})")
