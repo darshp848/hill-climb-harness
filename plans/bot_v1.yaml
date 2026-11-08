@@ -164,6 +164,7 @@ stages:
     # then "as high as possible" put the near blue cube on that far stack and tipped it over).
     prompt: "put the pink cube on top of the blue cube in front of the robot"
     retry_prompt: "stack the blocks and sticks as high as possible"
+    lock_prompt: "put the other blue cube on top of the pink cube"   # flow straight into the 3rd cube (no arms-up reset)
     write_prompt: false
     success: "Is one cube resting on top of another cube, standing on its own, with no gripper touching either?"
     expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
@@ -185,6 +186,7 @@ stages:
     name: tower_pass
     prompt: "put the other blue cube on top of the pink cube"
     retry_prompt: "stack the blocks and sticks as high as possible"
+    resume_on_no: false    # never re-send a stacking prompt onto a standing tower (8 Nov live: Dream knocked it over)
     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
     expect: "The arm adds pieces to the stack until it is over 4 inches tall, then lifts clear; the tower stays standing."
     confirm_check: "In the NOW images, is there a tower of stacked pieces more than 4 inches (10 cm) tall (a cube is about 2 inches), standing on its own, with no gripper holding or touching it?"

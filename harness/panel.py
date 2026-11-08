@@ -174,9 +174,11 @@ def make_handler(run: Run, station: str, monitor_model: str) -> type[BaseHTTPReq
                 err = run.start(str(body.get("model", "base")), list(body.get("stages") or []),
                                 bool(body.get("match")), monitor_model, station)
             elif self.path == "/api/stop":
+                proc = run.proc   # this run only: a timer must never kill the next run (8 Nov: it did, 8 s after a stop)
                 err = run.send("s")
                 if err is None:
-                    threading.Timer(8.0, lambda: run.running() and run.proc.terminate()).start()
+                    run.out.append("[panel] stop sent (Stop button)")
+                    threading.Timer(8.0, lambda: proc is not None and proc.poll() is None and proc.terminate()).start()
             elif self.path == "/api/prompt":
                 err = run.send(f"!prompt {text}") if text else "empty prompt"
             elif self.path == "/api/skip":
@@ -257,11 +259,12 @@ arms_clear:"Arms clear",stack_base:"Place base cube",stack_2:"Stack a cube",towe
 const nice=s=>NICE[s]||(s||"").replace(/^ball_(\d)/,"Ball $1").replace(/_/g," ");
 async function post(u,b){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});const j=await r.json();if(!j.ok)alert(j.error);return j}
 function controls(){const c=$("controls");
- if(running){c.innerHTML=`<h2>Steer it</h2><button class="big stop" onclick="post('/api/stop')">■ Stop the robot</button>
+ if(running){c.innerHTML=`<h2>Steer it</h2>
  <div class="say"><input id="p" placeholder="Tell Dream exactly what to do now, e.g. put the pink cube on the blue cube"><button onclick="sp()">Send to Dream</button></div>
  <div class="hint">Replaces Dream's current instruction immediately, word for word.</div>
  <div class="say"><input id="s" placeholder="Talk to the harness, e.g. skip the balls / why did it grab the pink one?"><button onclick="ss()">Send</button></div>
- <div class="say"><button onclick="post('/api/skip')">⏭ Skip this stage</button></div>`;
+ <div class="say"><button onclick="post('/api/skip')">⏭ Skip this stage</button></div>
+ <div style="margin-top:18px"><button class="big stop" onclick="if(confirm('Stop the run? The arms hold where they are.'))post('/api/stop')">■ Stop the run</button></div>`;
  $("p").onkeydown=e=>{if(e.key==="Enter")sp()};$("s").onkeydown=e=>{if(e.key==="Enter")ss()};return}
  c.innerHTML=`<h2>Start a run</h2><div class="start">
  <button class="choice ${model==="base"?"sel":""}" onclick="model='base';controls()"><b>Base Dream-1</b><span>our prompts, writer for balls</span></button>
