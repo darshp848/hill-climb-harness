@@ -12,6 +12,7 @@ from typing import Any
 from .frames import FrameSource
 from .log import RunLog
 from .plan import TOWER_STAGES, Plan, Recovery, Stage
+from .prompt_engine import ClaudeFiller, DefaultFiller, PromptEngine
 from .station_client import StationClient, StationError
 from .verifiers import MonitorVerdict, Verdict, Verifier
 
@@ -30,6 +31,7 @@ MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-s
 REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
 CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
 REWRITE_COOLDOWN_S = 15.0  # no monitor-written prompt sooner than this after any prompt change
+PREFETCH_WAIT_S = 4.0      # a prefetch still in flight at the stage boundary: wait this long, not a second call
 REWRITE_MAX = 3            # monitor-written prompts per attempt
 # Dream's eef IK fails now and then ("SVD did not converge"); a plain /start after it often failed again on the
 # station, a /reset (grippers open, arms to the start pose) and the same prompt got past it. At most this many a run.
@@ -149,7 +151,7 @@ class _Refused(Exception):
 class Runner:
     def __init__(self, plan: Plan, station: StationClient, frames: FrameSource, verifiers: dict[str, Verifier],
                  log: RunLog, *, clock: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep, filler: Any = None):
         self.plan, self.station, self.frames, self.verifiers, self.log = plan, station, frames, verifiers, log
         self._clock, self._sleep = clock, sleep
         self._stop_event = threading.Event()
@@ -169,6 +171,12 @@ class Runner:
         self._skip: set[str] = set()   # later stages the operator asked to skip
         self._stage_name = ""
         self._grip_seen = False   # this stage: a gripper was felt holding something (Stage.needs_grip)
+        # plan.prompt_engine: templates + a slot filler write every robot instruction (harness.prompt_engine).
+        # filler=None with `filler: claude` builds a ClaudeFiller on the monitor's transport at first use.
+        self.engine = PromptEngine(plan.prompts, filler) if plan.prompts is not None else None
+        self._filler_given = filler is not None
+        self._next_stage: Stage | None = None
+        self._done_names: list[str] = []
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -202,6 +210,8 @@ class Runner:
                     self.log.event("stage_skipped", stage=stage.name, reason="operator asked to skip it")
                     results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
                     continue
+                later = self.plan.stages[self.plan.stages.index(stage) + 1:]
+                self._next_stage = next((s for s in later if s.name not in self._skip), None)
                 results.append(self._run_stage(stage, first=first))
                 first = False
                 if results[-1].ok:
@@ -565,6 +575,29 @@ class Runner:
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
                 nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts else None
+                if (self.engine is not None and self.engine.applies(stage) and self.plan.rewrite_prompts and monitor
+                        and verdict.status in ("stalled", "failing") and verdict.done is not True
+                        and last_done_t is None and rewrites < self.plan.rewrite_max
+                        and elapsed - last_prompt_t >= self.plan.rewrite_cooldown_s):
+                    # Composed mode: the monitor's free text is never sent. Its diagnosis re-fills the slots;
+                    # an unchanged instruction is not re-sent (each change restarts Dream's motion).
+                    if nxt:
+                        self.log.event("rewrite_suggested", stage=stage.name, attempt=attempt, prompt=nxt,
+                                       note="free text not sent: composed mode re-fills the template instead")
+                    rewrites, last_prompt_t = rewrites + 1, elapsed
+                    text = self._compose(stage, verifier, "refill", hint=verdict.reason or verdict.status)
+                    if text != self._prompt:
+                        self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, n=rewrites, prompt=text,
+                                       previous=self._prompt, reason=verdict.reason, how="refill")
+                        refused = self._try_issue(text, f"refill ({(verdict.reason or '')[:120]})")
+                        if refused:
+                            self._issue(stage.prompt, "back to the stage prompt after a refused refill")
+                        consec_done = consec_fail = consec_stalled = 0
+                        gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
+                        continue
+                    nxt = None
+                elif self.engine is not None and self.engine.applies(stage):
+                    nxt = None   # composed mode never sends free text
                 if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
                         and last_done_t is None and rewrites < self.plan.rewrite_max
                         and elapsed - last_prompt_t >= self.plan.rewrite_cooldown_s and nxt != self._prompt):
@@ -624,6 +657,8 @@ class Runner:
                     consec_fail = 0
                     if verdict.immediate or frames:
                         consec_done += 1
+                        if consec_done == 1:
+                            self._prefetch_next(verifier)   # the next stage's slots fill while this one confirms
                         recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
                         last_done_t, last_done_sig = elapsed, sig
                         if verdict.immediate or consec_done >= confirm or recent:
@@ -670,6 +705,7 @@ class Runner:
     def _mark_done(self, what: str) -> None:
         """Tell every monitor a stage has passed: without it the tower stage's monitor re-judged the cables and
         rewrote the robot's prompt back to unplugging (sim, 8 Nov)."""
+        self._done_names.append(what.split(":")[0])
         for v in self.verifiers.values():
             for m in (v, getattr(v, "second", None)):
                 if hasattr(m, "done_stages") and what not in m.done_stages:
@@ -836,10 +872,46 @@ class Runner:
                        why=why, latency_s=latency)
         return text
 
+    # -- prompt engine (L2) --------------------------------------------------------------------------
+    def _engine_ctx(self) -> dict[str, Any]:
+        return {"task": self.plan.task, "done": "; ".join(self._done_names), "tower": self._tower,
+                "grip": self._grip_note(), "current": self._prompt}
+
+    def _engine_ready(self, verifier: Verifier) -> PromptEngine | None:
+        """The engine, with its Claude filler on the monitor's transport once one is known."""
+        eng = self.engine
+        if eng is None or self._filler_given or eng.lib.filler != "claude" or isinstance(eng.filler, ClaudeFiller):
+            return eng
+        v = verifier if hasattr(verifier, "_transport") else getattr(verifier, "second", None)
+        transport = getattr(v, "_transport", None)
+        if transport is not None:
+            eng.filler = ClaudeFiller(transport, eng.lib.filler_model, self.plan.system_prompt)
+        return eng
+
+    def _compose(self, stage: Stage, verifier: Verifier, why: str, hint: str | None = None) -> str:
+        eng = self._engine_ready(verifier)
+        c = eng.take(stage, wait_s=PREFETCH_WAIT_S) if hint is None else None
+        if c is None:
+            c = eng.compose(stage, self._frames_for_check(stage), self._engine_ctx(), hint)
+        self.log.event("prompt_composed", stage=stage.name, why=why, template=c.template, slots=c.slots,
+                       prompt=c.text, source=c.source, note=c.why, latency_s=c.latency_s, issues=c.issues or None)
+        return c.text
+
+    def _prefetch_next(self, verifier: Verifier) -> None:
+        nxt = self._next_stage
+        eng = self._engine_ready(verifier)
+        if eng is None or nxt is None or isinstance(eng.filler, DefaultFiller):
+            return
+        frames = self._frames_for_check(nxt)   # taken now, on this thread; the call runs on the engine's
+        if eng.prefetch(nxt, lambda: frames, self._engine_ctx()):
+            self.log.event("prompt_prefetch", stage=nxt.name, after=self._stage_name)
+
     def _stage_prompt(self, stage: Stage, verifier: Verifier) -> str:
         """The stage's prompt, or with plan.tower_prompts on a stacking stage: the next target piece by name, after
         the tower the monitor last reported (one synchronous look if it hasn't reported one yet)."""
         plan = self.plan
+        if self.engine is not None and self.engine.applies(stage):
+            return self._compose(stage, verifier, "stage")
         if plan.write_prompts:
             written = self._write_prompt(stage, verifier)
             if written:

@@ -16,11 +16,12 @@ MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
               "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first",
-              "write_prompts", "rewrite_max", "rewrite_cooldown_s"}
+              "write_prompts", "rewrite_max", "rewrite_cooldown_s", "prompt_engine"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check",
+               "template", "slots"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -68,6 +69,10 @@ class Stage:
     # frames before the stage may pass. For stages where a false pass costs the match (an unplug: blocks touched
     # before a cable is out are a DQ).
     confirm_check: str | None = None
+    # plan.prompt_engine: the template this stage's instruction is composed from, and its default slot options
+    # (also the fallback). `prompt` stays the intent the monitor reads and the text a verbatim run sends.
+    template: str | None = None
+    slots: dict[str, str] = field(default_factory=dict)
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -154,6 +159,7 @@ class Plan:
     # work without the "no power" sentence); added when the monitor drops it.
     prompt_prefix: str = ""
     reset_first: bool = False      # POST /reset and wait for idle before the first stage: both grippers start open
+    prompts: Any = None            # harness.prompt_engine.Library from plan.prompt_engine, or None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -330,6 +336,8 @@ def parse_plan(data: Any) -> Plan:
                 requires_stage=prerequisite,
                 needs_grip=_bool(raw.get("needs_grip", False), f"{label}.needs_grip"),
                 confirm_check=None if raw.get("confirm_check") is None else _text(raw["confirm_check"], f"{label}.confirm_check"),
+                template=None if raw.get("template") is None else _text(raw["template"], f"{label}.template"),
+                slots=_slot_defaults(raw.get("slots"), label),
             )
         )
 
@@ -369,7 +377,16 @@ def parse_plan(data: Any) -> Plan:
     prefix = data.get("prompt_prefix", "") or ""
     if not isinstance(prefix, str):
         raise ValueError("plan.prompt_prefix: must be a string")
+    from harness.prompt_engine import parse_library   # here: prompt_engine imports nothing from plan
+    prompts = parse_library(data.get("prompt_engine"), stages)
+    if prompts is not None and prompts.mode == "verbatim":
+        on = [k for k in ("rewrite_prompts", "write_prompts") if data.get(k)] + (["tower_prompts"] if data.get("tower_prompts") else [])
+        if on:
+            raise ValueError(f"plan.prompt_engine: mode verbatim (fine-tune) sends recorded texts only; turn off {on}")
+    if prompts is not None and prompts.mode == "compose" and data.get("write_prompts"):
+        raise ValueError("plan: write_prompts (free text) and prompt_engine compose are two prompt writers; pick one")
     return Plan(
+        prompts=prompts,
         task=task,
         guard=guard,
         system_prompt=system_prompt.strip(),
@@ -392,6 +409,14 @@ def parse_plan(data: Any) -> Plan:
         confirm=int(_num(data.get("confirm", 1), "plan.confirm", integer=True)),
         claude_user=claude_user,
     )
+
+
+def _slot_defaults(raw: Any, label: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+        raise ValueError(f"{label}.slots: must map slot names to option strings")
+    return {k: " ".join(v.split()) for k, v in raw.items()}
 
 
 def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
