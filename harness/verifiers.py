@@ -277,6 +277,9 @@ class MonitorVerifier:
         self._last_prompt: str | None = None
         self._thread: threading.Thread | None = None
         self._guard_alert = False   # a guard "yes" whose verdict was dropped (stage or prompt changed in flight)
+        # Optional local detector (harness.detect.TableDetector): draws labelled boxes on the frames sent to Claude
+        self.annotator: Callable[[dict[str, bytes]], dict[str, bytes]] | None = None
+        self.legend = ""
         self.bad_frames = 0
 
     def __repr__(self) -> str:
@@ -321,6 +324,8 @@ class MonitorVerifier:
         if stage.camera_notes:
             lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
             lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]
+        if self.legend:
+            lines.append(self.legend)
         if getattr(self, "grip_note", ""):
             lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
@@ -353,6 +358,11 @@ class MonitorVerifier:
         good = {r: j for r, j in frames.items() if valid_jpeg(j)}
         self.bad_frames += len(frames) - len(good)
         frames = good
+        if self.annotator is not None:
+            try:
+                frames = self.annotator(frames)
+            except Exception:  # noqa: BLE001 - a detector bug must not cost the monitor its frames
+                pass
         overhead, wrists = self._split(frames)
         if overhead is None and not wrists:
             return None

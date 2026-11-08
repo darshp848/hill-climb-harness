@@ -345,6 +345,7 @@ class SimFrames:
         self.empty: list[tuple[float, float]] = []
         self.corrupt: list[tuple[float, float]] = []
         self._last: dict[str, bytes] = {}
+        self.lag_s = 0.0
 
     @staticmethod
     def _in(t: float, spans: list[tuple[float, float]]) -> bool:
@@ -356,7 +357,7 @@ class SimFrames:
             return {}
         if self._in(t, self.freeze) and self._last:
             return dict(self._last)
-        stamp = f"t={t:.2f}".encode()
+        stamp = f"t={max(0.0, t - self.lag_s):.2f}".encode()
         body = (CORRUPT if self._in(t, self.corrupt) else GOOD) + stamp + b"\xff\xd9"
         self._last = {"scene": body, "wrist_l": GOOD + stamp + b"\xff\xd9", "wrist_r": GOOD + stamp + b"\xff\xd9"}
         return dict(self._last)
@@ -490,6 +491,8 @@ class Scenario:
     corrupt: list[tuple[float, float]] = field(default_factory=list)
     false_done: dict[str, float] = field(default_factory=dict)
     latency_s: float = 4.0
+    fast_guard: bool = False        # a local black-ball detector on the wrist frames (harness.detect), every poll
+    frame_lag_s: float = 0.0        # frames show the table this long ago (trip cadence ~3.4 s on the station)
     plan: Path = PLAN
     note: str = ""
 
@@ -502,6 +505,7 @@ def run_match(sc: Scenario, seed: int = 1, out_dir: Path | None = None) -> dict[
     clock.tick_hooks.append(table.tick)
     frames = SimFrames(clock)
     frames.freeze, frames.empty, frames.corrupt = sc.freeze, sc.empty, sc.corrupt
+    frames.lag_s = sc.frame_lag_s
     tr = Scripted(clock, table, plan, latency_s=sc.latency_s, seed=seed)
     tr.outages, tr.false_done = sc.outages, sc.false_done
     mon = MonitorVerifier(plan, transport=tr)
@@ -509,6 +513,12 @@ def run_match(sc: Scenario, seed: int = 1, out_dir: Path | None = None) -> dict[
     tmp = out_dir or Path(tempfile.mkdtemp(prefix="stress_"))
     log = RunLog(tmp)
     runner = Runner(plan, station, frames, {"monitor": mon}, log, clock=clock, sleep=clock.sleep)
+    if sc.fast_guard:
+        def local(fr: dict[str, bytes]) -> tuple[bool | None, str]:
+            if "wrist_r" not in fr:
+                return None, "no wrist view"
+            return table.snapshot_at(frame_time(fr["wrist_r"]) or 0.0).held == "black", "sim detector"
+        runner.fast_guard = local
     result = runner.run()
     ref = referee(table)
     return {"scenario": sc.name, "seed": seed, "harness_ok": result.ok, "reason": result.reason,
@@ -536,6 +546,12 @@ SCENARIOS: dict[str, Scenario] = {s.name: s for s in [
     Scenario("black_ball", Behaviour(black_p=0.3, block_in=2.0), note="the guard must stop before a black ball lands"),
     Scenario("black_ball_slow_monitor", Behaviour(black_p=0.3, block_in=2.0), latency_s=8.0,
              note="monitor p99-ish latency"),
+    Scenario("black_ball_lagged", Behaviour(black_p=0.3, block_in=2.0), frame_lag_s=2.0,
+             note="as black_ball, frames 2 s old (trip cadence)"),
+    Scenario("black_ball_local_guard", Behaviour(black_p=0.3, block_in=2.0), frame_lag_s=2.0, fast_guard=True,
+             note="local detector on the wrist frames every poll, frames 2 s old"),
+    Scenario("black_ball_local_guard_api_down", Behaviour(black_p=0.3, block_in=2.0), frame_lag_s=2.0,
+             fast_guard=True, outages=[(150, 1e9)], note="local guard while the Claude API is down"),
     Scenario("frozen_cam", freeze=[(30, 90)], note="debug view serves the same trip for 60 s"),
     Scenario("empty_frames", empty=[(10, 60)], note="no frames for 50 s"),
     Scenario("corrupt_first_frame", corrupt=[(0, 12)], note="the stage-start image is not a JPEG"),

@@ -1,0 +1,21 @@
+# Colour classes for harness/detect.py. HSV on PIL's 0-255 scale (hue 0-255, not 0-360).
+# PLACEHOLDERS until tuned on a real frame of the relay table with the balls and blocks on it:
+#   python -m harness.detect plans/table_colors.yaml frame.jpg --out boxed.jpg
+# The grippers and the arm links are black too: the black ball is told apart by its round shape and size only,
+# so check it on a wrist frame with the gripper open and closed before relying on the guard.
+annotate: true
+guard:
+  class: black_ball
+  wrist_roles: [wrist]
+  grip_roi: [0.25, 0.35, 0.75, 1.0]   # where a held object sits in the wrist image (x0 y0 x1 y1)
+  grip_min_frac: 0.01
+classes:
+  black_ball: {hsv: [[0, 0, 0], [255, 255, 55]], shape: round, min_frac: 0.002, max_frac: 0.12, role: avoid,
+               label: "black 8-ball"}
+  golf_ball:  {hsv: [[0, 0, 238], [255, 30, 255]], shape: round, min_frac: 0.0008, max_frac: 0.12, role: target,
+               label: "golf ball"}
+  block_red:    {hsv: [[235, 120, 70], [12, 255, 255]], shape: box, role: info, label: "red block"}
+  block_blue:   {hsv: [[140, 120, 50], [175, 255, 255]], shape: box, role: info, label: "blue block"}
+  block_pink:   {hsv: [[215, 60, 120], [245, 200, 255]], shape: box, role: info, label: "pink block"}
+  block_yellow: {hsv: [[30, 120, 120], [50, 255, 255]], shape: box, role: info, label: "yellow block"}
+  block_green:  {hsv: [[60, 100, 60], [110, 255, 255]], shape: cylinder, role: info, label: "green cylinder"}

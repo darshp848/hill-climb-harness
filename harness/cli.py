@@ -35,6 +35,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--view", default="http://127.0.0.1:8093", help="debug view URL")
     p.add_argument("--runs-dir", default="runs", help="where run logs go")
     p.add_argument("--scenario", default="happy", help="fake station scenario (--mock only)")
+    p.add_argument("--detect", default=None, metavar="COLORS.yaml",
+                   help="local ball/block detector (e.g. plans/table_colors.yaml): fast black-ball guard + boxes on "
+                        "the monitor's frames")
     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
                    help="override every stage's verifier")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
@@ -106,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         runner = Runner(plan, station, frames, verifiers, log)
+        if args.detect:
+            from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
+            det = TableDetector.from_file(args.detect)
+            runner.fast_guard = det.guard
+            for v in verifiers.values():
+                for m in (v, getattr(v, "second", None)):
+                    if hasattr(m, "annotator"):
+                        m.annotator, m.legend = det.annotate_frames, det.legend()
+            log.event("detector", config=str(args.detect))
         holder["r"] = runner
         # Turn SIGTERM into the same clean stop as Ctrl+C.
         try:

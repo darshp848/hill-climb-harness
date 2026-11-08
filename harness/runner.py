@@ -128,6 +128,8 @@ class Runner:
         self._change: dict[str, Any] | None = None   # the latest prompt change, for the progress_moved event
         self._prompt: str | None = None   # what the robot should be running, for a restart after a fault
         self._restarts = 0
+        # frames -> (yes/no/None, why): a fast local answer to the plan guard (harness.detect.TableDetector.guard)
+        self.fast_guard: Callable[[dict[str, bytes]], tuple[bool | None, str]] | None = None
         self._refusals: dict[str, int] = {}
         self._guard_answer_t: float | None = None   # last time the guard got a yes/no answer
 
@@ -386,6 +388,19 @@ class Runner:
             elapsed = self._clock() - t0
             if st.get("state") == "idle":
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
+            if guard is not None and self.fast_guard is not None:
+                # Local detector on every poll, from the stage's first second: no API latency, works offline.
+                local, why = self.fast_guard(self.frames.latest())
+                if isinstance(local, bool):
+                    self._guard_answer_t = self._clock()
+                if local is True:
+                    consec_guard += 1
+                    self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
+                                   question=guard.question, reason=why, source="local")
+                    if consec_guard >= guard.confirm:
+                        self.log.event("guard_tripped", stage=stage.name, attempt=attempt, question=guard.question,
+                                       message=guard.message, source="local")
+                        raise _Guard(f"guard tripped in stage {stage.name!r} (local detector): {why}")
             if elapsed >= gate:
                 frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
