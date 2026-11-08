@@ -13,6 +13,7 @@ WORKDIR /app
 COPY harness/ harness/
 COPY sim_scenes/ sim_scenes/
 COPY plans/ plans/
+COPY lessons/ lessons/
 COPY experiments/sim_match.py experiments/sim_match.py
 COPY sim_station.py ./
 COPY cloud/ cloud/

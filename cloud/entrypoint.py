@@ -164,7 +164,7 @@ def main():
         # Scrub known secrets from structured logs too, before they leave this task.
         for path in folder.rglob("*"):
             if path.suffix in (".json", ".jsonl", ".txt", ".log"):
-                path.write_text(redact(path.read_text(encoding="utf-8")), encoding="utf-8")
+                path.write_text(redact(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
         destination = f"{prefix.rstrip('/')}/{attempt}/{key}"
         if not put(folder, f"{prefix.rstrip('/')}/{attempt}/", recursive=True):
             print("USER ACTION NEEDED: output upload failed; check bucket IAM and network. Local logs remain in /out.",

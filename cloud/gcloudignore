@@ -8,6 +8,8 @@
 !sim_scenes/**
 !plans/
 !plans/**
+!lessons/
+!lessons/**
 !experiments/
 !experiments/sim_match.py
 !sim_station.py

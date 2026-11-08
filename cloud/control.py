@@ -197,9 +197,10 @@ def job_config(args, entries):
                                                 "secretVariables": secret},
                                 "computeResource": {"cpuMilli": 2000, "memoryMib": 1280},
                                 "maxRetryCount": 2,
-                                # Retry Spot preemptions, but never re-run a paid match because uploads fail.
+                                # Retry Spot preemptions only. A failed match (exit 1) or failed upload (75)
+                                # is never re-run: each retry would be another paid Dream match.
                                 "lifecyclePolicies": [{"action": "FAIL_TASK",
-                                                       "actionCondition": {"exitCodes": [75]}}],
+                                                       "actionCondition": {"exitCodes": [1, 75]}}],
                                 "maxRunDuration": str(900 * args.matches_per_task) + "s"}}],
             "allocationPolicy": policy,
             "logsPolicy": {"destination": "CLOUD_LOGGING"}, "labels": {"manifest": identity}}
@@ -213,7 +214,7 @@ def build(args, gc):
             return
     digest = hashlib.sha256()
     source = [ROOT / "sim_station.py", ROOT / "experiments/sim_match.py"]
-    for directory in ("cloud", "harness", "sim_scenes", "plans"):
+    for directory in ("cloud", "harness", "sim_scenes", "plans", "lessons"):
         source.extend(path for path in (ROOT / directory).rglob("*") if path.is_file()
                       and not {"evidence", "generated", "__pycache__"}.intersection(path.relative_to(ROOT).parts)
                       and path.name not in ("credentials", ".env"))

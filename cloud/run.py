@@ -113,6 +113,21 @@ def run_match(args):
         frames = FrameSource(sim.view_url, station_url=sim.api_url)
         runner = Runner(plan, station, frames, {"monitor": mon}, log)
         runner.fast_guard = detector.guard
+        # Infrastructure health, so a judge/Dream outage can't pass as a low-scoring "complete" match.
+        health = {"verdicts": 0, "monitor_errors": 0, "guard_blind": 0, "attempts_aborted": 0, "last_error": None}
+
+        def count_health(event, fields):
+            if event == "verdict":
+                health["verdicts"] += 1
+                if str(fields.get("reason", "")).startswith("monitor error"):
+                    health["monitor_errors"] += 1
+                    health["last_error"] = str(fields["reason"])[:300]
+            elif event == "guard_blind":
+                health["guard_blind"] += 1
+            elif event == "attempt_end" and str(fields.get("reason", "")).startswith(("RuntimeError", "OSError")):
+                health["attempts_aborted"] += 1
+                health["last_error"] = str(fields["reason"])[:300]
+        log.listeners.append(count_health)
         if args.judge == "oracle":
             def stage_baseline(event, fields):
                 if event == "stage_start":
@@ -144,12 +159,25 @@ def run_match(args):
             time.sleep(min(0.25, 300 - (time.monotonic() - match_start)))
         with sim._lock:
             ref = dict(sim._poses["referee"])
+        wall = time.monotonic() - match_start
+        complete = not runner._stop_event.is_set() and wall >= 299
+        sim_t = ref.get("t")
+        error_rate = health["monitor_errors"] / max(1, health["verdicts"])
+        problems = [why for why, bad in [
+            ("monitor errors over 20% of verdicts", error_rate > 0.2),
+            ("guard went blind", health["guard_blind"] > 0),
+            ("station/Dream error aborted an attempt", health["attempts_aborted"] > 0),
+            ("harness stopped on an error", "error" in str(result.reason).lower()),
+            ("no judge verdicts", health["verdicts"] == 0)] if bad]
         summary = {"schema_version": 1, "scenario": "hill_climb", "label": args.label,
                    "seed": args.seed, "policy": args.policy, "judge": args.judge,
                    "harness": dataclasses.asdict(result), "referee": ref,
                    "stages": [dataclasses.asdict(s) for s in result.stages],
-                   "match_wall_s": time.monotonic() - match_start,
-                   "complete": not runner._stop_event.is_set() and time.monotonic() - match_start >= 299,
+                   "match_wall_s": wall,
+                   "complete": complete,
+                   # valid = complete AND the infrastructure worked; compare judges on valid rows only.
+                   "valid": complete and not problems, "invalid_because": problems, "health": health,
+                   "sim_t": sim_t, "sim_rate": round(sim_t / wall, 3) if sim_t and wall else None,
                    "monitor_calls": getattr(mon, "calls", mon._seq),
                    "milestones": {"stage1_at": ref["stage1_at"], "stage2_at": ref["stage2_at"],
                                   "first_touch": ref["first_touch"]},

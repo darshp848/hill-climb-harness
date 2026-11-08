@@ -52,7 +52,7 @@ def test_batch_limits_and_runtime_secret_references():
 def test_upload_failure_is_never_retried():
     job = control.job_config(job_args(), control.tasks(ROOT / "cloud/matrix.yaml", True))
     spec = job["taskGroups"][0]["taskSpec"]
-    assert spec["lifecyclePolicies"] == [{"action": "FAIL_TASK", "actionCondition": {"exitCodes": [75]}}]
+    assert spec["lifecyclePolicies"] == [{"action": "FAIL_TASK", "actionCondition": {"exitCodes": [1, 75]}}]
 
 
 def test_preflight_failure_runs_no_match_and_pins_gcloud_python(monkeypatch, tmp_path):

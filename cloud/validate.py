@@ -31,6 +31,12 @@ def main():
             boxes = TableDetector.from_file("plans/sim_table_colors.yaml").boxes({"scene": response.read()})["scene"]
         assert sum(b.role == "target" for b in boxes) >= 4
         assert sum(b.role == "avoid" for b in boxes) >= 2
+    # The match path must import inside the image, and the operator lessons must be there (run.py reads them).
+    import importlib
+    from pathlib import Path
+    for module in ("cloud.run", "cloud.judge", "cloud.entrypoint", "cloud.collect", "experiments.sim_match"):
+        importlib.import_module(module)
+    assert Path("lessons/operator.md").is_file(), "lessons/operator.md missing from the image"
     print("Offline original-example and relay build/step/render/API/detector gates passed.")
 
 
