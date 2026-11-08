@@ -206,8 +206,8 @@ def test_bot_v1_plan():
     assert unplugs[0].grip_assist.loop_until_s == 150
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.06, 0.04], 3.0, 2, (0.062, 0.20))
-    assert "to the right" in ga.put_down_prompt and "open the gripper" in ga.put_down_prompt
-    assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss it" in unplugs[0].prompt
+    assert "5 inches to the right" in ga.put_down_prompt and "open the gripper" in ga.put_down_prompt
+    assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert all(not s.write_prompt and "arm" not in s.prompt for s in stacks)
     assert [x.prompt for x in stacks] == ["put the pink cube on top of the blue cube in front of the robot",
@@ -232,7 +232,7 @@ class Confirming(Script):
 
     def confirm(self, stage, frames):
         from harness.verifiers import Verdict
-        return Verdict(self.answers.pop(0), 1.0, "scripted confirm")
+        return Verdict(self.answers.pop(0) if len(self.answers) > 1 else self.answers[0], 1.0, "scripted confirm")
 
 
 def test_stop_on_pass_locks_the_success_and_resumes_on_a_confirm_no(fake, write_plan, tmp_path):
