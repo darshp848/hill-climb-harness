@@ -70,7 +70,7 @@ prompt_engine:
       slots: {piece: piece, top: top}
       note: "name both pieces by colour and WHICH one when there are two of a colour; no arm named (Dream picks the near arm). 8 Nov: 'a blue cube' with two blue cubes stacked on the far one and the next piece tipped it"
     tower:
-      text: "stack the three foam cubes on top of each other to make a tower"
+      text: "stack the pink cube on top of a blue cube and stack the other blue cube on the side on top of the pink cube"
       arm: none
       note: "one stage, one goal (Kaushik, 8 Nov)"
     stack_all:
@@ -166,7 +166,7 @@ stages:
   # Kaushik, 8 Nov: one well-defined stage instead of "stack a cube" + "tower > 4 in": every stage boundary (lock, arms
   # up, camera check, new prompt) cost time and the re-prompt knocked finished towers over. Goal, not motion.
   - name: tower
-    prompt: "stack the three foam cubes on top of each other to make a tower"
+    prompt: "stack the pink cube on top of a blue cube and stack the other blue cube on the side on top of the pink cube"
     write_prompt: false
     template: tower
     success: "Are three cubes stacked on top of each other in one tower, standing on its own, with no gripper holding or touching it?"
