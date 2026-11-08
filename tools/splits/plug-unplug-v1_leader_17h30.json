@@ -9,21 +9,21 @@
     {
       "episode": 6,
       "start_s": 25.367,
-      "end_s": 42.733,
+      "end_s": 44.333,
       "task": "unplug the USB cable at the end of the hub nearest the right arm",
       "kind": "unplug"
     },
     {
       "episode": 9,
       "start_s": 1.333,
-      "end_s": 14.167,
+      "end_s": 14.4,
       "task": "unplug the USB cable at the end of the hub nearest the right arm",
       "kind": "unplug"
     },
     {
       "episode": 9,
       "start_s": 31.567,
-      "end_s": 38.067,
+      "end_s": 39.533,
       "task": "unplug the USB cable at the end of the hub nearest the right arm",
       "kind": "unplug"
     }

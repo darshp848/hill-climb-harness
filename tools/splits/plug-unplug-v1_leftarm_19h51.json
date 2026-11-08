@@ -1,0 +1,135 @@
+{
+  "source": "~/hackathon_data/plug-unplug-v1",
+  "out": "~/hackathon_data/leftarm-split-v5",
+  "segments": [
+    {
+      "episode": 36,
+      "start_s": 0.0,
+      "end_s": 13.333,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 37,
+      "start_s": 0.0,
+      "end_s": 15.667,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 37,
+      "start_s": 38.2,
+      "end_s": 48.033,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 37,
+      "start_s": 72.433,
+      "end_s": 86.6,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 37,
+      "start_s": 86.6,
+      "end_s": 94.4,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 37,
+      "start_s": 94.4,
+      "end_s": 104.633,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 38,
+      "start_s": 12.3,
+      "end_s": 25.433,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 38,
+      "start_s": 25.433,
+      "end_s": 35.067,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 38,
+      "start_s": 35.067,
+      "end_s": 44.667,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 38,
+      "start_s": 97.0,
+      "end_s": 110.733,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 38,
+      "start_s": 110.733,
+      "end_s": 117.467,
+      "task": "put a golf ball in the bin",
+      "kind": "ball into the bin (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 41,
+      "start_s": 6.433,
+      "end_s": 30.5,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 41,
+      "start_s": 48.133,
+      "end_s": 72.867,
+      "task": "put a block on top of the stack",
+      "kind": "block on the stack (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 41,
+      "start_s": 72.867,
+      "end_s": 118.767,
+      "task": "put a block on top of the stack",
+      "kind": "block on the stack (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 41,
+      "start_s": 149.9,
+      "end_s": 180.833,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "left"
+    },
+    {
+      "episode": 41,
+      "start_s": 198.8,
+      "end_s": 217.167,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "left"
+    }
+  ],
+  "note": "leader-right takes 36-38, 41 (19:51-21:07, left arm works): balls into the bin, cylinders stood in block holes, blocks stacked; each release checked on the wrist and overhead frames. Freeze right_wrist. Takes 39-40 (right arm, cables) not used: the cables end draped over the strip, no insertion or unplug can be confirmed."
+}
