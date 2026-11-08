@@ -1,0 +1,374 @@
+[
+  {
+    "branch": "origin/cloud-sims",
+    "file": "FINAL_HARNESS.md",
+    "sha256": "e03a95caa1ea59410c733d6b3701b9d5d7beb438e349edcca047d3a9cfdbadf0",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "GOAL.md",
+    "sha256": "097f1bc13b444295779bc138a5fd9fd81c5117f5240bd6739f0d20980dc97c28",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "289afd12e792a6c3804df1bda85ffca3645fe76119b27f4b78686c52f6cafe63",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "HILL_CLIMB_LOG.md",
+    "sha256": "f61ac8fd518bf213e58d30c68cb2468cf275c31fcfb2cb221656cba55e75aeab",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "README.md",
+    "sha256": "803fd62063efb9fb4835108bbdf3908259413a895961d04fd95792aec6fffe4d",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "STATE_SPACE.md",
+    "sha256": "9e9aea2e996568071563f03721650ee49a40b3492989c8527d0d1175594ea111",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "e7bda26c0515ea60a6d8b91659e9d78fe4c8520e24e0072e041167828e7c5e5c",
+    "same_as": null
+  },
+  {
+    "branch": "origin/cloud-sims",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": null
+  },
+  {
+    "branch": "origin/codex/dual-arm-experiment",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "31d330e36272c4f768ad9c3566005a0264ad1820ba83e17ea97472f839af93fb",
+    "same_as": null
+  },
+  {
+    "branch": "origin/codex/dual-arm-experiment",
+    "file": "MATCH_DESIGN.md",
+    "sha256": "b41a5827f6e165e2674becc06274904545caf16190199886d7e43b453540b2b5",
+    "same_as": null
+  },
+  {
+    "branch": "origin/codex/dual-arm-experiment",
+    "file": "README.md",
+    "sha256": "73482f0b5eaa7f1b796b8568799691258bbed05e9e46dbf119d0f01691e96f55",
+    "same_as": null
+  },
+  {
+    "branch": "origin/codex/hill-climb-review-fixes",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "31d330e36272c4f768ad9c3566005a0264ad1820ba83e17ea97472f839af93fb",
+    "same_as": "origin/codex/dual-arm-experiment:HARNESS_GUIDE.md"
+  },
+  {
+    "branch": "origin/codex/hill-climb-review-fixes",
+    "file": "MATCH_DESIGN.md",
+    "sha256": "b41a5827f6e165e2674becc06274904545caf16190199886d7e43b453540b2b5",
+    "same_as": "origin/codex/dual-arm-experiment:MATCH_DESIGN.md"
+  },
+  {
+    "branch": "origin/codex/hill-climb-review-fixes",
+    "file": "README.md",
+    "sha256": "73482f0b5eaa7f1b796b8568799691258bbed05e9e46dbf119d0f01691e96f55",
+    "same_as": "origin/codex/dual-arm-experiment:README.md"
+  },
+  {
+    "branch": "origin/codex/hill-climb-sim-table",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "31d330e36272c4f768ad9c3566005a0264ad1820ba83e17ea97472f839af93fb",
+    "same_as": "origin/codex/dual-arm-experiment:HARNESS_GUIDE.md"
+  },
+  {
+    "branch": "origin/codex/hill-climb-sim-table",
+    "file": "MATCH_DESIGN.md",
+    "sha256": "b41a5827f6e165e2674becc06274904545caf16190199886d7e43b453540b2b5",
+    "same_as": "origin/codex/dual-arm-experiment:MATCH_DESIGN.md"
+  },
+  {
+    "branch": "origin/codex/hill-climb-sim-table",
+    "file": "README.md",
+    "sha256": "73482f0b5eaa7f1b796b8568799691258bbed05e9e46dbf119d0f01691e96f55",
+    "same_as": "origin/codex/dual-arm-experiment:README.md"
+  },
+  {
+    "branch": "origin/codex/watcher-dimos",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "11b456431b51e371d81dea5f455b890f08020d6faa67d6a2abd99889f7b777ba",
+    "same_as": null
+  },
+  {
+    "branch": "origin/codex/watcher-dimos",
+    "file": "README.md",
+    "sha256": "73482f0b5eaa7f1b796b8568799691258bbed05e9e46dbf119d0f01691e96f55",
+    "same_as": "origin/codex/dual-arm-experiment:README.md"
+  },
+  {
+    "branch": "origin/docs/how-it-works",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "c50a8c066040cbca84e168adf434fe8f5079359c271e2852b7bb97221eff2fd4",
+    "same_as": null
+  },
+  {
+    "branch": "origin/docs/how-it-works",
+    "file": "README.md",
+    "sha256": "857d17e86e9903fb82f5206c081fcfcdca6310a575ccc48e4e1d0fc1e938842b",
+    "same_as": null
+  },
+  {
+    "branch": "origin/docs/how-it-works",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "c2313fbaf8228ca02b2564e111d7032e389672f6df17d6c268b65e4cb851e828",
+    "same_as": null
+  },
+  {
+    "branch": "origin/docs/how-it-works",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/final-harness",
+    "file": "FINAL_HARNESS.md",
+    "sha256": "e03a95caa1ea59410c733d6b3701b9d5d7beb438e349edcca047d3a9cfdbadf0",
+    "same_as": "origin/cloud-sims:FINAL_HARNESS.md"
+  },
+  {
+    "branch": "origin/final-harness",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "289afd12e792a6c3804df1bda85ffca3645fe76119b27f4b78686c52f6cafe63",
+    "same_as": "origin/cloud-sims:HARNESS_GUIDE.md"
+  },
+  {
+    "branch": "origin/final-harness",
+    "file": "README.md",
+    "sha256": "803fd62063efb9fb4835108bbdf3908259413a895961d04fd95792aec6fffe4d",
+    "same_as": "origin/cloud-sims:README.md"
+  },
+  {
+    "branch": "origin/final-harness",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "e7bda26c0515ea60a6d8b91659e9d78fe4c8520e24e0072e041167828e7c5e5c",
+    "same_as": "origin/cloud-sims:TELEOP_PLAN.md"
+  },
+  {
+    "branch": "origin/final-harness",
+    "file": "docs/DECISIONS.md",
+    "sha256": "65df8e2cc29b6c488edcf50d74fba404410c466e56e06a743a13c0346ea4409c",
+    "same_as": null
+  },
+  {
+    "branch": "origin/final-harness",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/hedged-calls",
+    "file": "FINAL_HARNESS.md",
+    "sha256": "e03a95caa1ea59410c733d6b3701b9d5d7beb438e349edcca047d3a9cfdbadf0",
+    "same_as": "origin/cloud-sims:FINAL_HARNESS.md"
+  },
+  {
+    "branch": "origin/hedged-calls",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "289afd12e792a6c3804df1bda85ffca3645fe76119b27f4b78686c52f6cafe63",
+    "same_as": "origin/cloud-sims:HARNESS_GUIDE.md"
+  },
+  {
+    "branch": "origin/hedged-calls",
+    "file": "README.md",
+    "sha256": "803fd62063efb9fb4835108bbdf3908259413a895961d04fd95792aec6fffe4d",
+    "same_as": "origin/cloud-sims:README.md"
+  },
+  {
+    "branch": "origin/hedged-calls",
+    "file": "STATE_SPACE.md",
+    "sha256": "9e9aea2e996568071563f03721650ee49a40b3492989c8527d0d1175594ea111",
+    "same_as": "origin/cloud-sims:STATE_SPACE.md"
+  },
+  {
+    "branch": "origin/hedged-calls",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "e7bda26c0515ea60a6d8b91659e9d78fe4c8520e24e0072e041167828e7c5e5c",
+    "same_as": "origin/cloud-sims:TELEOP_PLAN.md"
+  },
+  {
+    "branch": "origin/hedged-calls",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/hybrid-harness",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "50a6bc1828a82b48a00eea8df55a9b8f4c6576cb3506c6bc186c01be27f9c765",
+    "same_as": null
+  },
+  {
+    "branch": "origin/hybrid-harness",
+    "file": "README.md",
+    "sha256": "091684bb884472027ae4ed3fae20c92d311fcf4ecb2ba074394cbb9d329e6ac7",
+    "same_as": null
+  },
+  {
+    "branch": "origin/hybrid-harness",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "7fadc6272c5acbe5ff11d7a941c9899c83721dea0d03c6fecb73a96171d70db8",
+    "same_as": null
+  },
+  {
+    "branch": "origin/hybrid-harness",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "FINAL_HARNESS.md",
+    "sha256": "e03a95caa1ea59410c733d6b3701b9d5d7beb438e349edcca047d3a9cfdbadf0",
+    "same_as": "origin/cloud-sims:FINAL_HARNESS.md"
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "865a63bd1183da8444ef6edc53de6218f22ef135b4a16c53aff344a49a7eefbb",
+    "same_as": null
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "README.md",
+    "sha256": "803fd62063efb9fb4835108bbdf3908259413a895961d04fd95792aec6fffe4d",
+    "same_as": "origin/cloud-sims:README.md"
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "STATE_SPACE.md",
+    "sha256": "9e9aea2e996568071563f03721650ee49a40b3492989c8527d0d1175594ea111",
+    "same_as": "origin/cloud-sims:STATE_SPACE.md"
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "e7bda26c0515ea60a6d8b91659e9d78fe4c8520e24e0072e041167828e7c5e5c",
+    "same_as": "origin/cloud-sims:TELEOP_PLAN.md"
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "docs/LOCAL_DECISIONS_PERF.md",
+    "sha256": "4a61136815ff2f75a3e9d2bd0a91ae9702f162cb5765c147499ae7653bee90c2",
+    "same_as": null
+  },
+  {
+    "branch": "origin/mac-arm64",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/main",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "c50a8c066040cbca84e168adf434fe8f5079359c271e2852b7bb97221eff2fd4",
+    "same_as": "origin/docs/how-it-works:HARNESS_GUIDE.md"
+  },
+  {
+    "branch": "origin/main",
+    "file": "README.md",
+    "sha256": "857d17e86e9903fb82f5206c081fcfcdca6310a575ccc48e4e1d0fc1e938842b",
+    "same_as": "origin/docs/how-it-works:README.md"
+  },
+  {
+    "branch": "origin/main",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "c2313fbaf8228ca02b2564e111d7032e389672f6df17d6c268b65e4cb851e828",
+    "same_as": "origin/docs/how-it-works:TELEOP_PLAN.md"
+  },
+  {
+    "branch": "origin/main",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/start-pose-live-guard",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "6d34fe21ec99b3db949558bde53ea586eb133ad005fac2383913eb401a9c892f",
+    "same_as": null
+  },
+  {
+    "branch": "origin/start-pose-live-guard",
+    "file": "README.md",
+    "sha256": "091684bb884472027ae4ed3fae20c92d311fcf4ecb2ba074394cbb9d329e6ac7",
+    "same_as": "origin/hybrid-harness:README.md"
+  },
+  {
+    "branch": "origin/start-pose-live-guard",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "7fadc6272c5acbe5ff11d7a941c9899c83721dea0d03c6fecb73a96171d70db8",
+    "same_as": "origin/hybrid-harness:TELEOP_PLAN.md"
+  },
+  {
+    "branch": "origin/start-pose-live-guard",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/stress-test-fixes",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "33aadf36fc3d671bea6a6feae621f24681732740cd67396db114cbff0197efb5",
+    "same_as": null
+  },
+  {
+    "branch": "origin/stress-test-fixes",
+    "file": "README.md",
+    "sha256": "091684bb884472027ae4ed3fae20c92d311fcf4ecb2ba074394cbb9d329e6ac7",
+    "same_as": "origin/hybrid-harness:README.md"
+  },
+  {
+    "branch": "origin/stress-test-fixes",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "f42f9b3744eebff41acf328ad77af1969b4a9b135b997e0d1e4a62a8a92198cb",
+    "same_as": null
+  },
+  {
+    "branch": "origin/stress-test-fixes",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  },
+  {
+    "branch": "origin/tools/episode-review-page",
+    "file": "HARNESS_GUIDE.md",
+    "sha256": "c50a8c066040cbca84e168adf434fe8f5079359c271e2852b7bb97221eff2fd4",
+    "same_as": "origin/docs/how-it-works:HARNESS_GUIDE.md"
+  },
+  {
+    "branch": "origin/tools/episode-review-page",
+    "file": "README.md",
+    "sha256": "091684bb884472027ae4ed3fae20c92d311fcf4ecb2ba074394cbb9d329e6ac7",
+    "same_as": "origin/hybrid-harness:README.md"
+  },
+  {
+    "branch": "origin/tools/episode-review-page",
+    "file": "TELEOP_PLAN.md",
+    "sha256": "7fadc6272c5acbe5ff11d7a941c9899c83721dea0d03c6fecb73a96171d70db8",
+    "same_as": "origin/hybrid-harness:TELEOP_PLAN.md"
+  },
+  {
+    "branch": "origin/tools/episode-review-page",
+    "file": "experiments/STRESS_FINDINGS.md",
+    "sha256": "253ad1622276d3921f981c40d74814c9de3692d30942c79e8be6cebd8df136b0",
+    "same_as": "origin/cloud-sims:experiments/STRESS_FINDINGS.md"
+  }
+]

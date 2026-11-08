@@ -1,0 +1,360 @@
+[
+  {
+    "id": "A01",
+    "severity": "Critical",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 256,
+    "title": "A logging error can leave the robot running, including when stop is requested",
+    "failure_scenario": "Saved frames fill the laptop disk during a live stage. The harness exits with an OSError while the Dream station keeps executing its last prompt. A later timeout cannot stop it because the supervisor has already crashed.",
+    "fix": "Guarantee a best-effort station.stop in an outer finally after motion has been requested. Send stop before logging, isolate logging errors, and report an unconfirmed stop without relying on the failed log writer.",
+    "confidence": "High"
+  },
+  {
+    "id": "A02",
+    "severity": "Critical",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 645,
+    "title": "tower_pass can pass on one image with no stability confirmation",
+    "failure_scenario": "The earlier stack_3 check has established a block count, but not a calibrated height pass bar. One false height-positive at entry skips tower_pass. Higher stages finish or fail, and the robot begins handling balls without a valid tower pass bar. A scene change or a recent release also receives no independent dwell check on this path. That can lose the match to DQ.",
+    "fix": "Route entry checks through the same fresh-frame confirmation and release/stability timer used for normal pass-bar verification. Until that exists, disable this shortcut on tower_pass and use a deliberate observe-only confirmation step.",
+    "confidence": "High"
+  },
+  {
+    "id": "A03",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 498,
+    "title": "Success confirmation ignores intervening failure and can bypass the configured count",
+    "failure_scenario": "A tower is reported standing, falls, then is rebuilt and has only just been released. The old positive plus the new positive satisfy the gate despite the intervening failure and without a new stability interval. A false cable-out result can similarly survive contradictory evidence.",
+    "fix": "Reset success evidence on a definite contradiction and on scene/prompt epochs; require the configured number of independent observations. Implement dwell using capture times and release time. Explicitly set and validate a safe confirm_gap_s on cloud-sims, including fast-poll configurations.",
+    "confidence": "High"
+  },
+  {
+    "id": "A04",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 431,
+    "title": "The image labelled stage start is captured after the action has begun",
+    "failure_scenario": "The fine-tune pulls the first cable out in under six seconds. Its first monitor image already shows that cable out. Every relative comparison now asks for an additional unplug, so the harness keeps pulling instead of moving to the put-down. Fast relative ball or higher stages have the same problem.",
+    "fix": "Capture and timestamp a stage baseline before sending any motion prompt. Give both the monitor and oracle an explicit begin_stage baseline. Keep it across retries of that logical stage and reset it only on a genuine stage change.",
+    "confidence": "High"
+  },
+  {
+    "id": "A05",
+    "severity": "High",
+    "branches": [
+      "main"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 420,
+    "title": "Main has no fast live guard, and cached images can keep its guard falsely fresh",
+    "failure_scenario": "A ball is picked and released between monitor replies. The newest debug trip still shows an empty gripper. Main either sees the illegal ball too late or keeps treating a frozen clear view as a fresh all-clear, so max_blind_s does not protect the run.",
+    "fix": "Before selecting main for a ball-capable match, port the reviewed independent live-frame guard and motion interlocks, together with per-camera capture freshness. Treat stale guard inputs as unknown, and verify the detector on station wrist frames. Account for A06 and A07 as well.",
+    "confidence": "High for code; real pick-to-bin margin is unmeasured here"
+  },
+  {
+    "id": "A06",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/harness/detect.py",
+    "line": 342,
+    "title": "A healthy wrist camera masks a missing camera on the carrying arm",
+    "failure_scenario": "The right wrist stream freezes or disappears during a pick. The left wrist keeps changing and shows empty space. The guard remains apparently healthy indefinitely while the right arm can carry a white ball into the bin.",
+    "fix": "Track required wrist coverage and capture age per camera. Stop or hold the ball stage when the carrying arm is unobserved. A clear view from another arm must not clear its blind timer. Recheck required camera presence during the run, not just values returned by preflight.",
+    "confidence": "High"
+  },
+  {
+    "id": "A07",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/plans/table_colors.yaml",
+    "line": 21,
+    "title": "The white-ball guard misses neutral white by construction",
+    "failure_scenario": "Auto white balance makes the held white ball look neutral rather than blue-tinted. The fast guard answers False. The cloud live guard repeats that answer at 10 Hz, while the slower visual monitor may only notice after release.",
+    "fix": "Calibrate on actual held-ball wrist images under the station lighting, include low-saturation white, and use shape, position, gripper state, and bin/background rejection to control false alarms. Require held-white and held-black negative/positive examples before relying on the fast guard.",
+    "confidence": "High for the counterexample; medium for prevalence on the live cameras"
+  },
+  {
+    "id": "A08",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/plans/hill_climb_v4.yaml",
+    "line": 71,
+    "title": "Fine-tune defaults conflict with runtime prompt generation and the prompt audit misses it",
+    "failure_scenario": "The team selects the new default checkpoint assuming the documented fine-tune-ready plan. At the stick stage, or immediately on hybrid cable stages, the harness sends texts outside the recorded labels. Behavior regresses during the match despite a passing static prompt audit.",
+    "fix": "Make model mode explicit and reject incompatible rewrites, technique appending, and generated prompts for the recorded-text mode. Enumerate every possible runtime template in the prompt audit. Use the actual recorded cylinder label after checking its intended action. For a base-model hybrid run, explicitly override model=dreamlabs/dream-1-beta.",
+    "confidence": "High for configuration/label drift; model performance effect requires a station test"
+  },
+  {
+    "id": "A09",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/station_client.py",
+    "line": 31,
+    "title": "Blocking I/O can carry motion far beyond the match deadline",
+    "failure_scenario": "At 292 s, the next entry check waits for a slow monitor call, or /status stalls. Dream continues its last action while the harness cannot check the deadline or send its normal stop until well after the referee cutoff. A normal operator stop also waits behind synchronous I/O.",
+    "fix": "Use one monotonic work deadline and a reserved stop interval. Bound every request and synchronous wait by min(remaining, short_request_cap), check again after each call, and obtain fresh frames after waiting. Keep a deadline/stop path independent of model and camera I/O. The review-fixes branch has _in_budget and a five-second request cap worth porting selectively.",
+    "confidence": "High from blocking call paths; no live delay was induced"
+  },
+  {
+    "id": "A10",
+    "severity": "High",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/harness/cli.py",
+    "line": 81,
+    "title": "--match accepts timer-only verification and removal of pass-bar stages",
+    "failure_scenario": "A practice invocation retains --verifier time or --skip unplug/stack/tower while adding --match for the demo. The harness accepts it and issues block or ball prompts without visual proof of prerequisites. A failed cable action becomes a match-losing DQ.",
+    "fix": "Reject time as well as human verifiers in match mode. Validate a required pass-bar dependency graph after filtering, prohibit skipping those gates, and require guarded ball stages to depend on the verified tower gate. Keep practice overrides available only outside match mode.",
+    "confidence": "High"
+  },
+  {
+    "id": "A11",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 245,
+    "title": "Inference restarts retain old monitor results and success evidence",
+    "failure_scenario": "One done verdict or an in-flight image was taken before an SVD failure. A reset releases the object or knocks the tower, the station restarts, and the old positive is consumed as current evidence. The next stage can be reached without a new confirmed physical success.",
+    "fix": "Treat every start/reset/recovery that changes execution continuity as a new observation epoch. Invalidate pending monitor results, clear success/stall counters, restart the settle gate, and require post-restart capture timestamps before counting success.",
+    "confidence": "High"
+  },
+  {
+    "id": "A12",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/harness/runner.py",
+    "line": 275,
+    "title": "The refusal restart limit does not stop stage retries from resending the same unsafe instruction",
+    "failure_scenario": "Dream refuses unplug because a person is holding the plug. The harness sends that same request repeatedly through recoveries and retries, consuming the clock and reattempting motion if a later answer changes. The documented one-restart policy does not bound these sends.",
+    "fix": "Enforce a prompt/scene refusal budget before issuing a command. After a repeated refusal, safely stop a required gate or skip an optional task; retry only after a verified scene change or a truthful, separately allowed prompt revision. Do not treat a safety refusal as an inference outage.",
+    "confidence": "High"
+  },
+  {
+    "id": "A13",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/plans/hill_climb_v4.yaml",
+    "line": 109,
+    "title": "Failed cable-release steps can lead directly into stacking with an occupied gripper",
+    "failure_scenario": "The policy successfully unplugs but keeps gripping the cable, a failure seen throughout the supplied simulation runs. Release checks time out, then the harness tells the occupied gripper to pick up a block. It wastes the stack attempts or drags the cable/strip through later-stage objects.",
+    "fix": "Before stacking, require an observed empty, clear work gripper and run a bounded recorded-text release action when needed. If it cannot clear, stop without risking later-stage contact. Port the other branch's intent while preserving the fine-tune label contract rather than blindly appending free text.",
+    "confidence": "High for missing precondition; exact robot behavior is model-dependent"
+  },
+  {
+    "id": "A14",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/plans/hill_climb_v4.yaml",
+    "line": 160,
+    "title": "A three-block tower is treated as a mandatory gate even when two blocks already pass",
+    "failure_scenario": "A valid two-block tower stands, but the third-block pickup repeatedly fails. The harness spends the rest of the 295 s on an unnecessary required stage, may knock over the existing tower, and never reaches the balls.",
+    "fix": "Check the actual height/release/stability pass bar after each successful stack increment. Treat extra pieces as optional scoring work once it passes, with a bounded allocation for balls. Measure the real blocks and calibrate visual height against a reference.",
+    "confidence": "High for shipped scenes and plan logic; conditional on live block height"
+  },
+  {
+    "id": "A15",
+    "severity": "High",
+    "branches": [
+      "main",
+      "cloud-sims",
+      "task_simulation"
+    ],
+    "file": "task_simulation/sim_scenes/hill_climb_table.py",
+    "line": 196,
+    "title": "The simulated tower gate does not establish a supported stable tower",
+    "failure_scenario": "A cube rests on the basket or a forearm, or a just-released tower is still wobbling. The oracle says tower_pass is met; subsequent ball contact can be DQ in the referee. Even where the referee accepts the scene, the result does not demonstrate a valid tower on the station.",
+    "fix": "Derive tower success from a supported stack rooted on the table, measure stability after full release for three seconds, and make the oracle consume that same gate. Add counterexamples for a supported single block on the bin, airborne/held blocks, forearm support, and a collapsing stack.",
+    "confidence": "High"
+  },
+  {
+    "id": "A16",
+    "severity": "Medium",
+    "branches": [
+      "main",
+      "cloud-sims"
+    ],
+    "file": "harness/plans/hill_climb_v4.yaml",
+    "line": 219,
+    "title": "Cumulative ball targets carry missed stages forward as extra work",
+    "failure_scenario": "ball_1 fails. ball_2 places one valid ball, earning five points, but the monitor must say incomplete because the plan demands two. Further time is spent chasing a historical target rather than treating that placement as one completed attempt.",
+    "fix": "Make each ball attempt incremental from a pre-action baseline and log the actual total separately. Fix A04 before switching to relative checks, so fast successes are not erased by a late baseline.",
+    "confidence": "High for target drift; time/score impact depends on placement rate"
+  },
+  {
+    "id": "A17",
+    "severity": "Medium",
+    "branches": [
+      "main",
+      "task_simulation"
+    ],
+    "file": "task_simulation/sim_scenes/hill_climb_table.py",
+    "line": 7,
+    "title": "The older MuJoCo table treats white balls as legal and has a different object inventory",
+    "failure_scenario": "The team chooses main based on a high simulated score obtained by binning white balls or stacking extra pieces unavailable on the real table. The same selection on the demo table can lose the match, and the extra-piece strategy can run out of objects.",
+    "fix": "Use one versioned station specification and legality mapping across all scenes, plans, detectors, and result manifests. Re-label historical results by scene/version and do not pool them with station-matched evaluations. Treat arm-embodiment transfer as unverified.",
+    "confidence": "High for source mismatch; historical result provenance varies by run"
+  },
+  {
+    "id": "A18",
+    "severity": "Medium",
+    "branches": [
+      "main",
+      "cloud-sims",
+      "task_simulation"
+    ],
+    "file": "task_simulation/sim_scenes/hill_climb_table.py",
+    "line": 219,
+    "title": "The bin success check counts objects below the table and does not require rest/release",
+    "failure_scenario": "A ball falls through/outside a basket geometry but keeps x/y under the opening, or is briefly carried through the bin. The simulator awards five points and the oracle can end the ball stage even though no ball is resting in the bin.",
+    "fix": "Require the ball volume to be inside the bin floor/walls, released and resting for a short dwell. Check the lower z bound and exclude attached/held objects. Add under-table, rim-crossing, and bouncing-ball counterexamples.",
+    "confidence": "High"
+  },
+  {
+    "id": "A19",
+    "severity": "Medium",
+    "branches": [
+      "cloud-sims",
+      "hedged-calls",
+      "mac-arm64"
+    ],
+    "file": "harness-cloud-sims/harness/verifiers.py",
+    "line": 727,
+    "title": "A losing hedged judge reply can contain the only illegal-ball alert and be discarded",
+    "failure_scenario": "The fastest model copy misses a white ball and answers guard=false. A slower copy sees the illegal grip, but its yes is silently discarded while the robot continues to the bin. Enabling hedging to reduce latency has removed an available safety signal.",
+    "fix": "Use first-result-wins for progress only. Route every valid guard=true from every copy to a shared alert latch, including late losers and cross-model races, while retaining bounded request/cancellation behavior.",
+    "confidence": "High"
+  },
+  {
+    "id": "A20",
+    "severity": "Medium",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/plans/operator_notes.yaml",
+    "line": 101,
+    "title": "The oracle cannot evaluate the newly inserted ball_push_white stage",
+    "failure_scenario": "A supposedly oracle-validated hybrid run reaches the white-ball push. The oracle cannot confirm it, spends up to 40 s on the stage, and may authorize it without checking the path. Comparison arms with operator notes are penalized for a verifier bug rather than robot capability.",
+    "fix": "Add an explicit push-white oracle rule and a geometry-based precondition, or disable that stage for oracle evaluation until implemented. Fail setup on unsupported stage semantics instead of converting implementation errors into ordinary unknown observations.",
+    "confidence": "High"
+  },
+  {
+    "id": "A21",
+    "severity": "Medium",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/harness/verifiers.py",
+    "line": 272,
+    "title": "The subscription transport drops plan-specific system instructions",
+    "failure_scenario": "The team switches a hybrid run to the subscription backend. The monitor loses station lessons about cable geometry, gripper readings, safe instruction prefixes, and operator lessons while all flags and plan files appear unchanged.",
+    "fix": "Combine the fixed monitor role with payload.system when constructing --system-prompt, preserving intentional instruction order. Add an offline transport test that supplies a unique system sentinel and verifies it reaches the generated command.",
+    "confidence": "High"
+  },
+  {
+    "id": "A22",
+    "severity": "Medium",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/harness/frames.py",
+    "line": 60,
+    "title": "The real station add-on ignores the requested 640-pixel frame limit",
+    "failure_scenario": "The team assumes the cloud branch eliminated image traffic overhead. At a high native camera resolution each poll and the 10 Hz live guard still encode/transfer full images, adding CPU and Wi-Fi load and delaying Dream replies during the run.",
+    "fix": "Implement bounded resize in the actual add-on before encoding, preserve aspect ratio, and test that add-on handler with an oversized synthetic frame and ?w=640. Verify received dimensions and bytes in preflight rather than trusting the URL.",
+    "confidence": "High for ignored query; medium for the station performance effect"
+  },
+  {
+    "id": "A23",
+    "severity": "Medium",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/tests/test_hedge_cancel.py",
+    "line": 110,
+    "title": "Missing SDK dependencies silently skip otherwise dependency-free hedge tests",
+    "failure_scenario": "A developer runs pytest without the Dream SDK and sees one module skip, assuming only the SDK gateway test was skipped. Cancellation/cap behavior has not been exercised. On a configured machine, a simulator constructor bug can also be reported as a harmless skip.",
+    "fix": "Move SDK-only tests to a separate module or put importorskip inside an SDK fixture. Keep fake-session tests always collectable. Narrow simulator skips to known dependency/graphics failures and fail on unexpected exceptions.",
+    "confidence": "High"
+  },
+  {
+    "id": "A25",
+    "severity": "Medium",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/harness/runner.py",
+    "line": 972,
+    "title": "The start-pose gate is advisory on several failure paths despite a hard-gate claim",
+    "failure_scenario": "The /arms route is missing or returns one truncated arm, or the arm remains far after the one allowed home. The harness can start the fine-tune from an unverified pose while the operator believes the advertised guard blocks it.",
+    "fix": "Either document and display the advisory behavior accurately, or make match-mode eligibility explicit: require both arms, exactly six finite joint angles each, a fresh post-home recheck, and a defined stop/skip policy when a required start cannot be established. Keep homing limited to geometrically safe stages.",
+    "confidence": "High for code/documentation mismatch; live effect depends on pose coverage"
+  },
+  {
+    "id": "A24",
+    "severity": "Low",
+    "branches": [
+      "cloud-sims"
+    ],
+    "file": "harness-cloud-sims/tests/test_async_pacing.py",
+    "line": 8,
+    "title": "Pacing tests fail on missing simulator dependencies instead of following the documented skip contract",
+    "failure_scenario": "The pre-demo core check reports a red pacing integration suite without ever exercising pacing, mixing missing capabilities with behavioral failures and obscuring what was actually validated.",
+    "fix": "Define an explicit offline-core suite and a focused simulator-capability fixture consistent with the other tests. Require the pacing integration suite in the fully provisioned environment; report it as unexecuted here rather than inferring control-loop results.",
+    "confidence": "High"
+  },
+  {
+    "id": "A26",
+    "severity": "Low",
+    "branches": [
+      "main"
+    ],
+    "file": "harness/tests/test_claude_cli.py",
+    "line": 36,
+    "title": "Two subscription-backend tests use a non-executable Windows shebang stub",
+    "failure_scenario": "The team runs the main suite on this Windows laptop and gets WinError 193, then spends scarce pre-demo time debugging model integration that was never invoked.",
+    "fix": "Port the local-stub Windows wrapper from cloud-sims, or invoke the fake script with sys.executable through a platform-neutral test transport. Keep the production CLI path separate from the test stub.",
+    "confidence": "High"
+  }
+]

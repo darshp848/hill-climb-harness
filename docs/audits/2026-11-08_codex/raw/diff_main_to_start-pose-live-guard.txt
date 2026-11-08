@@ -1,0 +1,3318 @@
+diff --git a/HARNESS_GUIDE.md b/HARNESS_GUIDE.md
+index b6b44e7..7a2ebb7 100644
+--- a/HARNESS_GUIDE.md
++++ b/HARNESS_GUIDE.md
+@@ -249,6 +249,10 @@ guard:
+ - It only sees what the monitor sees, at the monitor's pace: one answer per `check_every_s`, none during `settle_s` after a prompt change. It is a backstop, not a reflex. A team member still watches, ready to call "stop".
+ - `max_blind_s: 20` also stops the run when a guarded stage has had no yes/no answer that long (Claude API down, bad frames).
+ - **Local detector** (`--detect plans/table_colors.yaml`): `harness/detect.py` checks the wrist frames on every poll, with no API call, and counts an illegal ball (white, or black) between the fingers as a guard yes. It also draws labelled boxes (ball / cube / lying stick, by colour) on the frames the monitor sees. Dream's inputs and the prompts are unchanged. Re-tune the colours on the station's own cameras: `python -m harness.detect plans/table_colors.yaml frame.jpg --out boxed.jpg`.
++- **Live guard** (`--detect plans/table_colors.yaml --live-guard`): runs the same illegal-ball check in its own thread on live wrist frames from the station add-on (`GET /frame/wrist_l.jpg`, `/frame/wrist_r.jpg`, 30 fps, works idle or running) at 10 looks a second (`--live-guard-hz`). Three yes answers in a row on distinct frames (`--live-guard-frames`) POST `/stop` at once, without waiting for the next poll, and the match ends as for any guard trip. Without it the guard sees debug-view trips (one every ~3.4 s on the station) once per poll (3 s in v4), so a held ball could be judged up to ~6 s late. Both wrist views take ~76 ms to check on the laptop. At startup it probes `/frame` and warns if no wrist frame comes back (no add-on, other camera names); it keeps trying, so a camera that comes up later is used. The per-poll guard keeps running either way as a fallback. Yes answers count per camera and only on new frames, so a frozen camera reads as blind (`max_blind_s` stops the run) rather than as all clear. The guard never waits on the runner: it sends `/stop` the moment it trips. The runner checks for a trip (and an operator stop and the deadline) before every /start, /prompt and /home, and again after; a trip it finds afterwards may have been overtaken by its own command, so it sends `/stop` again. That leaves a window of milliseconds in which a /start or /prompt can follow the guard's /stop; the second /stop lands before Dream-1's first action chunk (~3 s for a fresh start on the station). `/home` can't be stopped once begun, so it is refused outright while the live guard is armed (ball stages only; homing only happens before unplug). Both wrist cameras are fetched in parallel with a 0.25 s timeout, so a dead camera doesn't slow the live one. The per-poll guard also counts only new frames now, so a cached debug-view trip can't confirm a yes or keep `max_blind_s` satisfied.
++- **Start pose** (`start_pose:` in the plan): before each stage and each retry the runner logs how far the arms' joints are from the starts recorded in the teleop data for that exact prompt (`start_pose` events in events.jsonl; reference `plans/start_poses.json`, rebuilt with `python tools/start_poses.py plans/start_poses.json <dataset dirs>`). Why: an unfamiliar start pose costs a VLA more than anything else measured in LIBERO-Plus (-60 points vs -16 for reworded instructions). On `home_before` stages (v4: `unplug_cable`) a start farther than `tolerance_rad` (0.35 rad on any joint) stops the run, homes the arms and starts fresh, once per stage, and only if the home pose is itself a recorded start for that prompt. `/home` can't be cancelled once started (the station refuses `/stop` while homing), so it is skipped with less than 30 s of match left, and an operator stop or guard trip during the stop holds the arms where they are instead of homing. Joint angles come from `GET /arms` `positions_rad` (new in `station_addons/sitecustomize.py`; the station must be restarted with it) or, while a run is going, from the newest trip. With neither, the check logs `no_state` and does nothing. Only unplug and put-down have recorded starts so far; stacking and balls log `no_reference`.
++- **Cable ends** (`--detect plans/table_colors.yaml --cable-ends models/cable_end.onnx`): `harness/cable_end.py` finds compact orange blobs (the anodised plug ferrules) and labels each crop USB-C end / USB-A end / neither with a small CNN (MobileNetV3-small, 6 MB ONNX, run by OpenCV; no torch at runtime). The monitor's frames get MAGENTA boxes on USB-C ends and AMBER boxes on USB-A ends (the end that goes into the power strip). Dream's inputs and the prompts are unchanged. Trained on 891 hand-labelled crops from the teleop videos and the table photos (`tools/cable_end/train.py`). Held out by video (7 Nov): 94% accuracy; at the 0.7 confidence it reports at, USB-C precision 0.70 / recall 0.82 and USB-A 0.96 / 0.84 (17 USB-C and 51 USB-A test crops, so treat these as rough). Blender renders of the cable (`tools/cable_end/render_cable.py`, random pose, lighting, lens, power strip, distractors) did not help: synthetic + real scored 92% and lower on the phone photos, so the shipped model is real-only. Try it on images: `python -m harness.cable_end models/cable_end.onnx frame.jpg --out-dir boxed/`.
++- **Decision equations, shadow mode** (`harness/decide.py`, optional `decide:` in the plan): the runner's done / fail rules written as weighted sums with thresholds, plus a planner that gives each stage the timeout worth the most points for the time left. On every look the runner logs a `decide` event: the done score, the fail score and its terms, and what the equations would decide. They never act; with no `decide:` section they decide exactly as the runner does (tests check this on 5,000 random look sequences), so any difference in the log comes from weights you set, e.g. `decide: {done: {theta: 1.0}}` or `decide: {fail: {combine: sum}}`. Stage success curves for the planner: `python tools/fit_stage_curves.py runs/ --out plans/stage_curves.json` (censored maximum likelihood over each stage's attempts). `plans/stage_curves_sim.json` is from Dream's YAM sim only (8 Nov): unplug p_max 0.64, no success before ~23 s, median 56 s; put-down and stacking never succeeded there, so fit station runs before trusting any timeout. Background: `docs/DECISION_MODEL.md`.
+ 
+ ### Other stage fields added 8 Nov
+ - `confirm: 1` on a stage overrides the plan's `confirm` (for stages where a false "done" costs nothing).
+diff --git a/docs/DECISION_MODEL.md b/docs/DECISION_MODEL.md
+new file mode 100644
+index 0000000..5b1c7f3
+--- /dev/null
++++ b/docs/DECISION_MODEL.md
+@@ -0,0 +1,176 @@
++# Harness decision model: runtime, arms, balls, prompts, and the decision tree as tunable equations
++
++7 Nov 2026 (late). This builds on `HARNESS_SPEED_STATE_SPACE_2026-11-07.md`. It uses:
++- today's inference logs from the NUC (1,650 chunks over 52 runs);
++- the runner on `main` / `start-pose-live-guard`;
++- kaupau's `hybrid-harness` branch, which does prompt generation better (section 4);
++- the sequential vs combined two-arm benchmark (`codex/dual-arm-experiment`, `runs_dual_arm/`).
++
++## 0. Findings that drive the design
++
++| # | Finding | Evidence |
++|---|---|---|
++| F1 | **The arms sit still about 30% of the time.** Dream's pacer runs `sync` whenever the median round trip is over 900 ms: it waits for each 2.4 s chunk, and chunks arrive every 3.54 s (p50). In `async` mode chunks arrive every 1.55 s with no gap. 65% of today's chunks were sync. | `robots-inference.jsonl`; station.log `dream.pacing: pacing sync ... over the 900 ms threshold` |
++| F2 | The round trip is about 950 ms even with a fast upload (≈650 ms of gateway overhead), and upload size makes it worse. Each request is ~1.6 MB. With a 5 Mbps uplink (p10) the round trip is ~1.9 s, and only 4% of those chunks could run async. | same log, `request_bytes`, `up_mbps` |
++| F3 | A fresh `/start` costs 2.9 s (p50) before motion begins; `/prompt` on a running session costs nothing extra. | run_start → chunk 1 |
++| F4 | The harness costs about 5-8 s per stage boundary: 3 s poll, ~4 s monitor call, then confirm 2 means one more look. | runner constants, stress sim |
++| F5 | **Dream-1 does not reliably obey arm naming.** "with the left arm, …" succeeded 0/4 and the right arm still moved 10-19 s. "Left does X while right does Y" succeeded 0/4. Two goals without naming arms finished one goal in 2/4 trials. (YAM sim, n = 12.) | `runs_dual_arm/20261107T230412Z/results.jsonl` |
++| F6 | Base Dream-1 follows short, specific prompts that name objects by colour and position much better than the generic task texts. It refuses cable work without the "no power" sentence (4 × DA-4000 today). | `hybrid-harness` plan notes, inference log errors |
++| F7 | The harness's own 2 MB debug-view frame fetches slowed Dream to 2-6 s per chunk. The add-on's `/frame/<cam>.jpg?w=640` frames are ~35 KB. | `hybrid-harness` HARNESS_GUIDE 6g |
++
++## 1. Runtime: where the seconds go, ranked by expected gain
++
++Model of one stage: `T_stage = T_start + T_robot / u + T_detect + T_decide`, where `u` is the share of time the arms actually move (F1).
++
++| Lever | Saves | Cost / risk | How to measure |
++|---|---|---|---|
++| **L1. Get Dream into async.** Wired ethernet on the NUC. Stop the harness pulling debug-view trips (use hybrid's light frames, F7). Ask Dream whether the 900 ms pacing threshold or the image size per request can be configured. | u ≈ 0.70 → ~0.95, about 25% less robot time on every stage | network work only; any station config change is the station owner's decision | share of `async` chunks and chunk-gap p50 in `robots-inference.jsonl`, before vs after |
++| **L2. Event-driven stage done.** A local estimator (gripper sensors from `/arms`, detector boxes, cable-end boxes) advances when its posterior is high. The monitor confirms in parallel and can veto. | 4-7 s per boundary, 20-35 s per match | a false done on a pass bar is a DQ, so it is gated by the bound in section 5.3 | `stage_start` − true-done time in replayed logs |
++| **L3. Never `/start` again mid-match.** Recoveries and retries use `/prompt`, not stop + start. | 2.9 s each time | none; it's already mostly the case | count `start` calls per match |
++| **L4. Skip checks the sensors can answer.** "Are both grippers empty?" (release_cable, arms_clear, put-downs) comes from `/arms` gripper readings in milliseconds, not a 4 s synchronous VLM look. Hybrid already lets the sensors overrule the monitor's `holding`. | ~4 s per skippable stage, 3-4 per match | sensor calibration (hybrid has this station's readings) | `entry_check` latency |
++| **L5. Faster judge.** Use hybrid's stitched grid, two staggered calls in flight, and 4 history frames. | a verdict every ~5 s instead of ~10 s | merge from hybrid | `latency_s` in verdict events |
++
++L1 and L2 dominate. L1 is a network and ops change, not code.
++
++## 2. Both arms at once
++
++The station API has **one prompt for one bimanual policy**. There is no per-arm command and no way to run two sessions. So "both arms at the same time" has to come from one of these:
++
++| Mode | How | Works today? | Use for |
++|---|---|---|---|
++| **A. One worker, the other parked (current).** | The right arm does everything; the left is parked by the reset prompt. | yes | default |
++| **B. Watcher.** | The stage's `watch:` puts one arm's wrist camera on the work, and the other arm works. The harness re-sends the park prompt if the watcher drifts (`watch_lost`). | partly: depends on Dream holding the watcher still (F5 says naming the arm is unreliable) | close views of the port, the ball in the gripper, the tower top |
++| **C. Combined prompt, two goals.** | "put the X … and the Y …" without naming arms; Dream assigns them. | 2/4 single-goal successes in the sim, both arms moving at once | parallel independent goals, e.g. ball + ball, once tested on Metal |
++| **D. Trained bimanual skill.** | Record teleop demos where the left arm watches or helps while the right works, under one fixed task text. | needs data | the only route to dependable two-arm behaviour |
++
++The harness can't make the two arms independent tasks. It **can** decide which mode each stage uses, which arm is the worker (section 3), and when a combined prompt is worth the risk. That decision gets a weight like the others (section 5).
++
++Experiment E1 (sim first, then station): 3 modes × 20 trials each on the same seeded scenes. Measure success, time to done, both-arms-moving seconds, and collisions or knocks. 20 per mode separates 30% from 70% success. A 0.5 vs 0.8 gap needs about 40 per mode for 80% power.
++
++## 3. Picking the arm from the layout
++
++What the harness has: the overhead camera, colour detector boxes (balls, cubes, sticks), cable-end boxes (new), gripper state, and joints (`/arms`, after a station restart).
++
++1. **Table frame.** One homography H from overhead pixels to table metres. Click the four table corners once per station (or mark them with tags) and store it in the plan. The arm bases `b_L` and `b_R` and the bin, hub and tower positions all go in that frame.
++2. **Cost of arm a for object o:**
++
++       c_a(o) = w_reach · ‖p_o − b_a‖ / R_a             reach, normalised by the arm's reach
++              + w_cross · 1[o is past the midline for a]   crossing the body
++              + w_clear · Σ_k exp(−d(path_a,o, k)² / σ²)   obstacles near the straight path: tower, hub, illegal balls
++              + w_busy  · 1[a holds something or is the watcher]
++              + w_skill · (1 − s_a(task))                  arm-specific skill prior: demos exist only for the right arm
++
++   Choose `a* = argmin_a c_a(o)`. If `c_a*(o) > c_max` for every arm, the object is unreachable: skip it or pick another object.
++3. **Turning the choice into an action.** F5 means naming the arm in the prompt is not enough on its own. In order of dependability:
++   - (i) choose the **object** the chosen arm is best placed for, and name it by colour and position ("the orange ball nearest the right arm"). Dream tends to use the nearer arm;
++   - (ii) for a fine-tune, record per-arm task texts ("… nearest the left arm" as well as "… nearest the right arm");
++   - (iii) the arm phrase as a hint only, and the monitor checks which arm moved. Count a wrong-arm move as a failed attempt.
++4. Experiment E2: does base Dream-1 on Metal pick the nearer arm? Place objects at 5 positions from left to right, 4 trials each, with and without an arm phrase. Log which arm moved first. The result sets `w_skill` and tells us whether (iii) is worth anything.
++
++## 4. Prompting Dream
++
++**Build on kaupau's `hybrid-harness` branch.** What it does that main doesn't:
++- **Templates with slots:** `tower_prompts` with `<piece>` / `<top>`, cable prompts as plan variables, and a `prompt_prefix` that is put back on every rewrite.
++- **Closed-loop rewriting:** the monitor returns `next_prompt` when it sees a wrong object or step, a plain stall, or a failure about to happen. The runner sends it, with a cooldown of 15 s and at most 3 per attempt. Every rewrite is logged as `prompt_rewrite`.
++- **Station lessons in the monitor's system prompt:** plugs are pulled straight up; carry a block high and lower it straight down; Dream ignores fine adjustments like "1 cm higher". There is also a running operator-lessons file, for testing only.
++- **`tools/label_rollout.py`:** labels Dream's own run records with stage, attempt, outcome and the clean task text. This is the bridge to fine-tune data.
++
++Formalised: the prompt is a policy `π_P(x) = template_s(slots(x))`, with `rewrite(x)` as a gated fallback. Slots come from the state estimate: object colour and position, arm (section 3), next tower piece, and which plug is next. A rewrite fires only when
++
++    g_rw = w_wrong·1[wrong object/step] + w_stall·(t − t_rise)/stall_s + w_risk·P(knock) − w_churn·n_rewrites  >  θ_rw
++    and  t − t_last_prompt ≥ τ_cool
++
++Hybrid's fixed rules are one point in this space: `θ_rw` = "the monitor chose to write one", τ_cool = 15, and a hard cap of 3.
++
++**Prompt experiments (E3).** The unit is one stage from a seeded scene, scored on success within T, time to first contact, and refusals.
++- Factors: specificity (generic task text vs colour + position), motion adverbs ("lift high, lower straight down"), arm phrase (none / hint), preamble (on / off, cables only), and length.
++- Plan: a fractional factorial screen in the YAM sim with real Dream-1, which is cheap. Then confirm the best 2-3 on Metal at 10-20 trials each.
++- Prompts already sent today, from the inference log, cover about 40 variants across 52 runs, but the log has no outcomes. Join them to harness `events.jsonl` with `label_rollout.py` to get a free first ranking.
++
++The fine-tune rule still holds. A fine-tune follows only its recorded texts, so whatever the base-model experiments settle on is what the teleop labels must say. Hybrid runs a fine-tune with `--no-rewrite` plus the recorded texts.
++
++## 5. The decision tree as weighted equations
++
++### 5.1 What the runner does today, as rules
++
++At each check (every `check_every_s` = 3 s), per stage attempt:
++- **done** if the verifier says done `confirm` (2) times in a row, or twice within `DONE_WINDOW_S` (15 s), or with `immediate` set;
++- **fail** if `failing` comes `confirm` times in a row and elapsed ≥ `FAIL_MIN_FRACTION` (0.5) × `timeout_s`; or progress drops by `REGRESSION_DROP` (0.3) below the attempt's max; or progress hasn't risen by `STALL_RISE` (0.05) for `stall_s`; or `timeout_s` passes, with one extension of `EXTEND_S` (20 s) while the gripper is on the target and `CONFIRM_GRACE_S` (10 s) while a done is pending;
++- **on fail:** abort, skip, or the recovery menu in order (`max_uses` each), then `home_and_retry` if allowed, up to `max_attempts`, never with less than `HOME_RESERVE_S` (30 s) left;
++- **guard trips** after `guard.confirm` illegal-ball answers (live: 3 distinct frames at 10 Hz), or when blind for `max_blind_s`.
++
++### 5.2 The same tree as equations
++
++State `x_t`: stage s, elapsed τ, time left `L = T − t`, the evidence features `φ(t)`, attempt count n, recovery uses, and the arm and object state.
++
++**Done evidence (log-odds, recursive):**
++
++    ℓ_t = γ · ℓ_{t−1} + Σ_i w_i · φ_i(t)
++
++| φ_i | Source | Today's implicit weight |
++|---|---|---|
++| monitor done (+1) / not (−1), × confidence | VLM | +1 / reset to 0 |
++| progress p_t (0..1) | VLM | used only for stall and regression |
++| gripper went from closed on an object to open, near the target | `/arms` | none (new) |
++| object at goal (detector box inside the bin or on the tower) | detector | none (new) |
++| plug count in the hub fell (cable-end boxes) | classifier | none (new) |
++| same frames as last time | sha1 | φ = 0 (not counted) |
++
++Done when `ℓ_t ≥ θ_done`. Today's rule is the special case γ = 1 on agreement and 0 on disagreement, `w_monitor = 1`, `θ_done = confirm = 2`.
++
++**Fail hazard:**
++
++    h_t = σ( b + w_f·n_fail + w_r·max(0, p_max − p_t − δ) + w_s·(τ − τ_rise)/stall_s + w_T·τ/timeout_s − w_on·1[on target] )
++
++The attempt ends when `h_t > θ_fail`. The hard rules above are the corners of this function: they fire when any one term is large.
++
++**Action choice when an attempt ends (or at each tick, for `continue`):** a ∈ {continue, re-prompt / rewrite, reset prompt, home + retry, skip, abort}.
++
++    Q(a | x) = P_a(succ within c_a) · V_s  +  W(L − c_a)  −  λ_risk · R_a
++
++- `V_s` = the stage's points (rubric v4: first cable +10, extra cable +5, tower pass +20, +3 per inch, ball +5), plus the value it unlocks (pass bars gate later stages).
++- `W(L)` = expected points from the stages after s with L seconds left. Compute it backwards over the stage list once per plan, using each stage's success-vs-time curve `F_s(τ)`.
++- `c_a` = time the action costs (re-prompt ~1 s, reset 5-20 s, home ~10 s plus `/start` 2.9 s).
++- `R_a` = risk: a DQ from a false done or a touch out of order, a knocked tower, an illegal ball.
++
++Pick `a* = argmax Q`. `on_fail: skip` and `max_attempts` become consequences of Q, not hand-set values.
++
++**Optimal timeout (replaces a fixed `timeout_s`):** keep going on stage s while the success rate per second, times its value, beats what the remaining time is worth elsewhere:
++
++    f_s(τ) / (1 − F_s(τ)) · V_s   ≥   dW/dL
++
++That gives each stage a timeout that depends on its own success curve and on how much match is left. Optional stages get short timeouts late in the match and longer ones early.
++
++### 5.3 The pass-bar constraint
++
++A false done on a pass bar (unplug, stack_2, stack_3, tower_pass) is a DQ. With per-look false-positive rate α for the evidence and k independent looks required, `P(false done) ≈ α^k`. Choose `θ_done` per stage so that `P(false done) ≤ ε` (e.g. 1%), then minimise the expected detection delay. This is the one hard constraint in the tuning. Everything else trades off in `J` below.
++
++### 5.4 Parameters and tuning
++
++θ = {w_i, γ, θ_done(s), w_f, w_r, w_s, w_T, w_on, θ_fail, λ_risk, θ_rw, w_wrong, w_churn, τ_cool, c_a weights (section 3), check period, live-guard Hz and frames, start-pose tolerance}. Today's constants (`confirm`, `STALL_RISE`, `REGRESSION_DROP`, `FAIL_MIN_FRACTION`, `DONE_WINDOW_S`, `EXTEND_S`, `CONFIRM_GRACE_S`, `HOME_RESERVE_S`, `SKIP_MIN_CONFIDENCE`, `REWRITE_*`) are its starting point.
++
++Objective, estimated in the stress sim and the rubric-v4 referee:
++
++    J(θ) = E[score] − μ · P(DQ) − ν · P(illegal ball)
++
++1. **Calibrate the sim's evidence model from real logs.** Per stage, how often the monitor says done when it's not, and the reverse (label saved frames by hand). Also the detector's miss and false-alarm rates, `F_s(τ)` from the runs, and refusal and IK-error rates. This is the STEP / SIMPLER warning: tuning against a sim with the wrong noise picks the wrong θ.
++2. **Search:** CMA-ES or coordinate hill climbing over θ. Use common random numbers (the same seeded scenes for every candidate), about 200 sim matches per candidate, run on the cluster.
++3. **Confirm on Metal:** the best 2 θ vs today's, 5 supervised matches each. Promote only if J is better and P(DQ) didn't rise.
++
++## 6. Ball handling
++
++Golf ball: 42.7 mm, rolls when nudged. The bin is white, the same colour as the illegal white ball. Dream does the grasp. The harness controls **which ball, from where, with what prompt, and whether the grasp worked**:
++
++1. **Choose the ball** (overhead detector + homography): legal colour; reachable by the chosen arm (section 3); clearance from the tower `d_tower ≥ 2·D_ball` and from any illegal ball `d_illegal ≥ 1.5·D_ball` so the gripper can't take both; not against an edge it can roll off. Score `s(b) = −c_a*(b) − w_tw·exp(−d_tower²/σ²) − w_il·exp(−d_illegal²/σ²)` and send the best: "pick up the orange ball nearest the right arm, straight down from above, and drop it into the white bin".
++2. **Grasp check, local and fast.** After the gripper closes, its opening g from `/arms` should sit in a band around the ball's width, `g ∈ [g_ball − δ, g_ball + δ]`, for N ticks. Fully closed means a miss; wider means it's on something else. This is the same idea as hybrid's "closed fully on nothing" sensor rule. Calibrate `g_ball` once by closing on a ball.
++3. **Rolled away:** if the target's overhead position jumps by more than D_ball between frames without being held, re-target with a new prompt naming the ball's new position. Don't retry blind.
++4. **The illegal ball:** the live guard (10 Hz, `/stop` in under 0.5 s) stays as the hard stop. The ball choice in step 1 lowers the chance it's ever needed.
++5. **Dream's own ball skill:** there are no ball demos yet; balls rely on base Dream-1. To make it dependable, record ball teleop (top-down grasp, carry high, release over the bin) under one fixed text, and add one demo set starting next to the white ball so the policy learns to go around it.
++
++## 7. What to build, in order
++
++1. Merge `hybrid-harness` (prompting, light frames, faster judge, sensor overrides) with `start-pose-live-guard` (start pose, live guard, cable-end classifier).
++2. **L1 network check:** ethernet, and light frames only. Re-measure the async share. Ops only; the biggest single gain.
++3. Overhead homography + arm/ball choice (sections 3 and 6) as a `layout.py` that feeds prompt slots.
++4. A `decide.py` with the equations in 5.2. Default weights reproduce today's rules exactly, with a test proving it. Then calibrate and tune in the sim (5.4).
++5. Experiments E1 (dual-arm modes), E2 (nearer-arm choice), E3 (prompt factors), sim first, then Metal.
+diff --git a/harness/cable_end.py b/harness/cable_end.py
+new file mode 100644
+index 0000000..848f658
+--- /dev/null
++++ b/harness/cable_end.py
+@@ -0,0 +1,163 @@
++"""Which end of the orange cable is where: USB-C end, USB-A end, or neither, from any camera frame.
++
++Two steps, numpy + OpenCV only (no torch at runtime):
++1. Candidates: compact orange blobs, i.e. the anodised ferrules (the cable is a long thin run, the strain-relief
++   ribs are slivers). Skin, faces and the orange golf ball also pass; step 2 rejects them.
++2. A small CNN (MobileNetV3-small, 96 x 96 crop, ~6 MB ONNX run by cv2.dnn) labels each crop usb_c / usb_a / none.
++   Trained on Blender renders of this cable (tools/cable_end/render_cable.py: random pose, lighting, lens,
++   backgrounds from station frames) plus hand-labelled station crops (tools/cable_end/train.py).
++
++The station's cables are USB-A to USB-C; the USB-A end is the one that goes into the power strip's USB ports.
++Used to draw "USB-C end" / "USB-A end" boxes on the frames the monitor sees, like harness.detect's boxes. It never
++touches Dream's inputs or the prompts.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++
++import cv2
++import numpy as np
++
++LABELS = ("usb_c", "usb_a", "none")
++NAMES = {"usb_c": "USB-C end", "usb_a": "USB-A end"}
++WORK_W = 640
++SIZE = 96
++BATCH = 8                 # fixed DNN input batch (see CableEndClassifier._forward)
++CROP_SCALE = 2.6
++MEAN = np.array([0.485, 0.456, 0.406], np.float32)
++STD = np.array([0.229, 0.224, 0.225], np.float32)
++
++
++@dataclass
++class End:
++    label: str            # usb_c | usb_a
++    prob: float
++    x0: float
++    y0: float
++    x1: float
++    y1: float             # fractions of the image
++
++
++def ferrules(bgr: np.ndarray, work_w: int = WORK_W) -> list[dict]:
++    """Candidate ferrules: [{cx, cy, side}] in the input image's pixels (side = crop side)."""
++    h0, w0 = bgr.shape[:2]
++    s = work_w / w0
++    im = cv2.resize(bgr, (work_w, max(1, round(h0 * s))), interpolation=cv2.INTER_AREA)
++    hsv = cv2.cvtColor(im, cv2.COLOR_BGR2HSV)
++    H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
++    mask = ((H >= 3) & (H <= 22) & (S >= 110) & (V >= 60)).astype(np.uint8)
++    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
++    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask)
++    total = im.shape[0] * im.shape[1]
++    out = []
++    for i in range(1, n):
++        area = int(stats[i, cv2.CC_STAT_AREA])
++        if area < 30 or area > 0.08 * total:
++            continue
++        ys, xs = np.nonzero(lab == i)
++        (cx, cy), (w, h), _ = cv2.minAreaRect(np.stack([xs, ys], 1).astype(np.float32))
++        L, W = max(w, h), max(1.0, min(w, h))
++        if L / W > 4.0 or area / max(L * W, 1.0) < 0.5:
++            continue
++        out.append({"cx": cx / s, "cy": cy / s, "side": max(L * CROP_SCALE, 24) / s})
++    return out
++
++
++def crop(bgr: np.ndarray, cand: dict, size: int = SIZE) -> np.ndarray:
++    side = cand["side"]
++    x0, y0 = cand["cx"] - side / 2, cand["cy"] - side / 2
++    M = np.float32([[size / side, 0, -x0 * size / side], [0, size / side, -y0 * size / side]])
++    return cv2.warpAffine(bgr, M, (size, size), flags=cv2.INTER_AREA, borderMode=cv2.BORDER_REPLICATE)
++
++
++def _prep(crops: list[np.ndarray]) -> np.ndarray:
++    x = np.stack([c[:, :, ::-1].astype(np.float32) / 255.0 for c in crops])
++    return ((x - MEAN) / STD).transpose(0, 3, 1, 2).copy()
++
++
++class CableEndClassifier:
++    def __init__(self, model_path: str | Path, min_prob: float = 0.7, max_candidates: int = 24):
++        self.net = cv2.dnn.readNetFromONNX(str(model_path))
++        self.min_prob = min_prob
++        self.max_candidates = max_candidates
++
++    def _forward(self, x: np.ndarray) -> np.ndarray:
++        """Always the same input shape, padded: OpenCV 5.0's DNN kills the process when one net is reused with a
++        batch larger than an earlier one (2, 5, 4, 4, then 16 crashed it, 7 Nov). Chunks of BATCH cost ~2.5 ms."""
++        out = []
++        for k in range(0, len(x), BATCH):
++            chunk = x[k:k + BATCH]
++            pad = np.zeros((BATCH,) + x.shape[1:], np.float32)
++            pad[:len(chunk)] = chunk
++            self.net.setInput(pad)
++            out.append(self.net.forward()[:len(chunk)].copy())
++        return np.concatenate(out)
++
++    def ends(self, bgr: np.ndarray) -> list[End]:
++        cands = ferrules(bgr)[: self.max_candidates]
++        if not cands:
++            return []
++        logits = self._forward(_prep([crop(bgr, c) for c in cands]))
++        e = np.exp(logits - logits.max(1, keepdims=True))
++        probs = e / e.sum(1, keepdims=True)
++        h, w = bgr.shape[:2]
++        out = []
++        for c, p in zip(cands, probs):
++            k = int(p.argmax())
++            if LABELS[k] == "none" or p[k] < self.min_prob:
++                continue
++            half = c["side"] / 2.6 * 0.75     # box around the ferrule and tip, not the whole crop
++            out.append(End(LABELS[k], float(p[k]), max(0, c["cx"] - half) / w, max(0, c["cy"] - half) / h,
++                           min(w, c["cx"] + half) / w, min(h, c["cy"] + half) / h))
++        return out
++
++    def ends_jpeg(self, jpeg: bytes) -> list[End]:
++        bgr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
++        return [] if bgr is None else self.ends(bgr)
++
++    def annotate(self, jpeg: bytes) -> bytes:
++        bgr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
++        if bgr is None:
++            return jpeg
++        found = self.ends(bgr)
++        if not found:
++            return jpeg
++        h, w = bgr.shape[:2]
++        th = max(2, w // 300)
++        for e in found:
++            col = (255, 0, 255) if e.label == "usb_c" else (0, 200, 255)   # magenta = USB-C, amber = USB-A
++            p0, p1 = (int(e.x0 * w), int(e.y0 * h)), (int(e.x1 * w), int(e.y1 * h))
++            cv2.rectangle(bgr, p0, p1, col, th)
++            cv2.putText(bgr, f"{NAMES[e.label]} {e.prob:.2f}", (p0[0], max(12, p0[1] - 4)), 0,
++                        max(0.4, w / 1600), col, max(1, th // 2))
++        ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 88])
++        return buf.tobytes() if ok else jpeg
++
++    @staticmethod
++    def legend() -> str:
++        return ("MAGENTA boxes = USB-C end of a cable, AMBER boxes = USB-A end (the end that plugs into the power "
++                "strip's USB ports); from a local classifier, can miss or mislabel.")
++
++
++def main(argv: list[str] | None = None) -> int:
++    import argparse
++    ap = argparse.ArgumentParser(description="label cable ends in images")
++    ap.add_argument("model")
++    ap.add_argument("images", nargs="+")
++    ap.add_argument("--out-dir", default=None)
++    a = ap.parse_args(argv)
++    clf = CableEndClassifier(a.model)
++    for p in a.images:
++        data = Path(p).read_bytes()
++        for e in clf.ends_jpeg(data):
++            print(f"{p}: {NAMES[e.label]} p={e.prob:.2f} box=({e.x0:.2f},{e.y0:.2f})-({e.x1:.2f},{e.y1:.2f})")
++        if a.out_dir:
++            Path(a.out_dir).mkdir(parents=True, exist_ok=True)
++            (Path(a.out_dir) / (Path(p).stem + "_ends.jpg")).write_bytes(clf.annotate(data))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/harness/cli.py b/harness/cli.py
+index deb6510..614d0b5 100644
+--- a/harness/cli.py
++++ b/harness/cli.py
+@@ -38,6 +38,14 @@ def _parser() -> argparse.ArgumentParser:
+     p.add_argument("--detect", default=None, metavar="COLORS.yaml",
+                    help="local ball/block detector (e.g. plans/table_colors.yaml): fast black-ball guard + boxes on "
+                         "the monitor's frames")
++    p.add_argument("--cable-ends", default=None, metavar="MODEL.onnx",
++                   help="with --detect: label USB-C / USB-A cable ends on the monitor's frames (e.g. models/cable_end.onnx)")
++    p.add_argument("--live-guard", action="store_true",
++                   help="with --detect: run the guard on live GET /frame/<wrist>.jpg images (station add-on) in its own "
++                        "thread, which sends /stop itself; replaces the per-poll guard on debug-view trips")
++    p.add_argument("--live-guard-hz", type=float, default=10.0, help="live guard looks per second (default 10)")
++    p.add_argument("--live-guard-frames", type=int, default=3,
++                   help="yes answers on distinct live frames in a row that trip the live guard (default 3)")
+     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
+                    help="override every stage's verifier")
+     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
+@@ -68,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
+               file=sys.stderr)
+ 
+     fake = None
++    runner: Runner | None = None
+     station_url, view_url = args.station, args.view
+     if args.mock:
+         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+@@ -112,12 +121,47 @@ def main(argv: list[str] | None = None) -> int:
+         if args.detect:
+             from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
+             det = TableDetector.from_file(args.detect)
++            if args.cable_ends:
++                from .cable_end import CableEndClassifier  # noqa: PLC0415
++                det.cable_ends = CableEndClassifier(args.cable_ends)
++                log.event("cable_ends", model=str(args.cable_ends))
+             runner.fast_guard = det.guard
+             for v in verifiers.values():
+                 for m in (v, getattr(v, "second", None)):
+                     if hasattr(m, "annotator"):
+                         m.annotator, m.legend = det.annotate_frames, det.legend()
+             log.event("detector", config=str(args.detect))
++            if args.live_guard and plan.guard is not None:
++                from .live_guard import LiveFrames, LiveGuard  # noqa: PLC0415
++                wrists = ("wrist_l", "wrist_r")   # station camera names (GET /status cameras)
++                live = LiveFrames(station_url, wrists)
++                found = live.probe()
++                if not found:
++                    # no add-on or other camera names: say so. It still runs, in case the cameras come up; the
++                    # per-poll guard on debug-view trips keeps running either way.
++                    print(f"--live-guard: no live wrist frame at {station_url}/frame/<camera>.jpg yet "
++                          f"({live.last_error}); the per-poll guard covers until one answers", file=sys.stderr)
++                    log.event("warning", message=f"live guard: no /frame answer at startup ({live.last_error})")
++                # All roles stay in, fetched in parallel: a camera missing at startup is used once it answers.
++                runner.live_guard = LiveGuard(live.grab, det.guard, station.stop, rate_hz=args.live_guard_hz,
++                                              confirm_frames=args.live_guard_frames, log=log.event)
++                runner.live_guard.start()
++                log.event("live_guard", station=station_url, roles=list(wrists), answering=found,
++                          rate_hz=args.live_guard_hz, confirm_frames=args.live_guard_frames)
++        elif args.live_guard:
++            print("--live-guard needs --detect (the colour detector judges the live frames)", file=sys.stderr)
++            return 2
++        if plan.start_pose is not None:
++            from .start_pose import StartPoses  # noqa: PLC0415
++            ref = Path(plan.start_pose.reference)
++            if not ref.is_absolute() and not ref.exists():
++                ref = plan_path.parent / ref            # relative to the plan file
++            try:
++                runner.start_poses = StartPoses.load(ref)
++                log.event("start_pose_reference", path=str(ref), prompts=len(runner.start_poses.by_prompt))
++            except (OSError, ValueError) as exc:
++                print(f"start_pose: {exc}; start-pose checks are off", file=sys.stderr)
++                log.event("warning", message=f"start_pose reference not loaded: {exc}")
+         holder["r"] = runner
+         # Turn SIGTERM into the same clean stop as Ctrl+C.
+         try:
+@@ -144,5 +188,7 @@ def main(argv: list[str] | None = None) -> int:
+             print("The arms hold where they are. Home them with: dreamcli robot down")
+         return 0 if result.ok else 1
+     finally:
++        if runner is not None and runner.live_guard is not None:
++            runner.live_guard.close()
+         if fake is not None:
+             fake.close()
+diff --git a/harness/decide.py b/harness/decide.py
+new file mode 100644
+index 0000000..e366c45
+--- /dev/null
++++ b/harness/decide.py
+@@ -0,0 +1,337 @@
++"""The runner's decision tree as weighted equations, so its constants can be tuned (HARNESS_DECISION_MODEL section 5).
++
++Three pieces, all pure functions of numbers (no I/O, no clock):
++
++1. Done evidence, a running score over looks:  l_t = keep * l_{t-1} + sum_i w_i * phi_i(t),  done when l_t >= theta.
++   With DEFAULT weights it is exactly the runner's rule: `confirm` monitor "done" looks in a row pass the stage, a
++   "not done" look resets the count, a repeated look at the same frames counts for nothing, and a second "done"
++   within done_window_s passes even with a "failing" flicker in between.
++2. Fail score:  F = combine_k(w_k * g_k), each g_k a ratio that reaches 1 when today's hard rule fires
++   (consecutive failing looks / confirm, consecutive "stalled" looks / confirm, time since progress rose / stall_s,
++   elapsed / timeout_s). A look is failing on a no, a "failing" status, or progress falling REGRESSION_DROP below
++   the attempt's best (look_failing). The attempt fails when F >= theta_fail. combine="max" is today's tree (any one rule);
++   combine="sum" lets weak signals add up, which is what tuning can explore.
++3. Value of the time left:  W_i(L) = max_T  F_i(T) (V_i + W_{i+1}(L - t_succ)) + (1 - F_i(T)) * [skip ? W_{i+1}(L - T) : 0]
++   over a stage list, by dynamic programming on a 1 s grid. It gives each stage the timeout that maximises expected
++   points for the time left (`plan_timeouts`) and the value of an action (`action_value`):
++   Q(a) = P_a * V_s + W(L - c_a) - risk_weight * R_a.
++
++Nothing here moves a robot or changes the runner yet: the runner keeps its own rules. The tests check that the
++default weights reproduce them; tuning and shadow logging come next.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass, field, replace
++from typing import Iterable, Sequence
++
++# Today's runner constants (harness/runner.py), the starting point for tuning.
++CONFIRM = 2
++DONE_WINDOW_S = 15.0
++REGRESSION_DROP = 0.3
++FAIL_MIN_FRACTION = 0.5
++
++
++# --------------------------------------------------------------------------------------------- 1. done evidence
++@dataclass(frozen=True)
++class DoneWeights:
++    w_monitor: float = 1.0          # a monitor "done" look
++    w_sensor_release: float = 0.0   # gripper went from closed on an object to open near the target (/arms); new, off
++    w_goal_box: float = 0.0         # detector sees the object at its goal (in the bin, on the tower); new, off
++    w_plug_count: float = 0.0       # cable-end boxes: one fewer plug in the strip; new, off
++    keep: float = 1.0               # share of the score carried to the next look when nothing argues against it
++    reset_on_no: bool = True        # a "not done" / "failing" look sets the score to 0 (outside the done window)
++    theta: float = float(CONFIRM)   # done when the score reaches this
++    window_s: float = DONE_WINDOW_S  # a second "done" within this passes, flickers in between notwithstanding
++
++
++@dataclass(frozen=True)
++class Look:
++    """One check. done: the verifier's answer (True / False / None = no answer). failing: monitor status failing."""
++    t: float
++    done: bool | None
++    failing: bool = False
++    same_frames: bool = False       # the same camera images as the previous done look
++    monitor: bool = True            # from the monitor: a look with no done answer still resets the count
++    sensor_release: float = 0.0     # 0..1 features from the fast sensors
++    goal_box: float = 0.0
++    plug_count: float = 0.0
++
++
++@dataclass
++class DoneState:
++    score: float = 0.0
++    last_done_t: float | None = None
++
++
++def done_step(state: DoneState, look: Look, w: DoneWeights = DoneWeights()) -> tuple[DoneState, bool]:
++    """Folds one look into the done score. Returns (new state, stage passes now)."""
++    fast = w.w_sensor_release * look.sensor_release + w.w_goal_box * look.goal_box + w.w_plug_count * look.plug_count
++    if look.done is True and look.same_frames:
++        return DoneState(state.score * w.keep + fast, state.last_done_t), state.score * w.keep + fast >= w.theta
++    if look.done is True:
++        recent = state.last_done_t is not None and look.t - state.last_done_t <= w.window_s
++        score = state.score * w.keep + w.w_monitor + fast
++        return DoneState(score, look.t), score >= w.theta or recent
++    # The runner: a no / failing look right after a done (within the window) changes nothing; otherwise it resets the
++    # count. A monitor look with no done answer resets it even inside the window (the window still passes the next done).
++    flicker = look.done is False or look.failing
++    blank = look.done is None and look.monitor
++    in_window = state.last_done_t is not None and look.t - state.last_done_t <= w.window_s
++    if flicker and in_window:
++        score = state.score
++    elif (flicker or blank) and w.reset_on_no:
++        score = fast
++    elif flicker or blank:
++        score = state.score * w.keep + fast
++    else:
++        score = state.score * w.keep + fast
++    return DoneState(score, state.last_done_t), score >= w.theta
++
++
++def run_looks(looks: Iterable[Look], w: DoneWeights = DoneWeights()) -> float | None:
++    """Time of the look that passes the stage, or None."""
++    st = DoneState()
++    for lk in looks:
++        st, ok = done_step(st, lk, w)
++        if ok:
++            return lk.t
++    return None
++
++
++# ----------------------------------------------------------------------------------------------- 2. fail score
++@dataclass(frozen=True)
++class FailWeights:
++    w_fail: float = 1.0          # consecutive failing looks / confirm (monitor: only after min_fraction of the timeout)
++    w_stalled: float = 1.0       # consecutive "stalled" monitor looks / confirm (stages with a stall window)
++    w_stall: float = 1.0         # seconds since progress last rose / stall_s
++    w_time: float = 1.0          # elapsed / timeout_s
++    w_on_target: float = 0.0     # subtracted while a gripper holds the target (today: a one-off 20 s extension)
++    w_regress: float = 1.0       # in look_failing: (max progress - progress) / regress_drop >= 1 makes a failing look
++    confirm: int = CONFIRM
++    regress_drop: float = REGRESSION_DROP
++    min_fraction: float = FAIL_MIN_FRACTION
++    combine: str = "max"         # "max" = today's tree (any rule fires); "sum" = weak signals add up
++    theta: float = 1.0
++
++
++def look_failing(done: bool | None, status_failing: bool, progress: float | None, max_progress: float | None,
++                 done_seen: bool, w: FailWeights = FailWeights()) -> bool:
++    """Is one look a failing look? The verifier said no, the monitor said failing, or progress fell regress_drop
++    below the attempt's best (not counted once a done has been seen, as in the runner)."""
++    regress = 0.0
++    if progress is not None and max_progress is not None and not done_seen:
++        regress = w.w_regress * max(0.0, max_progress - progress) / w.regress_drop
++    return done is False or status_failing or regress >= 1.0 - 1e-9
++
++
++@dataclass(frozen=True)
++class AttemptState:
++    elapsed: float
++    timeout_s: float
++    consec_fail: int = 0                 # failing looks in a row (look_failing)
++    consec_stalled: int = 0              # "stalled" monitor looks in a row
++    since_rise_s: float | None = None    # seconds since progress last rose by STALL_RISE (None: no progress yet)
++    stall_s: float | None = None         # the stage's stall window (None: no stall rules)
++    monitor: bool = True                 # failing looks come from the monitor (then min_fraction applies)
++    on_target: bool = False
++
++
++def fail_terms(a: AttemptState, w: FailWeights = FailWeights()) -> dict[str, float]:
++    """Each term reaches its weight when its hard rule would fire on its own."""
++    gate_ok = not a.monitor or a.elapsed >= w.min_fraction * a.timeout_s
++    terms = {"fail": w.w_fail * (a.consec_fail / w.confirm) if gate_ok else 0.0,
++             "time": w.w_time * a.elapsed / a.timeout_s}
++    if a.stall_s is not None:
++        terms["stalled"] = w.w_stalled * a.consec_stalled / w.confirm
++        if a.since_rise_s is not None:
++            terms["stall"] = w.w_stall * a.since_rise_s / a.stall_s
++    return terms
++
++
++def fail_score(a: AttemptState, w: FailWeights = FailWeights()) -> float:
++    terms = list(fail_terms(a, w).values())
++    s = max(terms) if w.combine == "max" else sum(terms)
++    return s - (w.w_on_target if a.on_target else 0.0)
++
++
++def attempt_fails(a: AttemptState, w: FailWeights = FailWeights()) -> bool:
++    return fail_score(a, w) >= w.theta - 1e-9
++
++
++# -------------------------------------------------------------------------------- 3. value of the time left
++@dataclass(frozen=True)
++class StageModel:
++    """One stage for planning. Success by time tau: F(tau) = p_max * (1 - exp(-max(0, tau - t_min) / tau_c)).
++    `gate`: a pass bar; if it fails, nothing after it scores (it is retried until the clock instead of skipped).
++    Fit p_max, t_min, tau_c per stage from run logs or the stress sim."""
++    name: str
++    value: float
++    p_max: float
++    tau_c: float
++    t_min: float = 0.0
++    gate: bool = False
++
++    def F(self, tau: float) -> float:
++        if tau <= self.t_min:
++            return 0.0
++        return self.p_max * (1.0 - math.exp(-(tau - self.t_min) / self.tau_c))
++
++    def mean_success_time(self, T: float, step: float = 1.0) -> float:
++        """Expected time spent given success by T (integral of tau dF over [0, T] / F(T))."""
++        FT = self.F(T)
++        if FT <= 0:
++            return T
++        n = max(1, int(T / step))
++        acc, prev = 0.0, 0.0
++        for k in range(1, n + 1):
++            tau = k * T / n
++            f = self.F(tau)
++            acc += (tau - T / n / 2) * (f - prev)
++            prev = f
++        return acc / FT
++
++
++@dataclass
++class Plan:
++    """W[i][L]: expected points from stage i on with L whole seconds left; best_T[i][L]: that stage's timeout."""
++    stages: Sequence[StageModel]
++    horizon_s: int
++    W: list[list[float]] = field(default_factory=list)
++    best_T: list[list[int]] = field(default_factory=list)
++
++    def value(self, i: int, left_s: float) -> float:
++        if i >= len(self.stages):
++            return 0.0
++        return self.W[i][max(0, min(self.horizon_s, int(left_s)))]
++
++    def timeout(self, i: int, left_s: float) -> int:
++        return self.best_T[i][max(0, min(self.horizon_s, int(left_s)))]
++
++
++def plan_timeouts(stages: Sequence[StageModel], horizon_s: int, step_s: int = 1) -> Plan:
++    """Backward DP over the stage list. For a gate stage a failure leaves 0 (nothing later scores)."""
++    n = len(stages)
++    W = [[0.0] * (horizon_s + 1) for _ in range(n + 1)]
++    best = [[0] * (horizon_s + 1) for _ in range(n)]
++    for i in range(n - 1, -1, -1):
++        st = stages[i]
++        succ_t = [st.mean_success_time(T) for T in range(horizon_s + 1)]
++        for L in range(horizon_s + 1):
++            top, top_T = W[i + 1][L], 0           # T = 0: skip the stage
++            for T in range(step_s, L + 1, step_s):
++                p = st.F(T)
++                after_ok = W[i + 1][max(0, L - int(round(succ_t[T])))]
++                after_fail = 0.0 if st.gate else W[i + 1][L - T]
++                v = p * (st.value + after_ok) + (1 - p) * after_fail
++                if v > top + 1e-12:
++                    top, top_T = v, T
++            W[i][L], best[i][L] = top, top_T
++    return Plan(stages, horizon_s, W, best)
++
++
++@dataclass(frozen=True)
++class Action:
++    """A choice at a decision point: p = chance it succeeds the stage, cost_s = seconds it uses, risk = 0..1 chance of
++    something costly (a DQ, a knocked tower, an illegal ball)."""
++    name: str
++    p: float
++    cost_s: float
++    risk: float = 0.0
++
++
++def action_value(plan: Plan, i: int, left_s: float, a: Action, risk_weight: float = 50.0) -> float:
++    """Q(a) = p (V_i + W_{i+1}(L - c)) + (1 - p) W_i'(L - c) - risk_weight * risk, where after a failed action the
++    same stage can still be tried with the time left (W_i), or nothing later scores for a gate that ran out."""
++    st = plan.stages[i]
++    rest = left_s - a.cost_s
++    if rest < 0:
++        return -risk_weight * a.risk
++    ok = a.p * (st.value + plan.value(i + 1, rest))
++    again = (1 - a.p) * plan.value(i, rest)
++    return ok + again - risk_weight * a.risk
++
++
++def choose(plan: Plan, i: int, left_s: float, actions: Sequence[Action], risk_weight: float = 50.0) -> Action:
++    return max(actions, key=lambda a: action_value(plan, i, left_s, a, risk_weight))
++
++
++def with_weights(obj, **kw):
++    """Copy of a weights dataclass with some fields changed (for hill climbing)."""
++    return replace(obj, **kw)
++
++
++# ------------------------------------------------------------------------------------------ 4. shadow mode
++def weights_from(raw: dict | None) -> tuple[DoneWeights, FailWeights]:
++    """plan `decide: {done: {...}, fail: {...}}` -> weights. Unknown keys are an error (a typo must not pass)."""
++    raw = raw or {}
++    extra = set(raw) - {"done", "fail"}
++    if extra:
++        raise ValueError(f"plan.decide: unknown key(s): {', '.join(sorted(extra))}")
++    out = []
++    for key, cls in (("done", DoneWeights), ("fail", FailWeights)):
++        part = raw.get(key) or {}
++        if not isinstance(part, dict):
++            raise ValueError(f"plan.decide.{key}: must be a mapping")
++        names = set(cls.__dataclass_fields__)
++        bad = set(part) - names
++        if bad:
++            raise ValueError(f"plan.decide.{key}: unknown weight(s): {', '.join(sorted(bad))}")
++        if key == "fail" and part.get("combine", "max") not in ("max", "sum"):
++            raise ValueError("plan.decide.fail.combine: max or sum")
++        out.append(cls(**part))
++    return out[0], out[1]
++
++
++class Shadow:
++    """Runs the equations next to the runner on every look and reports what they would decide. It never acts.
++
++    The runner calls start() at each attempt and look() once per verdict, with the inputs it already computed
++    (`failing` includes the regression rule). Counts follow the runner's: a failing look right after a done (within
++    the window) is not counted, a done resets the failing count."""
++
++    def __init__(self, done: DoneWeights = DoneWeights(), fail: FailWeights = FailWeights(), *,
++                 fixed: set[str] = frozenset()):
++        self.base_done, self.base_fail = done, fail
++        self.done_w, self.fail_w = done, fail
++        self._fixed = set(fixed)        # "done.theta", "fail.confirm": set by the plan, not taken from the stage
++        self._st = DoneState()
++        self._consec_fail = 0
++        self._timeout = 1.0
++        self._stall: float | None = None
++
++    @classmethod
++    def from_plan(cls, raw: dict | None) -> "Shadow":
++        done, fail = weights_from(raw)
++        raw = raw or {}
++        fixed = {f"{k}.{n}" for k in ("done", "fail") for n in (raw.get(k) or {})}
++        return cls(done, fail, fixed=fixed)
++
++    def start(self, timeout_s: float, stall_s: float | None, confirm: int = CONFIRM) -> None:
++        """Per attempt. The stage's confirm sets the done threshold and the failing-look count unless the plan fixed them."""
++        self.done_w = self.base_done if "done.theta" in self._fixed else replace(self.base_done, theta=float(confirm))
++        self.fail_w = self.base_fail if "fail.confirm" in self._fixed else replace(self.base_fail, confirm=int(confirm))
++        self._st, self._consec_fail = DoneState(), 0
++        self._timeout, self._stall = timeout_s, stall_s
++
++    def look(self, elapsed: float, done: bool | None, failing: bool, *, same_frames: bool, monitor: bool,
++             consec_stalled: int, since_rise_s: float | None, sensor_release: float = 0.0, goal_box: float = 0.0,
++             plug_count: float = 0.0) -> dict:
++        lk = Look(elapsed, done, failing=failing and done is not False, same_frames=same_frames, monitor=monitor,
++                  sensor_release=sensor_release, goal_box=goal_box, plug_count=plug_count)
++        in_window = self._st.last_done_t is not None and elapsed - self._st.last_done_t <= self.done_w.window_s
++        self._st, passes = done_step(self._st, lk, self.done_w)
++        if done is True and not same_frames:
++            self._consec_fail = 0
++        elif (failing or done is False) and not in_window:
++            self._consec_fail += 1
++        elif not (failing or done is False) and (done is not None or monitor):
++            self._consec_fail = 0
++        a = AttemptState(elapsed=elapsed, timeout_s=self._timeout, consec_fail=self._consec_fail,
++                         consec_stalled=consec_stalled, since_rise_s=since_rise_s, stall_s=self._stall, monitor=monitor)
++        terms = fail_terms(a, self.fail_w)
++        score = fail_score(a, self.fail_w)
++        return {"done_score": round(self._st.score, 3), "would_pass": bool(passes),
++                "fail_score": round(score, 3), "would_fail": bool(not passes and score >= self.fail_w.theta - 1e-9),
++                "terms": {k: round(v, 3) for k, v in terms.items()}}
+diff --git a/harness/detect.py b/harness/detect.py
+index f1d2d9a..e6430af 100644
+--- a/harness/detect.py
++++ b/harness/detect.py
+@@ -102,9 +102,13 @@ def load_config(path: str | Path) -> DetectConfig:
+                         table_roi=tuple(raw["table_roi"]) if raw.get("table_roi") else None)
+ 
+ 
+-def _load(jpeg: bytes) -> Image.Image | None:
++def _load(jpeg: bytes, min_w: int | None = None) -> Image.Image | None:
++    """Decoded RGB image, or None for a bad frame. With min_w, a JPEG is decoded at the smallest 1/2, 1/4 or 1/8
++    scale that is still at least min_w wide (libjpeg's draft mode): a 1280 px station frame decodes at 640."""
+     try:
+         im = Image.open(io.BytesIO(jpeg))
++        if min_w and im.format == "JPEG" and im.width > min_w:
++            im.draft("RGB", (min_w, max(1, im.height * min_w // im.width)))
+         im.load()
+         return im.convert("RGB")
+     except Exception:   # noqa: BLE001 - a bad frame is simply not looked at
+@@ -166,14 +170,18 @@ def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
+ 
+ 
+ def detect(jpeg: bytes, cfg: DetectConfig, *, overhead: bool = False) -> list[Box]:
+-    im = _load(jpeg)
+-    if im is None:
+-        return []
++    im = _load(jpeg, WORK_W)
++    return [] if im is None else detect_image(im, cfg, overhead=overhead)
++
++
++def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
++                 classes: list[ClassSpec] | None = None) -> list[Box]:
++    """detect() on a decoded image; `classes` limits the colours looked for (default: all of cfg's)."""
+     hsv = _hsv(im)
+     H, W = hsv.shape[:2]
+     total = float(H * W)
+     out: list[Box] = []
+-    for spec in cfg.classes:
++    for spec in cfg.classes if classes is None else classes:
+         mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
+         if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
+             mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
+@@ -234,6 +242,7 @@ class TableDetector:
+ 
+     def __init__(self, cfg: DetectConfig) -> None:
+         self.cfg = cfg
++        self.cable_ends = None   # harness.cable_end.CableEndClassifier: USB-C / USB-A end boxes (--cable-ends)
+ 
+     @classmethod
+     def from_file(cls, path: str | Path) -> TableDetector:
+@@ -249,14 +258,15 @@ class TableDetector:
+         """(True, why) if a wrist camera shows the guard class between the fingers; (False, ...) if the wrist views
+         were readable and showed none; (None, ...) if no wrist view could be read."""
+         looked = False
++        avoid = [c for c in self.cfg.classes if "avoid" in c.kinds.values()]   # only the colours that can trip it
+         for role, jpeg in frames.items():
+             if not any(w in role for w in self.cfg.wrist_roles):
+                 continue
+-            boxes = detect(jpeg, self.cfg)
+-            if _load(jpeg) is None:
++            im = _load(jpeg, WORK_W)
++            if im is None:
+                 continue
+             looked = True
+-            b = held(boxes, self.cfg)
++            b = held(detect_image(im, self.cfg, classes=avoid), self.cfg)
+             if b is not None:
+                 return True, f"local detector: {b.cls} between the fingers in {role} ({b.frac:.1%} of the view)"
+         return (False, "local detector: none held") if looked else (None, "local detector: no wrist view")
+@@ -264,13 +274,17 @@ class TableDetector:
+     def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
+         if not self.cfg.annotate:
+             return frames
+-        return {role: annotate(j, detect(j, self.cfg, overhead=self._overhead(role))) for role, j in frames.items()}
++        out = {role: annotate(j, detect(j, self.cfg, overhead=self._overhead(role))) for role, j in frames.items()}
++        if self.cable_ends is not None:
++            out = {role: self.cable_ends.annotate(j) for role, j in out.items()}
++        return out
+ 
+     def legend(self) -> str:
+         avoid = [f"{c.label or c.name} {k}" for c in self.cfg.classes for k, r in c.kinds.items() if r == "avoid"]
+         return ("Boxes on the images come from a local colour detector and can miss or mislabel objects: "
+                 f"RED boxes = {', '.join(avoid) or 'objects to avoid'} (never pick these); green = targets; "
+-                "blue = other objects (blocks: colour, cylinders: upright or lying).")
++                "blue = other objects (blocks: colour, cylinders: upright or lying)."
++                + (" " + self.cable_ends.legend() if self.cable_ends is not None else ""))
+ 
+ 
+ def main(argv: list[str] | None = None) -> int:
+diff --git a/harness/frames.py b/harness/frames.py
+index e5f638a..42c921f 100644
+--- a/harness/frames.py
++++ b/harness/frames.py
+@@ -32,6 +32,18 @@ class FrameSource:
+             self.last_error = f"{type(exc).__name__}: {exc}"
+         return None
+ 
++    def latest_observation(self) -> dict[str, Any] | None:
++        """The newest trip's observation (the state sent to the policy, e.g. state.right_arm), or None."""
++        try:
++            trips = self._get_json("/trips")
++            if isinstance(trips, list) and trips:
++                trip = self._get_json(f"/trip/{int(trips[-1]['n'])}")
++                obs = trip.get("observation") if isinstance(trip, dict) else None
++                return obs if isinstance(obs, dict) else None
++        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
++            self.last_error = f"{type(exc).__name__}: {exc}"
++        return None
++
+     def latest(self) -> dict[str, bytes]:
+         """role -> JPEG bytes: the newest frame of each camera in the newest round trip. {} if none."""
+         try:
+diff --git a/harness/live_guard.py b/harness/live_guard.py
+new file mode 100644
+index 0000000..565020e
+--- /dev/null
++++ b/harness/live_guard.py
+@@ -0,0 +1,196 @@
++"""Illegal-ball guard on live camera frames, in its own thread.
++
++The plan guard otherwise looks at debug-view trips (one every ~3.4 s on the station) once per poll (check_every_s,
++3 s in v4), so a held ball could be up to ~6 s old when judged, and pick-to-bin takes a few seconds. The station
++add-on (station_addons/sitecustomize.py) serves the controller's newest frame at GET /frame/<camera>.jpg, live at
++30 fps whether or not a run is going (checked read-only on the NUC, 7 Nov: 4 ms per frame). This thread runs the
++local detector's guard on each wrist camera at `rate_hz`; `confirm_frames` yes answers in a row on new frames of the
++same camera POST /stop at once, without waiting for the runner's next poll. The runner then ends the match as for
++any guard trip.
++
++Reads only GET /frame; the one thing it sends is /stop, and only while armed (a stage the plan guard covers).
++
++Safety rules (from the Codex review of the first version):
++- The guard never waits on the runner: it sets `tripped` and sends /stop at once. The runner checks `tripped` before
++  each /start, /prompt or /home and again after it; a trip it finds afterwards may have been overtaken by its own
++  command, so it sends /stop again (Runner._motion).
++- Arming has a generation: a judgment that started before a disarm (or a re-arm for another stage) is dropped.
++- Only a new frame counts as a look: the same bytes judged again neither add a yes nor refresh `last_answer_t`, so a
++  frozen camera shows up as blindness (plan guard max_blind_s), not as "all clear".
++- Yes answers are counted per camera, so motion in one wrist view can't confirm a frozen yes in the other.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import threading
++from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
++import time
++import urllib.error
++import urllib.request
++from collections.abc import Callable
++from typing import Any
++
++
++class LiveFrames:
++    """GET /frame/<role>.jpg from the station API for each role, all roles at once (one slow or dead camera must not
++    hold up the others: 4 ms per frame on the NUC, so `timeout_s` is short). A role that fails this tick is missing
++    from the result and is tried again next tick (a camera that recovers is used again)."""
++
++    def __init__(self, base_url: str = "http://127.0.0.1:8091", roles: tuple[str, ...] = ("wrist_l", "wrist_r"),
++                 *, timeout_s: float = 0.25):
++        self.base_url = base_url.rstrip("/")
++        self.roles = list(roles)
++        self.timeout_s = timeout_s
++        self.last_error: str | None = None
++        self._pool = ThreadPoolExecutor(max_workers=max(1, len(self.roles)), thread_name_prefix="live-frame")
++        self._pending: dict[str, Future] = {}
++
++    def _one(self, role: str) -> bytes | None:
++        try:
++            with urllib.request.urlopen(f"{self.base_url}/frame/{role}.jpg", timeout=self.timeout_s) as resp:
++                return resp.read()
++        except urllib.error.HTTPError as exc:
++            self.last_error = f"{role}: HTTP {exc.code}"
++        except (urllib.error.URLError, OSError, TimeoutError) as exc:
++            self.last_error = f"{role}: {exc}"
++        return None
++
++    def grab(self, wait_s: float = 0.05) -> dict[str, bytes]:
++        """The frames that are in within `wait_s`. A camera whose fetch is still running is not waited for: its
++        fetch keeps going and its frame is returned by a later grab, so a dead camera never slows a live one."""
++        for role in self.roles:
++            if role not in self._pending:
++                self._pending[role] = self._pool.submit(self._one, role)
++        wait(list(self._pending.values()), timeout=wait_s, return_when=ALL_COMPLETED)
++        out: dict[str, bytes] = {}
++        for role, job in list(self._pending.items()):
++            if job.done():
++                del self._pending[role]
++                data = job.result()
++                if data is not None:
++                    out[role] = data
++        return out
++
++    def probe(self, tries: int = 3) -> list[str]:
++        """Roles that returned a frame in at least one of `tries` grabs (startup check before relying on them)."""
++        seen: set[str] = set()
++        for _ in range(tries):
++            seen |= set(self.grab(wait_s=self.timeout_s + 0.1))   # let each fetch finish or time out
++            if len(seen) == len(self.roles):
++                break
++        return [r for r in self.roles if r in seen]
++
++
++class LiveGuard:
++    """Runs `judge({role: jpeg})` per camera at `rate_hz` while armed. `judge` returns (True/False/None, why) like
++    TableDetector.guard. `confirm_frames` yes answers in a row on new frames of one camera call `stop()` once and
++    set `tripped` to the reason. A no on new frames of that camera resets its count; None leaves it alone."""
++
++    def __init__(self, source: Callable[[], dict[str, bytes]],
++                 judge: Callable[[dict[str, bytes]], tuple[bool | None, str]],
++                 stop: Callable[[], Any], *, rate_hz: float = 10.0, confirm_frames: int = 3,
++                 log: Callable[..., None] | None = None, clock: Callable[[], float] = time.monotonic):
++        if confirm_frames < 1 or rate_hz <= 0:
++            raise ValueError("confirm_frames must be >= 1 and rate_hz > 0")
++        self.source, self.judge, self._stop = source, judge, stop
++        self.period = 1.0 / rate_hz
++        self.confirm_frames = confirm_frames
++        self._log = log or (lambda *a, **k: None)
++        self._clock = clock
++        self._lock = threading.Lock()           # guards the fields below
++        self._armed: str | None = None          # the covered stage's name while armed
++        self._gen = 0                           # bumped on every arm-from-disarmed and every disarm
++        self._count: dict[str, int] = {}        # per camera: yes answers in a row on new frames
++        self._sig: dict[str, str] = {}          # per camera: signature of the last frame judged
++        self.tripped: str | None = None
++        self.last_answer_t: float | None = None   # clock() of the last yes/no answer on a new frame
++        self.ticks = 0
++        self._closed = threading.Event()
++        self._thread: threading.Thread | None = None
++
++    # -- control -------------------------------------------------------------------------------
++    def arm(self, stage: str) -> None:
++        with self._lock:
++            if self._armed is None:
++                self._gen += 1
++                self._count, self._sig = {}, {}
++                self.last_answer_t = self._clock()   # max_blind_s counts from arming, as the poll guard does
++                self._log("live_guard_armed", stage=stage)
++            self._armed = stage
++
++    @property
++    def armed(self) -> bool:
++        return self._armed is not None
++
++    def disarm(self) -> None:
++        with self._lock:
++            if self._armed is not None:
++                self._log("live_guard_disarmed", stage=self._armed, ticks=self.ticks)
++            self._armed = None
++            self._gen += 1
++
++    def start(self) -> None:
++        if self._thread is None:
++            self._thread = threading.Thread(target=self._loop, name="live-guard", daemon=True)
++            self._thread.start()
++
++    def close(self) -> None:
++        self._closed.set()
++        self.disarm()
++        if self._thread is not None:
++            self._thread.join(timeout=2.0)
++
++    # -- one look ------------------------------------------------------------------------------
++    def step(self) -> None:
++        """One tick: grab, judge each camera, count, maybe stop. The thread calls this; tests call it directly."""
++        with self._lock:
++            stage, gen = self._armed, self._gen
++        if stage is None or self.tripped is not None:
++            return
++        frames = self.source()
++        self.ticks += 1
++        for role in sorted(frames):
++            jpeg = frames[role]
++            sig = hashlib.sha1(jpeg).hexdigest()
++            with self._lock:
++                if gen != self._gen:
++                    return                  # disarmed or re-armed while looking: these answers are stale
++                if sig == self._sig.get(role):
++                    continue                # the same frame again is not a new look
++            answer, why = self.judge({role: jpeg})
++            with self._lock:
++                if gen != self._gen:
++                    return
++                self._sig[role] = sig
++                if answer is None:
++                    continue
++                self.last_answer_t = self._clock()
++                if answer is False:
++                    self._count[role] = 0
++                    continue
++                self._count[role] = count = self._count.get(role, 0) + 1
++            self._log("guard_yes", stage=stage, count=count, reason=why, camera=role, source="live")
++            if count >= self.confirm_frames:
++                self._trip(stage, gen, why)
++                return
++
++    def _trip(self, stage: str, gen: int, why: str) -> None:
++        with self._lock:
++            if gen != self._gen or self.tripped is not None:
++                return
++            self.tripped = why   # set before /stop: the runner sends nothing that moves an arm from here on
++        try:
++            self._stop()
++            self._log("guard_tripped", stage=stage, reason=why, source="live", stop="sent")
++        except Exception as exc:  # noqa: BLE001 - the runner's own stop follows on its next check
++            self._log("guard_tripped", stage=stage, reason=why, source="live", stop=f"failed: {exc}")
++
++    def _loop(self) -> None:
++        while not self._closed.is_set():
++            t = self._clock()
++            try:
++                self.step()
++            except Exception as exc:  # noqa: BLE001 - a bad tick must not kill the guard
++                self._log("live_guard_error", error=f"{type(exc).__name__}: {exc}")
++            self._closed.wait(max(0.0, self.period - (self._clock() - t)))
+diff --git a/harness/plan.py b/harness/plan.py
+index c95efe7..a4ed0da 100644
+--- a/harness/plan.py
++++ b/harness/plan.py
+@@ -14,7 +14,7 @@ RECOVERY_KINDS = ("retry", "reset")
+ ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
+ MAX_PROMPT_CHARS = 512
+ 
+-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts"}
++_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide"}
+ TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
+ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
+                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
+@@ -106,6 +106,26 @@ class Watch:
+     max_fixes: int = 2
+ 
+ 
++_START_POSE_KEYS = {"reference", "tolerance_rad", "home_before", "home_pose", "max_homes"}
++
++
++@dataclass
++class StartPose:
++    """Compare the arms' joints with the starts in the teleop data before a stage's prompt (harness.start_pose).
++    Every check is logged. On stages matching `home_before` (name prefixes), a start farther than `tolerance_rad`
++    from every reference start sends the arms home first, if `home_pose` is itself a reference start for that
++    prompt, at most `max_homes` times per stage. Only for stages where a homing path can't knock anything over."""
++
++    reference: str
++    tolerance_rad: float = 0.35
++    home_before: list[str] = field(default_factory=list)
++    home_pose: dict[str, list[float]] = field(default_factory=lambda: {"left": [0.0] * 6, "right": [0.0] * 6})
++    max_homes: int = 1
++
++    def homes(self, stage_name: str) -> bool:
++        return any(stage_name.startswith(p) for p in self.home_before)
++
++
+ @dataclass
+ class Plan:
+     task: str
+@@ -128,6 +148,10 @@ class Plan:
+     # <piece>, e.g. {"cube": "put the <piece> on top of the stack"}. The piece is the target's next entry after the
+     # tower the monitor last reported. Off (empty) for a fine-tune that only knows its recorded texts.
+     tower_prompts: dict[str, str] = field(default_factory=dict)
++    start_pose: StartPose | None = None
++    # Optional weights for harness.decide's shadow run ({done: {...}, fail: {...}}); None = today's rules as weights.
++    # The shadow only logs `decide` events next to the runner's own calls; it never decides anything.
++    decide: dict[str, Any] | None = None
+ 
+ 
+ def _roles(value: Any, where: str) -> list[str]:
+@@ -329,6 +353,8 @@ def parse_plan(data: Any) -> Plan:
+         guard=guard,
+         tower_target=[x.strip() for x in tower],
+         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
++        start_pose=_start_pose(data.get("start_pose"), [st.name for st in stages]),
++        decide=_decide(data.get("decide")),
+         done_message=done_message,
+         stages=stages,
+         checkpoint=checkpoint,
+@@ -359,6 +385,44 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
+     return {k: v.strip() for k, v in raw.items()}
+ 
+ 
++def _decide(raw: Any) -> dict[str, Any] | None:
++    if raw is None:
++        return None
++    if not isinstance(raw, dict):
++        raise ValueError("plan.decide: must be a mapping")
++    from .decide import weights_from  # noqa: PLC0415
++    weights_from(raw)                 # validate now: a typo in a weight name fails at load, not mid-match
++    return raw
++
++
++def _start_pose(raw: Any, names: list[str]) -> StartPose | None:
++    if raw is None:
++        return None
++    if not isinstance(raw, dict):
++        raise ValueError("plan.start_pose: must be a mapping")
++    extra = set(raw) - _START_POSE_KEYS
++    if extra:
++        raise ValueError(f"plan.start_pose: unknown key(s): {', '.join(sorted(extra))}")
++    ref = _text(raw.get("reference"), "plan.start_pose.reference")
++    home_before = raw.get("home_before") or []
++    if not isinstance(home_before, list) or not all(isinstance(x, str) and x.strip() for x in home_before):
++        raise ValueError("plan.start_pose.home_before: must be a list of stage-name prefixes")
++    for prefix in home_before:
++        if not any(n.startswith(prefix) for n in names):
++            raise ValueError(f"plan.start_pose.home_before: {prefix!r} matches no stage name")
++    home = raw.get("home_pose")
++    if home is None:
++        home = {"left": [0.0] * 6, "right": [0.0] * 6}
++    if not isinstance(home, dict) or set(home) != {"left", "right"} or not all(
++            isinstance(v, list) and len(v) == 6 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
++            for v in home.values()):
++        raise ValueError("plan.start_pose.home_pose: must map left and right to 6 joint angles (rad)")
++    return StartPose(reference=ref, tolerance_rad=float(_num(raw.get("tolerance_rad", 0.35), "plan.start_pose.tolerance_rad")),
++                     home_before=[x.strip() for x in home_before],
++                     home_pose={k: [float(x) for x in v] for k, v in home.items()},
++                     max_homes=int(_num(raw.get("max_homes", 1), "plan.start_pose.max_homes", integer=True)))
++
++
+ def _guard(raw: Any) -> Guard | None:
+     if raw is None:
+         return None
+diff --git a/harness/runner.py b/harness/runner.py
+index 88e711f..f168ef9 100644
+--- a/harness/runner.py
++++ b/harness/runner.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++import hashlib
+ import threading
+ import time
+ from datetime import datetime, timezone
+@@ -12,6 +13,7 @@ from typing import Any
+ from .frames import FrameSource
+ from .log import RunLog
+ from .plan import TOWER_STAGES, Plan, Recovery, Stage
++from .start_pose import StartPoses, joints_from_arms, joints_from_observation
+ from .station_client import StationClient, StationError
+ from .verifiers import MonitorVerdict, Verdict, Verifier
+ 
+@@ -28,6 +30,7 @@ SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-
+ MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prompt change
+ MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-service faults
+ REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
++HOME_RESERVE_S = 30.0      # /home can't be cancelled (the station refuses /stop while homing): need this much left
+ CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
+ 
+ 
+@@ -150,6 +153,19 @@ class Runner:
+         self._refusals: dict[str, int] = {}
+         self._tower: list[str] | None = None   # the tower the monitor last reported, bottom to top
+         self._guard_answer_t: float | None = None   # last time the guard got a yes/no answer
++        # harness.live_guard.LiveGuard: the plan guard on live /frame images in its own thread (sends /stop itself)
++        self.live_guard: Any = None
++        # harness.start_pose.StartPoses for plan.start_pose; None = no start-pose checks
++        self.start_poses: StartPoses | None = None
++        self._homes: dict[str, int] = {}
++        self._fast_sig: dict[str, str] = {}   # per camera: the image the per-poll local guard judged last
++        # harness.decide.Shadow: the decision equations run next to the rules below and log what they would do
++        self.shadow: Any = None
++        try:
++            from .decide import Shadow  # noqa: PLC0415
++            self.shadow = Shadow.from_plan(plan.decide)
++        except Exception as exc:  # noqa: BLE001 (the shadow must never stop a run)
++            log.event("warning", message=f"decide shadow off: {exc}")
+ 
+     def request_stop(self) -> None:
+         self._stop_event.set()
+@@ -193,6 +209,8 @@ class Runner:
+         except TimeoutError as exc:
+             ok, reason = False, str(exc)
+             self._safe_stop(reason)
++        if self.live_guard is not None:
++            self.live_guard.disarm()
+         result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason,
+                            guard_tripped=tripped)
+         self.log.update_manifest(end_time=datetime.now(timezone.utc).isoformat(), ok=ok, reason=reason)
+@@ -227,6 +245,9 @@ class Runner:
+     def _check_global(self) -> None:
+         if self._stop_event.is_set():
+             raise _Stop()
++        lg = self.live_guard
++        if lg is not None and lg.tripped is not None:
++            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
+         if self._clock() - self._t0 > self.plan.time_budget_s:
+             raise _Fail(f"time budget of {self.plan.time_budget_s:g} s exceeded")
+ 
+@@ -250,6 +271,20 @@ class Runner:
+             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
+         return st
+ 
++    def _motion(self, fn: Callable[..., Any], *args: Any) -> Any:
++        """Sends a command that can move an arm, never after an operator stop, the deadline or a guard trip. A live
++        guard trip found right after the command may have been overtaken by it: stop again and end the match."""
++        self._check_global()
++        lg = self.live_guard
++        if lg is not None and fn == self.station.home and lg.armed:
++            # /home can't be stopped once begun: never while the guard could fire (a trip racing this /home)
++            raise _Fail("refusing /home while the live guard is armed")
++        reply = fn(*args)
++        if lg is not None and lg.tripped is not None:
++            self._safe_stop(f"guard tripped while sending a command: {lg.tripped}")
++            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
++        return reply
++
+     def _safe_stop(self, why: str) -> None:
+         self.log.event("stop", why=why)
+         try:
+@@ -258,10 +293,21 @@ class Runner:
+             self.log.event("stop_failed", error=str(exc))
+ 
+     def _wait(self, states: set[str], timeout_s: float, what: str) -> dict[str, Any]:
+-        try:
+-            st = self.station.wait_for_state(states | {"error"}, timeout_s)
+-        except TimeoutError as exc:
+-            raise _Fail(f"timed out waiting for {what}: {exc}") from None
++        # In 1 s slices, so a live-guard trip (its /stop means `states` may never come) ends the wait at once.
++        deadline = time.monotonic() + timeout_s
++        while True:
++            lg = self.live_guard
++            if lg is not None and lg.tripped is not None:
++                raise _Guard(f"guard tripped (live frames) while waiting for {what}: {lg.tripped}")
++            if self._stop_event.is_set():
++                raise _Stop()
++            left = deadline - time.monotonic()
++            try:
++                st = self.station.wait_for_state(states | {"error"}, max(0.0, min(1.0, left)))
++                break
++            except TimeoutError as exc:
++                if left <= 1.0:
++                    raise _Fail(f"timed out waiting for {what}: {exc}") from None
+         if st.get("state") == "error" and "error" not in states:
+             raise _Fail(f"station error: {_err(st.get('last_error'))}")
+         return st
+@@ -285,7 +331,7 @@ class Runner:
+         while True:
+             self._check_global()
+             self.log.event("start", prompt=prompt, checkpoint=self.plan.checkpoint)
+-            self.station.start(prompt, self.plan.checkpoint)
++            self._motion(self.station.start, prompt, self.plan.checkpoint)
+             left = self.plan.time_budget_s - (self._clock() - self._t0)
+             st = self._wait({"running", "error"}, max(5.0, min(START_TIMEOUT_S, left)), "running")
+             if st.get("state") != "error":
+@@ -304,7 +350,8 @@ class Runner:
+         if force_start or st.get("state") != "running":
+             reply, how = self._start_run(prompt), "start"
+         else:
+-            reply, how = self.station.set_prompt(prompt), "set_prompt"
++            self._check_global()
++            reply, how = self._motion(self.station.set_prompt, prompt), "set_prompt"
+             self.log.event("set_prompt", prompt=prompt)
+         self._prompt = prompt
+         chunks = reply.get("chunks") if isinstance(reply, dict) else None
+@@ -406,15 +453,28 @@ class Runner:
+         rise_ref = last_rise = None
+         hint: int | None = None
+         consec_unwatched, watch_fixes = 0, 0
++        if self.shadow is not None:
++            self.shadow.start(stage.timeout_s, stage.stall_s, confirm)
+         while True:
+             self._nap(self.plan.check_every_s)
+             st = self._poll_health()
+             elapsed = self._clock() - t0
+             if st.get("state") == "idle":
+                 return _Attempt(False, "station went idle during the stage", max_p, hint)
+-            if guard is not None and self.fast_guard is not None:
++            if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
++                self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
++            fast_frames = self.frames.latest() if guard is not None and self.fast_guard is not None else {}
++            new_frames = {}
++            for role, jpeg in fast_frames.items():    # kept with a live guard too, as a fallback
++                sig = hashlib.sha1(jpeg).hexdigest()
++                if self._fast_sig.get(role) != sig:
++                    self._fast_sig[role] = sig
++                    new_frames[role] = jpeg
++            if new_frames:
+                 # Local detector on every poll, from the stage's first second: no API latency, works offline.
+-                local, why = self.fast_guard(self.frames.latest())
++                # Only camera images not judged before count: the debug view repeats a trip's frames until the next
++                # one, and a frozen wrist view must neither confirm a yes nor keep max_blind_s satisfied.
++                local, why = self.fast_guard(new_frames)
+                 if isinstance(local, bool):
+                     self._guard_answer_t = self._clock()
+                 if local is True:
+@@ -485,6 +545,9 @@ class Runner:
+                             rise_ref = last_rise = None
+                             continue
+                 sig = getattr(verdict, "frames_sig", None)
++                self._shadow_look(stage, attempt, elapsed, verdict, failing, monitor, consec_stalled, last_rise,
++                                  same=verdict.done is True and sig is not None and sig == last_done_sig
++                                  and not verdict.immediate)
+                 if verdict.done is True and sig is not None and sig == last_done_sig and not verdict.immediate:
+                     # the same camera images judged twice are one look, not two: a frozen view must not confirm
+                     self.log.event("same_frames", stage=stage.name, attempt=attempt,
+@@ -531,6 +594,20 @@ class Runner:
+                     continue
+                 return _Attempt(False, f"timeout after {stage.timeout_s:g} s", max_p, hint)
+ 
++    def _shadow_look(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, failing: bool, monitor: bool,
++                     consec_stalled: int, last_rise: float | None, *, same: bool) -> None:
++        """Logs what harness.decide would decide on this look (event `decide`). Never acts, never raises."""
++        if self.shadow is None:
++            return
++        try:
++            out = self.shadow.look(elapsed, verdict.done, failing, same_frames=same, monitor=monitor,
++                                   consec_stalled=consec_stalled,
++                                   since_rise_s=None if last_rise is None else elapsed - last_rise)
++            self.log.event("decide", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 2), **out)
++        except Exception as exc:  # noqa: BLE001
++            self.log.event("warning", message=f"decide shadow failed, off for this run: {exc}")
++            self.shadow = None
++
+     def _on_target(self, stage: Stage) -> bool:
+         """The last monitor verdict says a gripper holds the stage's object and progress is at least half."""
+         v = getattr(self, "_last_verdict", None)
+@@ -671,6 +748,59 @@ class Runner:
+                        order_ok=tower_matches(self._tower, plan.tower_target))
+         return prompt
+ 
++    def _joint_state(self, st: dict[str, Any]) -> tuple[dict[str, list[float]] | None, str | None]:
++        """Joint angles from GET /arms (add-on, any state), else from the newest trip (only while running: an
++        idle station's last trip predates any /home)."""
++        getter = getattr(self.station, "grippers", None)
++        q = joints_from_arms(getter() if getter else {})
++        if q:
++            return q, "arms"
++        obs = getattr(self.frames, "latest_observation", None)
++        if st.get("state") == "running" and obs is not None:
++            q = joints_from_observation(obs())
++            if q:
++                return q, "trip"
++        return None, None
++
++    def _start_pose_gate(self, stage: Stage, prompt: str, why: str) -> bool:
++        """Logs how far the arms are from the training starts for `prompt`. On a home_before stage with a far start,
++        stops (if running) and homes the arms. Returns True if it homed, so the caller must /start afresh."""
++        cfg = self.plan.start_pose
++        if cfg is None or self.start_poses is None:
++            return False
++        st = self.station.status()
++        joints, source = self._joint_state(st)
++        chk = self.start_poses.check(prompt, joints, cfg.tolerance_rad, source)
++        self.log.event("start_pose", stage=stage.name, why=why, prompt=prompt, tolerance_rad=cfg.tolerance_rad,
++                       **chk.as_event())
++        if chk.status != "far" or not cfg.homes(stage.name):
++            return False
++        if self._homes.get(stage.name, 0) >= cfg.max_homes:
++            self.log.event("start_pose_home", stage=stage.name, done=False, reason=f"max_homes {cfg.max_homes} used")
++            return False
++        home = self.start_poses.check(prompt, cfg.home_pose, cfg.tolerance_rad, "home_pose")
++        if home.status != "ok":
++            self.log.event("start_pose_home", stage=stage.name, done=False,
++                           reason="the home pose is not a training start for this prompt either", **home.as_event())
++            return False
++        left = self.plan.time_budget_s - (self._clock() - self._t0)
++        if left < HOME_RESERVE_S:
++            self.log.event("start_pose_home", stage=stage.name, done=False,
++                           reason=f"only {left:.0f} s left; /home can't be cancelled once started")
++            return False
++        self._check_global()
++        self._homes[stage.name] = self._homes.get(stage.name, 0) + 1
++        self.log.event("start_pose_home", stage=stage.name, done=True, why=why)
++        if st.get("state") != "idle":
++            self.station.stop()
++            self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
++        self._check_global()   # an operator stop, the deadline or a guard trip during the stop: hold, don't home
++        if self.plan.time_budget_s - (self._clock() - self._t0) < HOME_RESERVE_S:
++            raise _Fail("not enough match time left to home safely after the stop")
++        self._motion(self.station.home)
++        self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
++        return True
++
+     def _run_stage(self, stage: Stage, first: bool) -> StageResult:
+         t0 = self._clock()
+         verifier = self.verifiers.get(stage.verifier)
+@@ -679,13 +809,21 @@ class Runner:
+         self._check_global()
+         self._last_progress = None
+         self.log.event("stage_start", stage=stage.name, prompt=stage.prompt)
++        lg = self.live_guard
++        if lg is not None:
++            if self.plan.guard is not None and self.plan.guard.covers(stage.name):
++                lg.arm(stage.name)
++            else:
++                lg.disarm()
+         if stage.skip_unless and not self._precondition(stage, verifier):
+             self.log.event("stage_skipped", stage=stage.name, reason=f"precondition not met: {stage.skip_unless}")
+             return StageResult(stage.name, False, 0, self._clock() - t0, "precondition not met")
+         if stage.skip_if_done and self._entry_check(stage, verifier):
+             self.log.event("stage_already_done", stage=stage.name)
+             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
+-        refused = self._try_issue(self._stage_prompt(stage, verifier), "stage", force_start=first)
++        prompt = self._stage_prompt(stage, verifier)
++        homed = self._start_pose_gate(stage, prompt, "stage start")
++        refused = self._try_issue(prompt, "stage", force_start=first or homed)
+         attempts = 0
+         uses: dict[int, int] = {}
+         last_rec: int | None = None
+@@ -723,9 +861,14 @@ class Runner:
+                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="home_and_retry")
+                 self.station.stop()
+                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
+-                self.station.home()
++                if self.plan.time_budget_s - (self._clock() - self._t0) < HOME_RESERVE_S:
++                    raise _Fail("not enough match time left to home safely after the stop")
++                self._motion(self.station.home)   # checks operator stop, deadline and guard first
+                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
+                 refused = self._try_issue(self._stage_prompt(stage, verifier), "retry", force_start=True)
+             else:
+-                refused = self._try_issue(self._stage_prompt(stage, verifier), "retry")
+-                self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="retry_in_place")
++                prompt = self._stage_prompt(stage, verifier)
++                homed = self._start_pose_gate(stage, prompt, "retry")
++                refused = self._try_issue(prompt, "retry", force_start=homed)
++                self.log.event("retry", stage=stage.name, attempt=attempts + 1,
++                               mode="home_then_retry" if homed else "retry_in_place")
+diff --git a/harness/start_pose.py b/harness/start_pose.py
+new file mode 100644
+index 0000000..bd4abf5
+--- /dev/null
++++ b/harness/start_pose.py
+@@ -0,0 +1,98 @@
++"""Is the robot starting a stage from a pose the policy was trained to start from?
++
++VLAs lose more to an unfamiliar start pose than to anything else measured in LIBERO-Plus (arXiv 2510.13626,
++OpenVLA-OFT: robot initial state -59.9 points, camera -37.4, language -15.6). A fine-tune only saw the starts in
++its teleop episodes. The reference (tools/start_poses.py) is the first frame of every task segment in those
++episodes, keyed by the exact task text, which v4 prompts match byte for byte.
++
++Joint state comes from GET /arms `positions_rad` (station add-on; works while idle) or else from the newest
++debug-view trip's observation `state.left_arm` / `state.right_arm` (only while a run is going).
++Grippers are not compared: open or closed both occur at every start in the data.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++SIDES = ("left", "right")
++
++
++@dataclass
++class PoseCheck:
++    status: str                    # ok | far | no_reference | no_state
++    distance: dict[str, float]     # per arm: max |joint - reference| (rad) to the nearest reference start
++    nearest: str | None            # the reference episode it was nearest to
++    source: str | None             # where the joint state came from
++    joints: dict[str, list[float]] | None
++
++    def as_event(self) -> dict[str, Any]:
++        return {"status": self.status, "distance_rad": {k: round(v, 3) for k, v in self.distance.items()},
++                "nearest": self.nearest, "source": self.source,
++                "joints": {k: [round(x, 3) for x in v] for k, v in (self.joints or {}).items()}}
++
++
++class StartPoses:
++    """prompt -> list of {"left": [6 rad], "right": [6 rad], "episode": "dataset/episode/segment"}."""
++
++    def __init__(self, by_prompt: dict[str, list[dict[str, Any]]]):
++        self.by_prompt = by_prompt
++
++    @classmethod
++    def load(cls, path: str | Path) -> StartPoses:
++        data = json.loads(Path(path).read_text(encoding="utf-8"))
++        by = data.get("by_prompt") if isinstance(data, dict) else None
++        if not isinstance(by, dict):
++            raise ValueError(f"{path}: expected {{'by_prompt': {{prompt: [start, ...]}}}}")
++        return cls(by)
++
++    def nearest(self, prompt: str, joints: dict[str, list[float]]) -> tuple[dict[str, float], str | None]:
++        """Per-arm distance to the reference start that is nearest overall (the larger of the two arm distances)."""
++        best: tuple[float, dict[str, float], str | None] | None = None
++        for ref in self.by_prompt.get(prompt, []):
++            d = {s: _linf(joints[s], ref[s]) for s in SIDES if s in joints and s in ref}
++            if not d:
++                continue
++            worst = max(d.values())
++            if best is None or worst < best[0]:
++                best = (worst, d, ref.get("episode"))
++        return (best[1], best[2]) if best else ({}, None)
++
++    def check(self, prompt: str, joints: dict[str, list[float]] | None, tolerance_rad: float,
++              source: str | None = None) -> PoseCheck:
++        if prompt not in self.by_prompt:
++            return PoseCheck("no_reference", {}, None, source, joints)
++        if not joints:
++            return PoseCheck("no_state", {}, None, source, joints)
++        dist, ep = self.nearest(prompt, joints)
++        if not dist:
++            return PoseCheck("no_state", {}, None, source, joints)
++        status = "ok" if max(dist.values()) <= tolerance_rad else "far"
++        return PoseCheck(status, dist, ep, source, joints)
++
++
++def _linf(a: list[float], b: list[float]) -> float:
++    n = min(len(a), len(b))
++    return max((abs(float(a[i]) - float(b[i])) for i in range(n)), default=0.0)
++
++
++def joints_from_arms(arms: dict[str, Any]) -> dict[str, list[float]] | None:
++    """{side: [rad]} from GET /arms when the add-on reports positions_rad."""
++    out = {}
++    for side in SIDES:
++        q = (arms or {}).get(side, {}).get("positions_rad") if isinstance((arms or {}).get(side), dict) else None
++        if isinstance(q, list) and q:
++            out[side] = [float(x) for x in q]
++    return out or None
++
++
++def joints_from_observation(obs: dict[str, Any] | None) -> dict[str, list[float]] | None:
++    """{side: [rad]} from a debug-view trip observation (`state.left_arm`, `state.right_arm`)."""
++    out = {}
++    for side in SIDES:
++        q = (obs or {}).get(f"state.{side}_arm")
++        if isinstance(q, list) and q and all(isinstance(x, (int, float)) for x in q):
++            out[side] = [float(x) for x in q]
++    return out or None
+diff --git a/plans/hill_climb_v4.yaml b/plans/hill_climb_v4.yaml
+index 70d9718..d7072f1 100644
+--- a/plans/hill_climb_v4.yaml
++++ b/plans/hill_climb_v4.yaml
+@@ -52,6 +52,20 @@ guard:
+   # each, a black ball in the bin loses the match, and nobody would be looking for one.
+   max_blind_s: 20
+ 
++# Start pose (harness/start_pose.py). VLAs lose most to an unfamiliar start pose (LIBERO-Plus: -60 points vs -16 for
++# reworded instructions). start_poses.json holds the first frame of every task segment in the NUC teleop sets
++# (tools/start_poses.py), keyed by the exact task text, so only unplug and put-down have references so far.
++# Every stage start and retry logs the distance (`start_pose` events). Before unplug_cable only, a start farther
++# than tolerance_rad from every recorded start sends the arms home first (once per stage): every recorded unplug
++# set includes home starts, and nothing is built yet that a homing path could knock over.
++# Joint angles come from GET /arms positions_rad (station add-on, needs the new sitecustomize.py) or, while a run
++# is going, from the newest debug-view trip.
++start_pose:
++  reference: start_poses.json
++  tolerance_rad: 0.35
++  home_before: [unplug_cable]
++  max_homes: 1
++
+ # The tower to build (Darsh's photo, Drive IMG_2697, 7 Nov 20:30), bottom to top. The monitor gets it as the expected
+ # result on stack_* / tower_* / higher_* stages and reports the tower it sees; events.jsonl logs `tower` and
+ # `tower_order_ok` on every check. It does NOT gate a stage: the stack prompt is one recorded text, so Dream can't be
+diff --git a/station_addons/sitecustomize.py b/station_addons/sitecustomize.py
+index 1427e0e..e371836 100644
+--- a/station_addons/sitecustomize.py
++++ b/station_addons/sitecustomize.py
+@@ -13,7 +13,9 @@ try:
+             for name, st in self.server.api.controller.arm_states().items():
+                 out[name] = {"gripper": float(st.gripper),
+                              "commanded_gripper": None if st.commanded_gripper is None else float(st.commanded_gripper),
+-                             "gripper_effort": None if st.gripper_effort is None else float(st.gripper_effort)}
++                             "gripper_effort": None if st.gripper_effort is None else float(st.gripper_effort),
++                             # joint angles (rad) for the harness's start-pose check (harness/start_pose.py)
++                             "positions_rad": [float(x) for x in st.positions_rad]}
+             return self._reply(200, out)
+         m = _re.match(r"^/frame/([A-Za-z0-9_]+)\.jpg$", self.path.split("?", 1)[0])
+         if not m:
+diff --git a/tests/test_cable_end.py b/tests/test_cable_end.py
+new file mode 100644
+index 0000000..0366855
+--- /dev/null
++++ b/tests/test_cable_end.py
+@@ -0,0 +1,63 @@
++"""harness.cable_end: ferrule candidates and the USB-C / USB-A classifier."""
++
++from pathlib import Path
++
++import cv2
++import numpy as np
++import pytest
++
++from harness.cable_end import CableEndClassifier, crop, ferrules
++
++ROOT = Path(__file__).resolve().parents[1]
++MODEL = ROOT / "models" / "cable_end.onnx"
++DATA = Path(__file__).parent / "data"
++ORANGE = (0, 70, 235)   # BGR, the anodised ferrule
++
++
++def _table():
++    return np.full((360, 640, 3), (200, 205, 208), np.uint8)
++
++
++def test_a_ferrule_is_a_candidate_and_a_cable_run_is_not():
++    im = _table()
++    cv2.rectangle(im, (300, 160), (340, 182), ORANGE, -1)        # ferrule: compact, filled
++    cv2.line(im, (20, 300), (600, 330), ORANGE, 4)               # cable: long and thin
++    c = ferrules(im)
++    assert len(c) == 1 and abs(c[0]["cx"] - 320) < 3 and abs(c[0]["cy"] - 171) < 3
++    assert c[0]["side"] > 40 * 2                                  # the crop keeps the tip and the relief in view
++    assert crop(im, c[0]).shape == (96, 96, 3)
++
++
++def test_no_orange_no_candidates():
++    assert ferrules(_table()) == []
++
++
++@pytest.mark.skipif(not MODEL.exists(), reason="no trained model")
++def test_photo_ends_are_labelled():
++    clf = CableEndClassifier(MODEL, min_prob=0.5)
++    for name, want in (("cable_usbc_end.jpg", "usb_c"), ("cable_usba_end.jpg", "usb_a")):
++        ends = clf.ends_jpeg((DATA / name).read_bytes())
++        assert ends, name
++        best = max(ends, key=lambda e: e.prob)
++        assert best.label == want, (name, [(e.label, round(e.prob, 2)) for e in ends])
++
++
++@pytest.mark.skipif(not MODEL.exists(), reason="no trained model")
++def test_batches_of_any_size_in_any_order():
++    # OpenCV 5.0 DNN crashed the process when a net was reused with a bigger batch than before (2, 5, 4, 4, 16)
++    clf = CableEndClassifier(MODEL)
++    rng = np.random.default_rng(0)
++    one = rng.random((1, 3, 96, 96)).astype(np.float32)
++    ref = clf._forward(one)
++    for b in (2, 5, 4, 4, 16, 3, 24, 1, 9, 17):
++        x = rng.random((b, 3, 96, 96)).astype(np.float32)
++        x[0] = one[0]
++        out = clf._forward(x)
++        assert out.shape == (b, 3)
++        assert np.abs(out[0] - ref[0]).max() < 1e-4
++
++
++@pytest.mark.skipif(not MODEL.exists(), reason="no trained model")
++def test_plain_table_has_no_ends():
++    clf = CableEndClassifier(MODEL)
++    assert clf.ends(_table()) == []
+diff --git a/tests/test_decide.py b/tests/test_decide.py
+new file mode 100644
+index 0000000..d0f6bd7
+--- /dev/null
++++ b/tests/test_decide.py
+@@ -0,0 +1,137 @@
++"""harness.decide: with default weights the equations make the same calls as the runner's rules."""
++
++import random
++
++
++
++from harness.decide import (Action, AttemptState, DoneWeights, FailWeights, Look, StageModel, action_value,
++                            attempt_fails, choose, look_failing, plan_timeouts, run_looks)
++
++CONFIRM, WINDOW = 2, 15.0
++
++
++def runner_done(looks):
++    """The done branch of Runner._watch, transcribed (frames always present, no immediate verdicts)."""
++    consec_done, last_done_t = 0, None
++    for lk in looks:
++        failing = lk.done is False or lk.failing
++        if lk.done is True and lk.same_frames:
++            continue
++        if lk.done is True:
++            consec_done += 1
++            recent = last_done_t is not None and lk.t - last_done_t <= WINDOW
++            last_done_t = lk.t
++            if consec_done >= CONFIRM or recent:
++                return lk.t
++        elif failing and last_done_t is not None and lk.t - last_done_t <= WINDOW:
++            pass
++        elif failing:
++            consec_done = 0
++        elif lk.done is not None or lk.monitor:
++            consec_done = 0
++    return None
++
++
++def random_looks(rng):
++    t, out, have_done = 0.0, [], False
++    for _ in range(rng.randint(1, 14)):
++        t += rng.choice([1.0, 3.0, 3.0, 6.0, 12.0, 20.0])
++        done = rng.choice([True, True, False, None])
++        out.append(Look(t, done, failing=rng.random() < 0.2, same_frames=have_done and done is True and rng.random() < 0.3,
++                        monitor=rng.random() < 0.8))
++        have_done = have_done or done is True
++    return out
++
++
++def test_default_done_weights_match_the_runner_on_random_sequences():
++    rng = random.Random(7)
++    for _ in range(5000):
++        looks = random_looks(rng)
++        assert run_looks(looks) == runner_done(looks), looks
++
++
++def test_done_cases_by_hand():
++    assert run_looks([Look(3, True), Look(6, True)]) == 6                     # confirm 2
++    assert run_looks([Look(3, True), Look(6, False), Look(9, True)]) == 9      # second done within the window
++    assert run_looks([Look(3, True), Look(25, False), Look(28, True)]) is None  # outside it, the no resets
++    assert run_looks([Look(3, True), Look(6, True, same_frames=True)]) is None  # same frames: one look, not two
++
++
++def test_fast_sensor_evidence_can_pass_a_stage_sooner_when_weighted():
++    looks = [Look(3, True, sensor_release=1.0)]
++    assert run_looks(looks) is None
++    assert run_looks(looks, DoneWeights(w_sensor_release=1.0)) == 3
++
++
++def runner_fails(a: AttemptState) -> bool:
++    """The fail rules of Runner._watch (stall-on-progress only checked past the settle gate, as here)."""
++    if a.consec_fail >= CONFIRM and (not a.monitor or a.elapsed >= 0.5 * a.timeout_s):
++        return True
++    if a.stall_s is not None and a.consec_stalled >= CONFIRM:
++        return True
++    if a.stall_s is not None and a.since_rise_s is not None and a.since_rise_s >= a.stall_s:
++        return True
++    return a.elapsed >= a.timeout_s
++
++
++def test_default_fail_weights_match_the_runner():
++    rng = random.Random(3)
++    for _ in range(20000):
++        timeout = rng.choice([10.0, 20.0, 40.0, 60.0])
++        stall = rng.choice([None, 20.0, 35.0])
++        a = AttemptState(elapsed=rng.uniform(0, 70), timeout_s=timeout, consec_fail=rng.randint(0, 3),
++                         consec_stalled=rng.randint(0, 3), since_rise_s=rng.choice([None, rng.uniform(0, 40)]),
++                         stall_s=stall, monitor=rng.random() < 0.8)
++        assert attempt_fails(a) == runner_fails(a), a
++
++
++def test_a_regression_makes_a_failing_look_not_an_instant_fail():
++    assert look_failing(None, False, progress=0.3, max_progress=0.6, done_seen=False)
++    assert not look_failing(None, False, progress=0.4, max_progress=0.6, done_seen=False)
++    assert not look_failing(None, False, progress=0.3, max_progress=0.6, done_seen=True)
++
++
++def test_sum_combination_lets_weak_signals_add_up():
++    a = AttemptState(elapsed=30, timeout_s=60, consec_fail=1, since_rise_s=10, stall_s=20)
++    assert not attempt_fails(a)                                  # every rule is half way
++    assert attempt_fails(a, FailWeights(combine="sum"))           # together they pass 1
++
++
++STAGES = [
++    StageModel("unplug", value=10, p_max=0.9, tau_c=25, t_min=5, gate=True),
++    StageModel("extra_cable", value=5, p_max=0.5, tau_c=15, t_min=4),
++    StageModel("tower", value=20, p_max=0.7, tau_c=40, t_min=8, gate=True),
++    StageModel("ball", value=5, p_max=0.6, tau_c=12, t_min=4),
++]
++
++
++def test_value_of_time_never_falls_as_time_grows():
++    plan = plan_timeouts(STAGES, 300)
++    for i in range(len(STAGES)):
++        assert all(plan.W[i][L] <= plan.W[i][L + 1] + 1e-9 for L in range(300))
++    assert plan.value(0, 300) > plan.value(0, 60) > 0
++
++
++def test_optional_stage_gets_less_time_when_the_clock_is_short():
++    plan = plan_timeouts(STAGES, 300)
++    assert plan.timeout(1, 60) <= plan.timeout(1, 250)
++    assert plan.timeout(1, 20) == 0 or plan.timeout(1, 20) < plan.timeout(1, 250)   # often skipped when short
++
++
++def test_gate_stage_is_never_skipped_while_it_can_still_pay():
++    plan = plan_timeouts(STAGES, 300)
++    assert plan.timeout(0, 120) > 0 and plan.timeout(2, 100) > 0
++
++
++def test_action_choice_weighs_points_time_and_risk():
++    plan = plan_timeouts(STAGES, 300)
++    keep = Action("keep_going", p=0.5, cost_s=10)
++    reset = Action("reset_then_retry", p=0.7, cost_s=25)
++    risky = Action("reach_across_tower", p=0.8, cost_s=8, risk=0.3)
++    assert choose(plan, 2, 200, [keep, reset, risky]).name != "reach_across_tower"
++    assert action_value(plan, 2, 5, reset) <= action_value(plan, 2, 5, keep)   # 5 s left: a 25 s reset can't pay
++
++
++def test_action_too_long_for_the_clock_is_worth_nothing():
++    plan = plan_timeouts(STAGES, 60)
++    assert action_value(plan, 3, 3, Action("x", p=1.0, cost_s=10)) == 0.0
+diff --git a/tests/test_decide_shadow.py b/tests/test_decide_shadow.py
+new file mode 100644
+index 0000000..abcf9e1
+--- /dev/null
++++ b/tests/test_decide_shadow.py
+@@ -0,0 +1,55 @@
++"""The decide shadow inside a real Runner: logs `decide` events, agrees with the runner on defaults, never acts."""
++
++import pytest
++from conftest import stage
++from test_v2 import Script, build, events, mv
++
++from harness.log import RunLog
++from harness.plan import load_plan
++
++
++def run(fake, write_plan, tmp_path, stages, items, **top):
++    path = write_plan(stages, verifier="monitor", **top)
++    log = RunLog(tmp_path / "runs")
++    result = build(fake, path, tmp_path, Script(items, repeat=False), log).run()
++    return result, events(log, "decide"), log
++
++
++def test_shadow_passes_on_the_same_look_as_the_runner(fake, write_plan, tmp_path):
++    items = [mv(None, progress=0.3, frames_sig="a"), mv(True, progress=1.0, frames_sig="b"),
++             mv(True, progress=1.0, frames_sig="b"),           # same frames: not a second look
++             mv(True, progress=1.0, frames_sig="c")]
++    result, dec, log = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10)], items, confirm=2)
++    assert result.ok
++    assert [d["would_pass"] for d in dec] == [False, False, False, True]
++    assert [d["done_score"] for d in dec] == [0.0, 1.0, 1.0, 2.0]
++
++
++def test_stage_confirm_1_is_followed(fake, write_plan, tmp_path):
++    result, dec, _ = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10, confirm=1)],
++                         [mv(None, frames_sig="a"), mv(True, frames_sig="b")], confirm=2)
++    assert result.ok and [d["would_pass"] for d in dec] == [False, True]
++
++
++def test_shadow_fails_on_the_same_look_as_the_runner(fake, write_plan, tmp_path):
++    items = [mv(None, "stalled"), mv(None, "ok"), mv(None, "stalled"), mv(None, "stalled")]
++    result, dec, _ = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10, stall_s=100, on_fail="skip")],
++                         items, confirm=2)
++    assert result.stages[0].reason.startswith("stalled")
++    assert [d["would_fail"] for d in dec] == [False, False, False, True]
++    assert dec[-1]["terms"]["stalled"] == 1.0
++
++
++def test_plan_weights_change_only_the_log(fake, write_plan, tmp_path):
++    items = [mv(True, frames_sig="a"), mv(None, frames_sig="b"), mv(True, frames_sig="c"), mv(True, frames_sig="d")]
++    result, dec, _ = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10)], items, confirm=2,
++                         decide={"done": {"theta": 1.0}})
++    assert result.ok
++    assert dec[0]["would_pass"] is True        # the shadow (threshold 1) would have passed on the first done
++    assert len(dec) == 3                       # the runner still decided (second done within 15 s): the shadow did not act
++
++
++def test_unknown_weight_is_a_plan_error(write_plan):
++    path = write_plan([stage("a")], decide={"done": {"w_monitr": 2}})
++    with pytest.raises(ValueError, match="unknown weight"):
++        load_plan(path)
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index 53782b3..c9c2d42 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -84,7 +84,7 @@ def test_retry_in_place_without_recovery_resends_prompt(fake, write_plan, tmp_pa
+ 
+ 
+ def test_home_and_retry(fake, write_plan, tmp_path):
+-    path = write_plan([stage("a", on_fail="home_and_retry")])
++    path = write_plan([stage("a", on_fail="home_and_retry")], time_budget_s=300)   # /home needs 30 s left
+     result = build(fake, path, tmp_path, FakeVerifier({"a": [False, True, True, True]})).run()
+     assert result.ok, result.reason
+     assert result.stages[0].attempts == 2
+@@ -250,3 +250,10 @@ def test_hardware_fault_still_ends_the_run(fake, write_plan, tmp_path):
+     result = runner.run()
+     assert not result.ok and "over-current" in result.reason
+     assert '"station_restart"' not in (runner.log.path / "events.jsonl").read_text()
++
++
++def test_home_and_retry_holds_without_time_for_home(fake, write_plan, tmp_path):
++    path = write_plan([stage("a", on_fail="home_and_retry")], time_budget_s=20)
++    result = build(fake, path, tmp_path, FakeVerifier({"a": [False, True]})).run()
++    assert not result.ok and "home safely" in result.reason
++    assert "/home" not in routes(fake)
+diff --git a/tests/test_start_pose_live_guard.py b/tests/test_start_pose_live_guard.py
+new file mode 100644
+index 0000000..bd50640
+--- /dev/null
++++ b/tests/test_start_pose_live_guard.py
+@@ -0,0 +1,424 @@
++"""plan.start_pose (home before a stage when the arms start far from every recorded start) and the live-frame guard."""
++
++import json
++import threading
++
++import pytest
++
++from conftest import stage, wait_until
++from test_v2 import Script, build, events, mv, routes
++from harness.live_guard import LiveFrames, LiveGuard
++from harness.plan import parse_plan
++from harness.start_pose import StartPoses, joints_from_arms, joints_from_observation
++
++HOME = [0.0] * 6
++RAISED = [0.3, -1.7, 0.75, 0.1, 0.05, -0.1]
++
++
++def _ref(**by_prompt):
++    return StartPoses({p: [{"left": l, "right": r, "episode": f"ep{i}"} for i, (l, r) in enumerate(starts)]
++                       for p, starts in by_prompt.items()})
++
++
++# -- start pose: the check --------------------------------------------------------------------------------------------
++def test_check_statuses():
++    ref = _ref(**{"do unplug": [(HOME, HOME)]})
++    near = {"left": HOME, "right": [0.1, 0, 0, 0, 0, 0]}
++    assert ref.check("do unplug", near, 0.35).status == "ok"
++    far = ref.check("do unplug", {"left": HOME, "right": RAISED}, 0.35)
++    assert far.status == "far" and far.distance["right"] == pytest.approx(1.7) and far.nearest == "ep0"
++    assert ref.check("other prompt", near, 0.35).status == "no_reference"
++    assert ref.check("do unplug", None, 0.35).status == "no_state"
++
++
++def test_nearest_start_wins():
++    ref = _ref(p=[(HOME, HOME), (HOME, RAISED)])
++    chk = ref.check("p", {"left": HOME, "right": [0.25, -1.6, 0.7, 0.1, 0.0, -0.1]}, 0.35)
++    assert chk.status == "ok" and chk.nearest == "ep1"
++
++
++def test_joint_sources():
++    assert joints_from_arms({"left": {"gripper": 1.0}, "right": {"gripper": 1.0}}) is None   # old add-on
++    assert joints_from_arms({"right": {"positions_rad": RAISED}}) == {"right": RAISED}
++    assert joints_from_observation({"state.left_arm": HOME, "state.right_arm": RAISED, "prompt": "x"}) == \
++        {"left": HOME, "right": RAISED}
++    assert joints_from_observation({"prompt": "x"}) is None
++
++
++# -- start pose: the plan ---------------------------------------------------------------------------------------------
++def _plan(**sp):
++    return parse_plan({"task": "t", "start_pose": {"reference": "r.json", **sp},
++                       "stages": [{"name": "unplug_cable", "prompt": "u", "success": "u?"}]})
++
++
++def test_start_pose_parses():
++    sp = _plan(home_before=["unplug"], tolerance_rad=0.2).start_pose
++    assert sp.homes("unplug_cable") and sp.tolerance_rad == 0.2 and sp.max_homes == 1 and sp.home_pose["left"] == HOME
++
++
++@pytest.mark.parametrize("sp, match", [
++    ({"home_before": ["stack"]}, "matches no stage"),
++    ({"home_pose": {"left": HOME}}, "home_pose"),
++    ({"tolerance_rad": 0}, "tolerance_rad"),
++    ({"homes": 2}, "unknown key"),
++])
++def test_bad_start_pose_rejected(sp, match):
++    with pytest.raises(ValueError, match=match):
++        _plan(**sp)
++
++
++# -- start pose: the runner -------------------------------------------------------------------------------------------
++def _pose_runner(fake, write_plan, tmp_path, *, right, home_before=("unplug_cable",), refs=None, verdicts=None,
++                 max_attempts=2):
++    path = write_plan([stage("unplug_cable", prompt="do unplug", max_attempts=max_attempts, timeout_s=0.6)],
++                      start_pose={"reference": "unused.json", "home_before": list(home_before)}, time_budget_s=300)
++    runner = build(fake, path, tmp_path, Script(verdicts or [mv(True)]))
++    runner.start_poses = refs or _ref(**{"do unplug": [(HOME, HOME)]})
++    runner.station.grippers = lambda: {"left": {"positions_rad": HOME}, "right": {"positions_rad": right}}
++    return runner
++
++
++def test_far_start_homes_before_the_first_prompt(fake, write_plan, tmp_path):
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
++    assert runner.run().ok
++    r = routes(fake)
++    assert r.index("/home") < r.index("/start")
++    ev = events(runner.log, "start_pose")[0]
++    assert ev["status"] == "far" and ev["source"] == "arms" and ev["why"] == "stage start"
++    assert events(runner.log, "start_pose_home")[0]["done"] is True
++
++
++def test_near_start_does_not_home(fake, write_plan, tmp_path):
++    runner = _pose_runner(fake, write_plan, tmp_path, right=HOME)
++    assert runner.run().ok
++    assert "/home" not in routes(fake)
++    assert events(runner.log, "start_pose")[0]["status"] == "ok"
++
++
++def test_other_stages_only_log(fake, write_plan, tmp_path):
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED, home_before=())
++    assert runner.run().ok
++    assert "/home" not in routes(fake) and events(runner.log, "start_pose")[0]["status"] == "far"
++
++
++def test_no_home_when_home_is_not_a_recorded_start(fake, write_plan, tmp_path):
++    refs = _ref(**{"do unplug": [(HOME, [1.5] * 6)]})
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED, refs=refs)
++    assert runner.run().ok
++    assert "/home" not in routes(fake)
++    assert events(runner.log, "start_pose_home")[0]["done"] is False
++
++
++def test_max_homes_per_stage(fake, write_plan, tmp_path):
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED, verdicts=[mv(False, "failing")], max_attempts=3)
++    runner.run()
++    assert routes(fake).count("/home") == 1          # stage start homed; the retries only logged
++    homes = events(runner.log, "start_pose_home")
++    assert homes[0]["done"] is True and all(h["done"] is False for h in homes[1:]) and len(homes) >= 2
++
++
++def test_retry_after_far_start_homes_then_starts_fresh(fake, write_plan, tmp_path):
++    arms = {"right": HOME, "failed": False}
++    verdict = Script([lambda st, f, e: mv(True) if arms["failed"] else mv(False, "failing")])
++    runner = _pose_runner(fake, write_plan, tmp_path, right=HOME, verdicts=None)
++    runner.verifiers = {k: verdict for k in runner.verifiers}
++    runner.station.grippers = lambda: {"left": {"positions_rad": HOME}, "right": {"positions_rad": arms["right"]}}
++    orig = runner._attempt
++
++    def attempt(*a, **k):
++        out = orig(*a, **k)
++        arms["right"], arms["failed"] = RAISED, True   # the failed attempt left the arm up over the hub
++        return out
++    runner._attempt = attempt
++    assert runner.run().ok
++    r = routes(fake)
++    assert r.count("/home") == 1 and r.count("/start") == 2 and r.index("/home") < len(r) - 1
++    assert [e["mode"] for e in events(runner.log, "retry")] == ["home_then_retry"]
++
++
++def test_no_reference_file_means_no_checks(fake, write_plan, tmp_path):
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
++    runner.start_poses = None
++    assert runner.run().ok and not events(runner.log, "start_pose")
++
++
++def test_reference_tool(tmp_path):
++    pa = pytest.importorskip("pyarrow")
++    pq = pytest.importorskip("pyarrow.parquet")
++    from tools.start_poses import main as build_ref
++    ds = tmp_path / "set"
++    (ds / "meta").mkdir(parents=True)
++    (ds / "data" / "chunk-000").mkdir(parents=True)
++    names = [f"left_joint_{j}" for j in range(6)] + ["left_gripper"] + [f"right_joint_{j}" for j in range(6)] + \
++        ["right_gripper"]
++    (ds / "meta" / "info.json").write_text(json.dumps({"features": {"observation.state": {"names": names}}}))
++    (ds / "meta" / "tasks.jsonl").write_text('{"task_index": 0, "task": "a"}\n{"task_index": 1, "task": "b"}\n')
++    rows = [[0.0] * 7 + [0.1] * 7, [0.0] * 7 + [0.2] * 7, [0.0] * 7 + [0.9] * 7]
++    pq.write_table(pa.table({"observation.state": rows, "task_index": [0, 0, 1]}),
++                   ds / "data" / "chunk-000" / "episode_000000.parquet")
++    out = tmp_path / "ref.json"
++    assert build_ref([str(out), str(ds)]) == 0
++    ref = StartPoses.load(out)
++    assert ref.by_prompt["a"][0]["right"] == [0.1] * 6 and ref.by_prompt["b"][0]["right"] == [0.9] * 6
++    assert ref.by_prompt["b"][0]["episode"] == "set/episode_000000/seg1"
++
++
++# -- live guard -------------------------------------------------------------------------------------------------------
++class _Feed:
++    """Distinct frames each grab unless frozen."""
++
++    def __init__(self):
++        self.n, self.frozen = 0, False
++
++    def __call__(self):
++        if not self.frozen:
++            self.n += 1
++        return {"wrist_r": b"jpeg%d" % self.n}
++
++
++def _guard(answers, confirm=3):
++    stops, log = [], []
++    seq = list(answers)
++    g = LiveGuard(_Feed(), lambda f: seq.pop(0) if seq else (False, "no"), lambda: stops.append(1),
++                  confirm_frames=confirm, log=lambda name, **k: log.append((name, k)))
++    return g, stops, log
++
++
++def test_live_guard_needs_confirm_distinct_yes_in_a_row():
++    g, stops, log = _guard([(True, "y"), (False, "n"), (True, "y"), (None, "?"), (True, "y"), (True, "y")])
++    g.step()                                   # disarmed: nothing is looked at
++    assert g.ticks == 0
++    g.arm("ball_1")
++    for _ in range(6):
++        g.step()
++    assert g.tripped == "y" and stops == [1]
++    assert [k["count"] for n, k in log if n == "guard_yes"] == [1, 1, 2, 3]
++    g.step()
++    assert stops == [1]                        # stops once
++
++
++def test_live_guard_frozen_frames_count_once():
++    g, stops, _ = _guard([(True, "y")] * 5)
++    g.arm("ball_1")
++    g.source.frozen = True
++    for _ in range(5):
++        g.step()
++    assert g.tripped is None and not stops
++
++
++def test_live_guard_answer_time_and_disarm():
++    t = [100.0]
++    g = LiveGuard(_Feed(), lambda f: (False, "n"), lambda: None, clock=lambda: t[0])
++    g.arm("ball_1")
++    assert g.last_answer_t == 100.0
++    t[0] = 105.0
++    g.step()
++    assert g.last_answer_t == 105.0
++    g.disarm()
++    t[0] = 110.0
++    g.step()
++    assert g.last_answer_t == 105.0
++
++
++def test_live_frames_probe_finds_no_route(fake):
++    lf = LiveFrames(fake.api_url, ("wrist_l", "wrist_r"))
++    assert lf.probe() == [] and "404" in lf.last_error
++    assert lf.roles == ["wrist_l", "wrist_r"]          # nothing dropped: a camera that comes back is used again
++
++
++# -- Codex review findings ---------------------------------------------------------------------------------------------
++def test_yes_counts_per_camera_not_across_cameras():
++    n = {"l": 0}
++
++    def feed():
++        n["l"] += 1
++        return {"wrist_l": b"moving%d" % n["l"], "wrist_r": b"frozen-yes"}
++    stops = []
++    g = LiveGuard(feed, lambda f: (True, "y") if "wrist_r" in f else (False, "n"), lambda: stops.append(1))
++    g.arm("ball_1")
++    for _ in range(6):
++        g.step()
++    assert g.tripped is None and not stops            # one frozen yes frame is one look
++
++
++def test_frozen_frames_do_not_refresh_the_blind_clock():
++    t = [100.0]
++    g = LiveGuard(lambda: {"wrist_r": b"same"}, lambda f: (False, "n"), lambda: None, clock=lambda: t[0])
++    g.arm("ball_1")
++    t[0] = 101.0
++    g.step()
++    assert g.last_answer_t == 101.0
++    t[0] = 130.0
++    g.step()
++    assert g.last_answer_t == 101.0                   # max_blind_s will see the camera as blind
++
++
++def test_a_judgment_from_before_a_rearm_is_dropped():
++    g = None
++    stops = []
++
++    def judge(f):
++        g.disarm()
++        g.arm("ball_2")                               # the runner moved on while this frame was being judged
++        return True, "y"
++    g = LiveGuard(_Feed(), judge, lambda: stops.append(1), confirm_frames=1)
++    g.arm("ball_1")
++    g.step()
++    assert g.tripped is None and not stops
++
++
++def test_no_motion_command_after_a_trip(fake, write_plan, tmp_path):
++    from harness.runner import _Guard
++    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
++    g = LiveGuard(_Feed(), lambda f: (True, "y"), lambda: None, confirm_frames=1)
++    runner.live_guard = g
++    g.arm("ball_1")
++    g.step()
++    assert g.tripped
++    before = routes(fake)
++    with pytest.raises(_Guard):
++        runner._motion(runner.station.start, "do ball_1", None)
++    with pytest.raises(_Guard):
++        runner._issue("do ball_1", "stage")
++    assert routes(fake) == before                     # nothing was sent
++
++
++def test_no_home_without_time_reserve(fake, write_plan, tmp_path):
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
++    runner.plan.time_budget_s = 20.0                  # < HOME_RESERVE_S
++    runner.run()
++    assert "/home" not in routes(fake)
++    assert "can't be cancelled" in events(runner.log, "start_pose_home")[0]["reason"]
++
++
++def test_operator_stop_during_the_stop_wait_means_no_home(fake, write_plan, tmp_path):
++    from harness.runner import _Stop
++    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
++    runner._t0 = runner._clock()
++    stage0 = runner.plan.stages[0]
++    runner._issue("do unplug", "stage", force_start=True)          # running, so the gate must /stop first
++    orig_stop = runner.station.stop
++    runner.station.stop = lambda: (runner.request_stop(), orig_stop())[1]
++    with pytest.raises(_Stop):
++        runner._start_pose_gate(stage0, "do unplug", "retry")
++    assert "/home" not in routes(fake)
++
++
++def test_a_trip_ends_a_wait_for_running_at_once(fake, write_plan, tmp_path):
++    import time as _t
++    from harness.runner import _Guard
++    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
++    runner.live_guard = type("G", (), {"tripped": "white ball", "last_answer_t": None})()
++    t0 = _t.monotonic()
++    with pytest.raises(_Guard, match="while waiting for running"):
++        runner._wait({"running"}, 30.0, "running")       # the fake is idle: without the trip this waits 30 s
++    assert _t.monotonic() - t0 < 2.0
++
++
++def test_live_guard_trip_ends_the_match_mid_stage(fake, write_plan, tmp_path):
++    q = "Is a gripper holding a black ball?"
++    path = write_plan([stage("stack", timeout_s=0.3, on_fail="skip"), stage("ball_1", timeout_s=5.0, on_fail="skip"),
++                       stage("ball_2", timeout_s=0.3, on_fail="skip")],
++                      verifier="monitor", guard={"question": q, "stages": ["ball_"]})
++    runner = build(fake, path, tmp_path, Script([mv(None, guard=False)]))
++    armed = threading.Event()
++    g = LiveGuard(_Feed(), lambda f: (True, "white ball between the fingers"), runner.station.stop, rate_hz=50,
++                  confirm_frames=3, log=runner.log.event)
++    orig_arm = g.arm
++    g.arm = lambda s: (orig_arm(s), armed.set())
++    runner.live_guard = g
++    g.start()
++    try:
++        result = runner.run()
++    finally:
++        g.close()
++    assert armed.is_set()
++    assert not result.ok and result.guard_tripped and "live frames" in result.reason
++    assert [r.name for r in result.stages] == ["stack"]
++    trip = [e for e in events(runner.log, "guard_tripped") if e.get("source") == "live"]
++    assert trip and trip[0]["stage"] == "ball_1" and trip[0]["stop"] == "sent"
++    assert routes(fake).count("/stop") >= 1
++    assert not wait_until(lambda: g.ticks > 10_000, timeout=0.05)   # thread is idle after the trip
++
++
++# -- second Codex review -----------------------------------------------------------------------------------------------
++def test_trip_during_a_motion_command_stops_again(fake, write_plan, tmp_path):
++    from harness.runner import _Guard
++    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
++    runner._t0 = runner._clock()
++    g = LiveGuard(_Feed(), lambda f: (True, "y"), lambda: None, confirm_frames=1)
++    runner.live_guard = g
++    g.arm("ball_1")
++
++    def slow_start(prompt, checkpoint):
++        g.step()                                       # the guard trips while this POST is in flight
++        return runner.station.start(prompt, checkpoint)
++    with pytest.raises(_Guard):
++        runner._motion(slow_start, "do ball_1", None)
++    r = routes(fake)
++    assert r[-2:] == ["/start", "/stop"]               # the start that overtook the trip is stopped
++
++
++def test_guard_trip_does_not_wait_for_the_runner():
++    stops = []
++    g = LiveGuard(_Feed(), lambda f: (True, "y"), lambda: stops.append(1), confirm_frames=1)
++    assert not hasattr(g, "command_lock")
++    g.arm("ball_1")
++    g.step()
++    assert stops == [1]
++
++
++def test_per_poll_guard_counts_new_frames_only(fake, write_plan, tmp_path):
++    q = "Is a gripper holding a black ball?"
++    path = write_plan([stage("ball_1", timeout_s=1.5, on_fail="skip")], verifier="monitor",
++                      guard={"question": q, "stages": ["ball_"], "confirm": 2})
++    runner = build(fake, path, tmp_path, Script([mv(None)]))
++    runner.frames.latest = lambda: {"wrist_r": b"the-same-cached-trip"}
++    runner.fast_guard = lambda f: (True, "white ball")
++    result = runner.run()
++    assert not result.guard_tripped                    # one frame, judged once: never two yes answers
++    assert len([e for e in events(runner.log, "guard_yes") if e.get("source") == "local"]) == 1
++
++
++# -- third Codex review ------------------------------------------------------------------------------------------------
++def test_no_home_while_the_live_guard_is_armed(fake, write_plan, tmp_path):
++    from harness.runner import _Fail
++    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
++    runner._t0 = runner._clock()
++    g = LiveGuard(_Feed(), lambda f: (False, "n"), lambda: None)
++    runner.live_guard = g
++    g.arm("ball_1")
++    with pytest.raises(_Fail, match="armed"):
++        runner._motion(runner.station.home)
++    assert "/home" not in routes(fake)
++    g.disarm()
++    runner._motion(runner.station.home)
++    assert "/home" in routes(fake)
++
++
++def test_per_poll_guard_ignores_a_frozen_wrist_when_the_scene_changes(fake, write_plan, tmp_path):
++    q = "Is a gripper holding a black ball?"
++    path = write_plan([stage("ball_1", timeout_s=1.5, on_fail="skip")], verifier="monitor",
++                      guard={"question": q, "stages": ["ball_"], "confirm": 2})
++    runner = build(fake, path, tmp_path, Script([mv(None)]))
++    n = {"i": 0}
++
++    def latest():
++        n["i"] += 1
++        return {"scene": b"scene%d" % n["i"], "wrist_r": b"frozen-wrist"}
++    runner.frames.latest = latest
++    runner.fast_guard = lambda f: (True, "white ball") if "wrist_r" in f else (False, "none")
++    result = runner.run()
++    assert not result.guard_tripped
++    assert len([e for e in events(runner.log, "guard_yes") if e.get("source") == "local"]) == 1
++
++
++def test_a_dead_camera_does_not_slow_the_live_one():
++    import time as _t
++    lf = LiveFrames("http://127.0.0.1:9", ("wrist_l", "wrist_r"))
++    lf._one = lambda role: (_t.sleep(1.0), None)[1] if role == "wrist_l" else (_t.sleep(0.01), b"jpeg")[1]
++    t0 = _t.monotonic()
++    got = [lf.grab(wait_s=0.05) for _ in range(5)]
++    took = _t.monotonic() - t0
++    assert all(g == {"wrist_r": b"jpeg"} for g in got)  # the live camera every tick
++    assert took < 0.5                                  # the dead one (1 s per try) never held a tick up
+diff --git a/tests/test_v2.py b/tests/test_v2.py
+index 43e9941..559a878 100644
+--- a/tests/test_v2.py
++++ b/tests/test_v2.py
+@@ -559,7 +559,7 @@ def test_reset_scene_not_ok_to_the_end_fails_stage(fake, write_plan, tmp_path):
+ 
+ def test_menu_exhausted_falls_back_to_on_fail(fake, write_plan, tmp_path):
+     recs = [{"name": "again", "kind": "retry", "max_uses": 1}]
+-    path = write_plan([stage("a", max_attempts=3, recovery=recs, on_fail="home_and_retry")])
++    path = write_plan([stage("a", max_attempts=3, recovery=recs, on_fail="home_and_retry")], time_budget_s=300)
+     fv = FakeVerifier({"a": [False, False, True, True]})
+     result = build(fake, path, tmp_path, fv).run()
+     assert result.ok and result.stages[0].attempts == 3
+@@ -569,7 +569,7 @@ def test_menu_exhausted_falls_back_to_on_fail(fake, write_plan, tmp_path):
+ 
+ def test_max_uses_two_but_never_same_item_twice_in_a_row(fake, write_plan, tmp_path):
+     recs = [{"name": "again", "kind": "retry", "max_uses": 2}]
+-    path = write_plan([stage("a", max_attempts=4, recovery=recs, on_fail="home_and_retry")])
++    path = write_plan([stage("a", max_attempts=4, recovery=recs, on_fail="home_and_retry")], time_budget_s=300)
+     fv = FakeVerifier({"a": [False, False, False, True, True]})
+     log = RunLog(tmp_path / "runs")
+     assert build(fake, path, tmp_path, fv, log).run().ok
+@@ -586,7 +586,7 @@ def test_legacy_string_recovery_still_in_order(fake, write_plan, tmp_path):
+ 
+ 
+ def test_legacy_string_recovery_ignored_under_home_and_retry(fake, write_plan, tmp_path):
+-    path = write_plan([stage("a", recovery=["r1"], on_fail="home_and_retry")])
++    path = write_plan([stage("a", recovery=["r1"], on_fail="home_and_retry")], time_budget_s=300)
+     fv = FakeVerifier({"a": [False, True, True]})
+     assert build(fake, path, tmp_path, fv).run().ok
+     assert "r1" not in prompts(fake) and "/home" in routes(fake)
+diff --git a/tools/cable_end/render_cable.py b/tools/cable_end/render_cable.py
+new file mode 100644
+index 0000000..11d4327
+--- /dev/null
++++ b/tools/cable_end/render_cable.py
+@@ -0,0 +1,466 @@
++"""Procedural model of the station's orange USB-A to USB-C cable, rendered with domain randomization.
++
++    blender -b -P render_cable.py -- OUT_DIR N_IMAGES BG_DIR [SEED]
++
++Model (mm, from the station photos IMG_2702-2704 and the USB specs):
++- USB-A plug: steel shell 12.0 x 4.5 x 12.0, two latch windows on the top face, dark tongue inside.
++- USB-C plug: steel shell 8.25 x 2.4 x 6.65, stadium cross-section, dark slot.
++- Ferrules: orange anodised aluminium, rounded boxes; A end 13.0 x 7.0 x 19.0, C end 11.0 x 6.0 x 18.0.
++- Strain reliefs: black, 15 mm, ribbed, tapering 6.0 -> 4.6 mm, orange showing between the ribs.
++- Cable: orange rubber, 4.0 mm, 150-220 mm long, random smooth bend in 3D.
++Each image: random cable shape and pose on a plane textured with a random crop of a real station frame or photo,
++random lights (sun + 1-3 area lights, colour temperature, strength), random camera (wide wrist-like or narrow
++lens, 5-40 cm away) aimed at one of: the USB-C end, the USB-A end, the cable middle, a strain relief, empty table.
++Random material roughness/colour jitter, depth of field and motion-free noise. Writes OUT_DIR/<label>/<n>.png
++(224 x 224) and OUT_DIR/labels.jsonl with the projected ferrule length in pixels.
++"""
++
++import json
++import math
++import os
++import random
++import sys
++
++import bpy
++from mathutils import Vector
++
++argv = sys.argv[sys.argv.index("--") + 1:]
++OUT, N, BG = os.path.abspath(argv[0]), int(argv[1]), os.path.abspath(argv[2])
++SEED = int(argv[3]) if len(argv) > 3 else 0
++rng = random.Random(SEED)
++MM = 0.001
++LABELS = ("usb_c", "usb_a", "none")
++
++BGS = [os.path.join(BG, f) for f in sorted(os.listdir(BG)) if f.lower().endswith((".jpg", ".png"))]
++
++
++# ------------------------------------------------------------------------------------------------- scene setup
++def reset():
++    bpy.ops.wm.read_factory_settings(use_empty=True)
++    sc = bpy.context.scene
++    sc.render.engine = "CYCLES"
++    prefs = bpy.context.preferences.addons["cycles"].preferences
++    for kind in ("OPTIX", "CUDA"):
++        try:
++            prefs.compute_device_type = kind
++            prefs.get_devices()
++            for d in prefs.devices:
++                d.use = True
++            sc.cycles.device = "GPU"
++            break
++        except Exception:  # noqa: BLE001
++            continue
++    sc.cycles.samples = 48
++    sc.cycles.use_denoising = True
++    sc.render.resolution_x = sc.render.resolution_y = 224
++    sc.render.film_transparent = False
++    sc.view_settings.view_transform = "Standard"
++    sc.view_settings.exposure = rng.uniform(-1.8, 0.1)
++    return sc
++
++
++def mat(name, color, metallic=0.0, rough=0.5, spec=0.5):
++    m = bpy.data.materials.new(name)
++    m.use_nodes = True
++    b = m.node_tree.nodes["Principled BSDF"]
++    b.inputs["Base Color"].default_value = (*color, 1.0)
++    b.inputs["Metallic"].default_value = metallic
++    b.inputs["Roughness"].default_value = rough
++    return m
++
++
++def jitter(c, amt):
++    return tuple(min(1.0, max(0.0, v * (1 + rng.uniform(-amt, amt)))) for v in c)
++
++
++def mix(a, b, t):
++    return tuple(x + (y - x) * t for x, y in zip(a, b))
++
++
++BRIGHT = (0.9, 0.16, 0.005)      # linear RGB: saturated anodised orange
++SALMON = (0.80, 0.22, 0.10)      # linear RGB: the station cable's copper / salmon look on the wrist cameras
++
++
++def striped(name, base, rough):
++    """Black / orange braid bands along the object's local axis (cable and relief core)."""
++    m = mat(name, base, rough=rough)
++    nt = m.node_tree
++    wave = nt.nodes.new("ShaderNodeTexWave")
++    wave.wave_type = "BANDS"
++    wave.bands_direction = rng.choice(["X", "Y", "Z", "DIAGONAL"])
++    wave.inputs["Scale"].default_value = rng.uniform(40, 160)
++    wave.inputs["Distortion"].default_value = rng.uniform(0, 2)
++    coord = nt.nodes.new("ShaderNodeTexCoord")
++    nt.links.new(coord.outputs["Object"], wave.inputs["Vector"])
++    ramp = nt.nodes.new("ShaderNodeValToRGB")
++    ramp.color_ramp.elements[0].color = (0.02, 0.02, 0.02, 1)
++    ramp.color_ramp.elements[1].color = (*base, 1)
++    ramp.color_ramp.elements[0].position = rng.uniform(0.3, 0.5)
++    ramp.color_ramp.elements[1].position = ramp.color_ramp.elements[0].position + 0.05
++    nt.links.new(wave.outputs["Fac"], ramp.inputs["Fac"])
++    nt.links.new(ramp.outputs["Color"], nt.nodes["Principled BSDF"].inputs["Base Color"])
++    return m
++
++
++def materials():
++    orange = jitter(mix(BRIGHT, SALMON, rng.random()), 0.1)
++    rubber_rough = rng.uniform(0.4, 0.8)
++    rubber = striped("rubber", orange, rubber_rough) if rng.random() < 0.5 else mat("rubber", orange, rough=rubber_rough)
++    return {
++        "orange_anod": mat("anod", jitter(orange, 0.06), metallic=rng.uniform(0.2, 0.9),
++                           rough=rng.uniform(0.2, 0.55)),
++        "orange_rubber": rubber,
++        "black": mat("black", jitter((0.02, 0.02, 0.02), 0.5), rough=rng.uniform(0.4, 0.8)),
++        "steel": mat("steel", jitter((0.75, 0.75, 0.76), 0.1), metallic=1.0, rough=rng.uniform(0.1, 0.35)),
++        "dark": mat("dark", (0.03, 0.03, 0.035), rough=0.6),
++        "strip": mat("strip", jitter((0.03, 0.03, 0.03), 0.5), rough=rng.uniform(0.3, 0.7)),
++        "ball": mat("ball", jitter(mix((0.9, 0.25, 0.08), SALMON, rng.random()), 0.1), rough=rng.uniform(0.3, 0.7)),
++        "skin": mat("skin", jitter(rng.choice([(0.6, 0.35, 0.25), (0.35, 0.17, 0.1), (0.15, 0.07, 0.04),
++                                              (0.8, 0.5, 0.4)]), 0.15), rough=0.5),
++        "blue": mat("blue", jitter((0.02, 0.25, 0.6), 0.15), rough=0.5),
++    }
++
++
++def power_strip(M, face_at, side):
++    """Black power strip whose long side face (the USB ports) is at face_at, facing `side` (horizontal unit).
++    Returns (along unit vector, strip height)."""
++    L, W, H = rng.uniform(0.18, 0.3), rng.uniform(0.045, 0.06), rng.uniform(0.03, 0.045)
++    box = rbox("strip", (L, W, H), 0.004, M["strip"])
++    c = face_at - side * (W / 2)
++    box.location = (c.x + side.y * rng.uniform(-0.3, 0.3) * L, c.y - side.x * rng.uniform(-0.3, 0.3) * L, H / 2)
++    box.rotation_euler = (0, 0, math.atan2(side.x, -side.y))
++    bpy.context.view_layer.update()
++    return Vector((-side.y, side.x, 0)), H
++
++
++def yaw_for(d):
++    """Root yaw so the end's local +Y (towards the tip) points along horizontal d."""
++    return math.atan2(-d.x, d.y)
++
++
++def distractors(M, centre, n):
++    """Golf ball, finger stand-ins, blue block near the cable: the orange-ish things that are not ends."""
++    for _ in range(n):
++        p = centre + Vector((rng.uniform(-0.06, 0.06), rng.uniform(-0.06, 0.06), 0))
++        k = rng.random()
++        if k < 0.4:
++            r = 0.02135
++            bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(p.x, p.y, r))
++            o = bpy.context.object
++            o.data.materials.append(M["ball"])
++            bpy.ops.object.shade_smooth()
++        elif k < 0.75:
++            r = rng.uniform(0.007, 0.01)
++            bpy.ops.mesh.primitive_cylinder_add(radius=r, depth=rng.uniform(0.04, 0.08),
++                                                location=(p.x, p.y, r + rng.uniform(0, 0.04)))
++            o = bpy.context.object
++            o.rotation_euler = (math.pi / 2 + rng.uniform(-0.6, 0.6), 0, rng.uniform(0, 6.28))
++            bev = o.modifiers.new("b", "BEVEL")
++            bev.width, bev.segments = r * 0.9, 6
++            o.data.materials.append(M["skin"])
++        else:
++            s = rng.uniform(0.025, 0.04)
++            o = rbox("block", (s, s, s), 0.002, M["blue"])
++            o.location = (p.x, p.y, s / 2)
++            o.rotation_euler = (0, 0, rng.uniform(0, 6.28))
++    bpy.context.view_layer.update()
++
++
++def rbox(name, size, bevel, m):
++    bpy.ops.mesh.primitive_cube_add(size=1)
++    o = bpy.context.object
++    o.name = name
++    o.scale = size
++    bpy.ops.object.transform_apply(scale=True)
++    if bevel > 0:
++        mod = o.modifiers.new("bev", "BEVEL")
++        mod.width = bevel
++        mod.segments = 4
++    o.data.materials.append(m)
++    return o
++
++
++def stadium(name, w, h, length, m):
++    """Rounded-end slab along +Y (the USB-C shell)."""
++    o = rbox(name, (w, length, h), h * 0.49, m)
++    return o
++
++
++def build_end(kind, M):
++    """One plug + ferrule + strain relief, along +Y from the origin (relief at y<0, tip at y>0). Returns
++    (parent empty, tip centre local, ferrule centre local, ferrule length)."""
++    parts = []
++    if kind == "a":
++        fw, fh, fl = 13.0, 7.0, 19.0
++        tw, th, tl = 12.0, 4.5, 12.0
++    else:
++        fw, fh, fl = 11.0, 6.0, 18.0
++        tw, th, tl = 8.25, 2.4, 6.65
++    fw, fh, fl = (v * rng.uniform(0.95, 1.05) for v in (fw, fh, fl))
++    fer = rbox("ferrule", (fw * MM, fl * MM, fh * MM), min(fw, fh) * 0.25 * MM, M["orange_anod"])
++    fer.location = (0, fl / 2 * MM, 0)
++    parts.append(fer)
++    if kind == "a":
++        shell = rbox("shell", (tw * MM, tl * MM, th * MM), 0.3 * MM, M["steel"])
++        shell.location = (0, (fl + tl / 2) * MM, 0)
++        tongue = rbox("tongue", ((tw - 1.2) * MM, (tl - 0.5) * MM, (th - 1.6) * MM), 0, M["dark"])
++        tongue.location = (0, (fl + tl / 2 + 0.3) * MM, -0.3 * MM)
++        parts += [shell, tongue]
++        for sx in (-2.5, 2.5):   # latch windows on the top face
++            win = rbox("win", (2.0 * MM, 2.5 * MM, 0.3 * MM), 0, M["dark"])
++            win.location = (sx * MM, (fl + tl * 0.55) * MM, (th / 2 + 0.05) * MM)
++            parts.append(win)
++    else:
++        shell = stadium("shell", tw * MM, th * MM, tl * MM, M["steel"])
++        shell.location = (0, (fl + tl / 2) * MM, 0)
++        slot = rbox("slot", ((tw - 1.4) * MM, 0.3 * MM, (th - 1.0) * MM), (th - 1.0) * 0.45 * MM, M["dark"])
++        slot.location = (0, (fl + tl + 0.05) * MM, 0)
++        parts += [shell, slot]
++    # strain relief: tapering ribs
++    n_rib = 7
++    for k in range(n_rib):
++        r = (3.0 - 0.7 * k / n_rib) * MM
++        bpy.ops.mesh.primitive_cylinder_add(radius=r, depth=1.3 * MM, vertices=24)
++        rib = bpy.context.object
++        rib.rotation_euler = (math.pi / 2, 0, 0)
++        rib.location = (0, -(1.0 + k * 2.1) * MM, 0)
++        rib.data.materials.append(M["black"])
++        parts.append(rib)
++    bpy.ops.mesh.primitive_cylinder_add(radius=2.2 * MM, depth=15 * MM, vertices=24)
++    core = bpy.context.object
++    core.rotation_euler = (math.pi / 2, 0, 0)
++    core.location = (0, -7.5 * MM, 0)
++    core.data.materials.append(M["orange_rubber"])
++    parts.append(core)
++    root = bpy.data.objects.new(f"end_{kind}", None)
++    bpy.context.collection.objects.link(root)
++    for p in parts:
++        p.parent = root
++    tip = Vector((0, (fl + tl * 0.5) * MM, 0))
++    return root, tip, Vector((0, fl / 2 * MM, 0)), fl * MM
++
++
++def cable_curve(p0, d0, p1, d1, M):
++    """Orange cable from the C relief end to the A relief end: a Bezier with tangents along each end's axis."""
++    cu = bpy.data.curves.new("cable", "CURVE")
++    cu.dimensions = "3D"
++    cu.bevel_depth = 2.0 * MM
++    cu.bevel_resolution = 4
++    sp = cu.splines.new("BEZIER")
++    sp.bezier_points.add(1)
++    k = (p1 - p0).length * rng.uniform(0.3, 0.6)
++    for bp, p, d, sign in ((sp.bezier_points[0], p0, d0, -1), (sp.bezier_points[1], p1, d1, -1)):
++        bp.co = p
++        bp.handle_left_type = bp.handle_right_type = "FREE"
++        bp.handle_right = p + d * sign * k * (1 if bp is sp.bezier_points[0] else -1)
++        bp.handle_left = p - (bp.handle_right - p)
++    o = bpy.data.objects.new("cable", cu)
++    bpy.context.collection.objects.link(o)
++    o.data.materials.append(M["orange_rubber"])
++    return o
++
++
++def place(root, pos, yaw, pitch=0.0, roll=0.0):
++    root.location = pos
++    root.rotation_euler = (pitch, roll, yaw)
++    bpy.context.view_layer.update()
++
++
++def world_pt(root, local):
++    return root.matrix_world @ local
++
++
++def table(sc):
++    bpy.ops.mesh.primitive_plane_add(size=1.2)
++    pl = bpy.context.object
++    m = bpy.data.materials.new("table")
++    m.use_nodes = True
++    nt = m.node_tree
++    bsdf = nt.nodes["Principled BSDF"]
++    bsdf.inputs["Roughness"].default_value = rng.uniform(0.3, 0.9)
++    if BGS and rng.random() < 0.85:
++        tex = nt.nodes.new("ShaderNodeTexImage")
++        tex.image = bpy.data.images.load(rng.choice(BGS))
++        mapn = nt.nodes.new("ShaderNodeMapping")
++        coord = nt.nodes.new("ShaderNodeTexCoord")
++        s = rng.uniform(0.6, 3.0)
++        mapn.inputs["Scale"].default_value = (s, s, 1)
++        mapn.inputs["Rotation"].default_value = (0, 0, rng.uniform(0, 6.28))
++        mapn.inputs["Location"].default_value = (rng.random(), rng.random(), 0)
++        nt.links.new(coord.outputs["UV"], mapn.inputs["Vector"])
++        nt.links.new(mapn.outputs["Vector"], tex.inputs["Vector"])
++        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
++    else:
++        g = rng.uniform(0.05, 0.9)
++        bsdf.inputs["Base Color"].default_value = (*jitter((g, g, g * rng.uniform(0.9, 1.05)), 0.1), 1)
++    pl.data.materials.append(m)
++    return pl
++
++
++def kelvin(t):
++    t = t / 100.0
++    r = 1.0 if t <= 66 else min(1.0, 1.29 * (t - 60) ** -0.133)
++    g = min(1.0, (0.39 * math.log(t) - 0.63)) if t <= 66 else min(1.0, 1.13 * (t - 60) ** -0.0755)
++    b = 1.0 if t >= 66 else (0.0 if t <= 19 else min(1.0, 0.543 * math.log(t - 10) - 1.19))
++    return (max(r, 0), max(g, 0), max(b, 0))
++
++
++def lights(sc):
++    w = bpy.data.worlds.new("w")
++    sc.world = w
++    w.use_nodes = True
++    w.node_tree.nodes["Background"].inputs["Color"].default_value = (*kelvin(rng.uniform(3000, 7500)), 1)
++    w.node_tree.nodes["Background"].inputs["Strength"].default_value = rng.uniform(0.05, 0.6)
++    bpy.ops.object.light_add(type="SUN", rotation=(rng.uniform(0, 1.2), rng.uniform(-0.6, 0.6), rng.uniform(0, 6.28)))
++    sun = bpy.context.object
++    sun.data.energy = rng.uniform(0.0, 2.5)
++    sun.data.color = kelvin(rng.uniform(3500, 7000))
++    for _ in range(rng.randint(1, 3)):
++        bpy.ops.object.light_add(type="AREA", location=(rng.uniform(-0.6, 0.6), rng.uniform(-0.6, 0.6),
++                                                         rng.uniform(0.4, 2.5)))
++        a = bpy.context.object
++        a.data.size = rng.uniform(0.2, 1.5)
++        a.data.energy = rng.uniform(5, 70)
++        a.data.color = kelvin(rng.uniform(3000, 7500))
++        direction = Vector((0, 0, 0)) - a.location
++        a.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
++
++
++def camera(sc, target, ferrule_len, kind):
++    cam_data = bpy.data.cameras.new("cam")
++    wide = rng.random() < 0.6
++    cam_data.lens = rng.uniform(10, 16) if wide else rng.uniform(24, 60)
++    cam_data.clip_start = 0.001   # the camera is 2-30 cm from the plug; the 10 cm default clips it away
++    cam = bpy.data.objects.new("cam", cam_data)
++    bpy.context.collection.objects.link(cam)
++    sc.camera = cam
++    # distance so the ferrule spans a random share of the frame (what the classifier crop will look like)
++    frac = rng.uniform(0.18, 0.55)
++    fov = 2 * math.atan(cam_data.sensor_width / 2 / cam_data.lens)
++    dist = ferrule_len / frac / (2 * math.tan(fov / 2))
++    el = rng.uniform(math.radians(20), math.radians(88))
++    az = rng.uniform(0, 2 * math.pi)
++    off = Vector((math.cos(az) * math.cos(el), math.sin(az) * math.cos(el), math.sin(el))) * dist
++    cam.location = target + off
++    q = (target - cam.location).to_track_quat("-Z", "Y")
++    cam.rotation_euler = q.to_euler()
++    cam.rotation_euler.rotate_axis("Z", rng.uniform(-math.pi, math.pi))
++    if rng.random() < 0.3:
++        cam_data.dof.use_dof = True
++        cam_data.dof.focus_distance = dist * rng.uniform(0.85, 1.15)
++        cam_data.dof.aperture_fstop = rng.uniform(2.0, 8.0)
++    return cam, frac
++
++
++def seen(sc, cam, tgt, root):
++    """Line of sight from the camera to the target: for an end, the first thing hit must be part of that end (or
++    nothing before it); for 'none', the camera must not be inside or right against an object."""
++    dg = bpy.context.evaluated_depsgraph_get()
++    o = cam.matrix_world.translation
++    if sc.ray_cast(dg, o, Vector((0, 0, 1)), distance=1.0)[0]:
++        return False     # something right above the camera: it is inside an object (the strip, the ball)
++    v = tgt - o
++    dist = v.length
++    hit, loc, _, _, obj, _ = sc.ray_cast(dg, o, v.normalized(), distance=dist * 1.2)
++    if not hit:
++        return root is None
++    if root is None:
++        return (loc - o).length > 0.4 * dist
++    return obj.parent == root or (loc - o).length > dist * 0.97
++
++
++def one(i):
++    sc = reset()
++    M = materials()
++    table(sc)
++    lights(sc)
++    c_root, c_tip, c_fer, c_fl = build_end("c", M)
++    a_root, a_tip, a_fer, a_fl = build_end("a", M)
++    length = rng.uniform(0.15, 0.22)
++    yaw = rng.uniform(0, 2 * math.pi)
++    lift = 3.5 * MM
++    place(c_root, Vector((0, 0, lift)), yaw + rng.uniform(-0.9, 0.9), rng.uniform(-0.15, 0.15),
++          rng.choice([0, math.pi / 2, math.pi, -math.pi / 2]) + rng.uniform(-0.2, 0.2))
++    p_a = Vector((math.cos(yaw) * length * 0.7 + rng.uniform(-0.05, 0.05),
++                  math.sin(yaw) * length * 0.7 + rng.uniform(-0.05, 0.05), lift))
++    place(a_root, p_a, yaw + math.pi + rng.uniform(-1.2, 1.2), rng.uniform(-0.15, 0.15),
++          rng.choice([0, math.pi / 2, math.pi, -math.pi / 2]) + rng.uniform(-0.2, 0.2))
++    if rng.random() < 0.15:      # held in the air: tilt the whole end up off the table
++        c_root.location.z += rng.uniform(0.01, 0.08)
++        c_root.rotation_euler.x += rng.uniform(-0.8, 0.8)
++    bpy.context.view_layer.update()
++    rel = lambda root: (root.matrix_world @ Vector((0, -15 * MM, 0)),
++                        (root.matrix_world.to_3x3() @ Vector((0, -1, 0))).normalized())
++    label = rng.choices(LABELS, weights=(0.4, 0.3, 0.3))[0]
++    seated = rng.random() < (0.5 if label == "usb_a" else 0.25)
++    if seated:
++        # the A end seated in a power strip's USB port, often with other cables' A ends next to it
++        side = Vector((-p_a.x, -p_a.y, 0)).normalized()
++        along, H = power_strip(M, p_a, side)
++        z = H * rng.uniform(0.35, 0.65)
++        gap = rng.uniform(0, 1.5) * MM
++        a_root.location = p_a + side * (a_fl + gap) + Vector((0, 0, z))
++        a_root.rotation_euler = (0, rng.choice([0, math.pi]), yaw_for(-side))
++        for k in rng.sample([-2, -1, 1, 2], rng.randint(0, 3)):
++            n_root, _, _, n_fl = build_end("a", M)
++            n_root.location = (p_a + along * k * rng.uniform(0.022, 0.035) + side * (n_fl + rng.uniform(0, 1.5) * MM)
++                               + Vector((0, 0, z)))
++            n_root.rotation_euler = (0, rng.choice([0, math.pi]), yaw_for(-side))
++            bpy.context.view_layer.update()
++            pn, dn = rel(n_root)
++            far = pn + side * rng.uniform(0.08, 0.15) + along * rng.uniform(-0.05, 0.05)
++            far.z = 2 * MM
++            cable_curve(pn, dn, far, -side, M)
++        bpy.context.view_layer.update()
++    pc, dc = rel(c_root)
++    pa, da = rel(a_root)
++    cable_curve(pc, dc, pa, da, M)
++    spots = []
++    if rng.random() < (0.7 if label == "none" else 0.35):
++        centre = rng.choice([pc, pa, (pc + pa) / 2])
++        centre = Vector((centre.x, centre.y, 0))
++        before = set(bpy.data.objects)
++        distractors(M, centre, rng.randint(1, 3))
++        spots = [o.location.copy() for o in bpy.data.objects if o not in before]
++    if label == "usb_c":
++        tgt = (world_pt(c_root, c_fer) + world_pt(c_root, c_tip)) / 2
++        fl = c_fl
++    elif label == "usb_a":
++        tgt = world_pt(a_root, a_fer) if seated else (world_pt(a_root, a_fer) + world_pt(a_root, a_tip)) / 2
++        fl = a_fl
++    else:
++        what = rng.random()
++        if spots and rng.random() < 0.5:
++            tgt = rng.choice(spots).copy()
++        elif what < 0.4:
++            tgt = (pc + pa) / 2 + Vector((rng.uniform(-0.03, 0.03), rng.uniform(-0.03, 0.03), 0))
++        elif what < 0.7:
++            tgt = rng.choice([pc, pa]) + Vector((0, 0, 0))
++        else:
++            tgt = Vector((rng.uniform(-0.3, 0.3), rng.uniform(-0.3, 0.3), 0))
++        fl = rng.uniform(15, 19) * MM
++    tgt += Vector((rng.uniform(-1, 1), rng.uniform(-1, 1), 0)) * fl * 0.25   # not always dead centre
++    want = {"usb_c": c_root, "usb_a": a_root}.get(label)
++    for _ in range(15):
++        cam, frac = camera(sc, tgt, fl, label)
++        if seen(sc, cam, tgt, want):
++            break
++        bpy.data.objects.remove(cam, do_unlink=True)
++    else:
++        return None      # no clear view of the end in this scene: skip it rather than mislabel it
++    d = os.path.join(OUT, label)
++    os.makedirs(d, exist_ok=True)
++    path = os.path.join(d, f"{SEED:03d}_{i:05d}.png")
++    sc.render.filepath = path
++    bpy.ops.render.render(write_still=True)
++    return {"file": os.path.relpath(path, OUT), "label": label, "ferrule_frac": round(frac, 3), "seed": SEED, "i": i}
++
++
++os.makedirs(OUT, exist_ok=True)
++with open(os.path.join(OUT, f"labels_{SEED:03d}.jsonl"), "a", encoding="utf-8") as f:
++    for i in range(N):
++        rec = one(i)
++        if rec is None:
++            continue
++        f.write(json.dumps(rec) + "\n")
++        f.flush()
+diff --git a/tools/cable_end/train.py b/tools/cable_end/train.py
+new file mode 100644
+index 0000000..da1ccbd
+--- /dev/null
++++ b/tools/cable_end/train.py
+@@ -0,0 +1,241 @@
++"""Train the cable-end classifier (usb_c / usb_a / none) on Blender renders + real station crops; export ONNX.
++
++    python train.py [--epochs 12] [--real-train 0.5] [--out cable_end.onnx]
++
++Inputs: synth/<label>/*.png (render_cable.py), real/cands/*.png + real/labels.json + real/cands.json.
++Real crops are split by source video (crops of one video never sit on both sides); the high-resolution photos
++(table_photos/*) are always test. 'unsure' real crops are never used. Reports per-class precision/recall on the real
++test crops for a synthetic-only model and for synthetic + real-train, and checks the exported ONNX against torch
++with OpenCV's DNN module (what the harness runs).
++"""
++
++from __future__ import annotations
++
++import argparse
++import glob
++import json
++import os
++import random
++
++import cv2
++import numpy as np
++import torch
++import torch.nn as nn
++import torchvision
++
++LABELS = ["usb_c", "usb_a", "none"]
++SIZE = 96
++MEAN = np.array([0.485, 0.456, 0.406], np.float32)
++STD = np.array([0.229, 0.224, 0.225], np.float32)
++HERE = os.path.dirname(os.path.abspath(__file__))
++
++
++def prep(bgr: np.ndarray) -> np.ndarray:
++    """BGR uint8 (any size) -> CHW float32 normalised, SIZE x SIZE. The harness does the same in numpy."""
++    im = cv2.resize(bgr, (SIZE, SIZE), interpolation=cv2.INTER_AREA)[:, :, ::-1].astype(np.float32) / 255.0
++    return ((im - MEAN) / STD).transpose(2, 0, 1).copy()
++
++
++def augment(bgr: np.ndarray, rng: random.Random, synth: bool) -> np.ndarray:
++    h, w = bgr.shape[:2]
++    # zoom/shift/rotate: the runtime crop is centred on a detected ferrule but not perfectly
++    z = rng.uniform(0.75, 1.35) if synth else rng.uniform(0.85, 1.15)
++    ang = rng.uniform(-180, 180)
++    M = cv2.getRotationMatrix2D((w / 2 + rng.uniform(-0.1, 0.1) * w, h / 2 + rng.uniform(-0.1, 0.1) * h), ang, z)
++    bgr = cv2.warpAffine(bgr, M, (w, h), borderMode=cv2.BORDER_REFLECT)
++    if rng.random() < 0.5:
++        bgr = cv2.flip(bgr, 1)
++    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
++    hsv[..., 0] = (hsv[..., 0] + rng.uniform(-4, 4)) % 180
++    hsv[..., 1] *= rng.uniform(0.5, 1.3)
++    hsv[..., 2] *= rng.uniform(0.6, 1.4)
++    bgr = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
++    # the wrist cameras: small, soft, compressed. Shrink to a random low res and back, blur, JPEG.
++    if synth or rng.random() < 0.3:
++        lo = rng.randint(24, 96)
++        bgr = cv2.resize(cv2.resize(bgr, (lo, lo), interpolation=cv2.INTER_AREA), (w, h))
++    if rng.random() < 0.4:
++        k = rng.choice([3, 5])
++        bgr = cv2.GaussianBlur(bgr, (k, k), 0)
++    if rng.random() < 0.3:   # motion blur
++        k = rng.randint(3, 9)
++        ker = np.zeros((k, k), np.float32)
++        ker[k // 2, :] = 1.0 / k
++        ker = cv2.warpAffine(ker, cv2.getRotationMatrix2D((k / 2, k / 2), rng.uniform(0, 180), 1), (k, k))
++        bgr = cv2.filter2D(bgr, -1, ker / max(ker.sum(), 1e-6))
++    if rng.random() < 0.6:
++        ok, enc = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, rng.randint(30, 90)])
++        bgr = cv2.imdecode(enc, cv2.IMREAD_COLOR)
++    if rng.random() < 0.3:
++        bgr = np.clip(bgr.astype(np.float32) + np.random.normal(0, rng.uniform(2, 10), bgr.shape), 0, 255).astype(np.uint8)
++    return bgr
++
++
++class DS(torch.utils.data.Dataset):
++    def __init__(self, items, train: bool, seed=0):
++        self.items, self.train = items, train
++        self.rng = random.Random(seed)
++        self.cache: dict[str, np.ndarray] = {}
++
++    def __len__(self):
++        return len(self.items)
++
++    def __getitem__(self, i):
++        path, y, synth = self.items[i]
++        im = self.cache.get(path)
++        if im is None:
++            im = cv2.imread(path)
++            if synth:
++                im = cv2.resize(im, (128, 128), interpolation=cv2.INTER_AREA)
++            self.cache[path] = im
++        if self.train:
++            im = augment(im, self.rng, synth)
++        return torch.from_numpy(prep(im)), y
++
++
++def real_items():
++    labels = {int(k): v for k, v in json.load(open(os.path.join(HERE, "real/labels.json"))).items()}
++    cands = {c["id"]: c for c in json.load(open(os.path.join(HERE, "real/cands.json")))}
++    out = []
++    for i, lab in labels.items():
++        if lab not in LABELS:
++            continue
++        out.append((os.path.join(HERE, f"real/cands/{i:05d}.png"), LABELS.index(lab), cands[i]["src"]))
++    return out
++
++
++def synth_items():
++    out = []
++    for y, lab in enumerate(LABELS):
++        for p in glob.glob(os.path.join(HERE, "synth", lab, "*.png")):
++            out.append((p, y, True))
++    return out
++
++
++def model():
++    m = torchvision.models.mobilenet_v3_small(weights=torchvision.models.MobileNet_V3_Small_Weights.DEFAULT)
++    m.classifier[3] = nn.Linear(m.classifier[3].in_features, len(LABELS))
++    return m
++
++
++def train(items, epochs, dev, seed=0):
++    torch.manual_seed(seed)
++    m = model().to(dev)
++    counts = np.bincount([y for _, y, _ in items], minlength=len(LABELS)).astype(np.float32)
++    w = torch.tensor(counts.sum() / np.maximum(counts, 1) / len(LABELS), device=dev)
++    dl = torch.utils.data.DataLoader(DS(items, True, seed), batch_size=128, shuffle=True, num_workers=0)
++    opt = torch.optim.AdamW(m.parameters(), lr=1e-3, weight_decay=1e-4)
++    sched = torch.optim.lr_scheduler.OneCycleLR(opt, 1e-3, total_steps=epochs * len(dl))
++    lossf = nn.CrossEntropyLoss(weight=w, label_smoothing=0.05)
++    for ep in range(epochs):
++        m.train()
++        tot = n = 0
++        for x, y in dl:
++            x, y = x.to(dev), y.to(dev)
++            loss = lossf(m(x), y)
++            opt.zero_grad()
++            loss.backward()
++            opt.step()
++            sched.step()
++            tot += loss.item() * len(y)
++            n += len(y)
++        print(f"  epoch {ep + 1}/{epochs} loss {tot / n:.3f}", flush=True)
++    return m.eval()
++
++
++@torch.no_grad()
++def predict(m, items, dev):
++    ds = DS(items, False)
++    xs = torch.stack([ds[i][0] for i in range(len(ds))])
++    out = []
++    for k in range(0, len(xs), 256):
++        out.append(torch.softmax(m(xs[k:k + 256].to(dev)), 1).cpu().numpy())
++    return np.concatenate(out) if out else np.zeros((0, len(LABELS)))
++
++
++def report(name, probs, ys):
++    pred = probs.argmax(1)
++    print(f"{name}: n={len(ys)} accuracy {np.mean(pred == ys):.3f}")
++    cm = np.zeros((3, 3), int)
++    for t, p in zip(ys, pred):
++        cm[t, p] += 1
++    print("   true\\pred " + " ".join(f"{l:>6}" for l in LABELS))
++    for t in range(3):
++        print(f"   {LABELS[t]:>9} " + " ".join(f"{cm[t, p]:>6}" for p in range(3)))
++    for k, l in enumerate(LABELS):
++        tp = cm[k, k]
++        prec = tp / max(cm[:, k].sum(), 1)
++        rec = tp / max(cm[k].sum(), 1)
++        print(f"   {l}: precision {prec:.2f} recall {rec:.2f} (n={cm[k].sum()})")
++    return cm
++
++
++def at_threshold(probs, ys, t):
++    """What the harness does: report an end only when its class prob >= t (else nothing)."""
++    pred = probs.argmax(1)
++    conf = probs.max(1)
++    for k, l in enumerate(LABELS[:2]):
++        said = (pred == k) & (conf >= t)
++        tp = int((said & (ys == k)).sum())
++        print(f"   at p>={t}: {l} precision {tp / max(int(said.sum()), 1):.2f} recall {tp / max(int((ys == k).sum()), 1):.2f}"
++              f" ({int(said.sum())} reported)")
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--epochs", type=int, default=12)
++    ap.add_argument("--real-train", type=float, default=0.5, help="share of real source videos used for training")
++    ap.add_argument("--out", default=os.path.join(HERE, "cable_end.onnx"))
++    ap.add_argument("--final", choices=["real", "synth+real"], default="real", help="data for the shipped model")
++    ap.add_argument("--final-only", action="store_true", help="skip the held-out comparisons")
++    args = ap.parse_args()
++    dev = "cuda" if torch.cuda.is_available() else "cpu"
++    print("device", dev)
++    synth = synth_items()
++    real = real_items()
++    print("synthetic", np.bincount([y for _, y, _ in synth], minlength=3), "real", np.bincount([y for _, y, _ in real], minlength=3))
++    srcs = sorted({s for _, _, s in real if "table_photos" not in s})
++    rng = random.Random(0)
++    rng.shuffle(srcs)
++    train_src = set(srcs[: int(len(srcs) * args.real_train)])
++    real_train = [(p, y, False) for p, y, s in real if s in train_src]
++    real_test = [(p, y, False) for p, y, s in real if s not in train_src]
++    ys_test = np.array([y for _, y, _ in real_test])
++    photo = [(p, y, False) for p, y, s in real if "table_photos" in s]
++    ys_photo = np.array([y for _, y, _ in photo])
++    print(f"real train {len(real_train)} test {len(real_test)} (of which photos {len(photo)})")
++
++    def show(name, m):
++        p = predict(m, real_test, dev)
++        report(f"{name} on held-out real videos", p, ys_test)
++        at_threshold(p, ys_test, 0.7)
++        report(f"{name} on held-out photos", predict(m, photo, dev), ys_photo)
++
++    if not args.final_only:
++        print("== synthetic only")
++        show("synthetic-only", train(synth, args.epochs, dev))
++        print("== real only (real oversampled x8)")
++        show("real-only", train(real_train * 8, args.epochs, dev))
++        print("== synthetic + real (real oversampled x8)")
++        show("synthetic+real", train(synth + real_train * 8, args.epochs, dev))
++
++    # The shipped model: every labelled crop (all videos and the photos). 7 Nov, 15 epochs, held-out videos:
++    # real-only 0.944 accuracy vs synthetic+real 0.918 (photos 0.73 vs 0.56), so the renders stay out by default.
++    everything = [(p, y, False) for p, y, s in real]
++    print(f"== final ({args.final}): all {len(everything)} real crops")
++    m1 = train((synth if args.final == "synth+real" else []) + everything * 8, args.epochs, dev)
++    m1 = m1.cpu().eval()
++    torch.onnx.export(m1, torch.zeros(1, 3, SIZE, SIZE), args.out, input_names=["x"], output_names=["logits"],
++                      opset_version=17, dynamo=False)
++    net = cv2.dnn.readNetFromONNX(args.out)
++    xs = np.stack([DS(real_test, False)[i][0].numpy() for i in range(min(64, len(real_test)))])
++    net.setInput(xs)
++    o_cv = net.forward()
++    with torch.no_grad():
++        o_t = m1(torch.from_numpy(xs)).numpy()
++    print(f"ONNX via OpenCV vs torch: max |diff| {np.abs(o_cv - o_t).max():.2e}, argmax agree {np.mean(o_cv.argmax(1) == o_t.argmax(1)):.3f}")
++    print("wrote", args.out, f"{os.path.getsize(args.out) / 1e6:.1f} MB")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/fit_stage_curves.py b/tools/fit_stage_curves.py
+new file mode 100644
+index 0000000..0209482
+--- /dev/null
++++ b/tools/fit_stage_curves.py
+@@ -0,0 +1,122 @@
++"""Fit each stage's success-vs-time curve from run logs, for harness.decide's planner.
++
++    python tools/fit_stage_curves.py RUNS_DIR [RUNS_DIR ...] [--out plans/stage_curves.json] [--horizon 295]
++
++Reads every segments.jsonl under the given directories. One episode = one stage in one run: the time from its
++first attempt's start to the end of its first successful attempt (recoveries and retries included), or, if it
++never succeeded, the total time spent on it (censored: we only know it took longer than that).
++
++Model (harness.decide.StageModel): F(tau) = p_max * (1 - exp(-(tau - t_min) / tau_c)) for tau > t_min. Fitted by
++maximum likelihood on a grid, with censoring: a success at tau adds log f(tau), a censored episode at c adds
++log(1 - F(c)). Stage names are grouped by stripping trailing digits and underscores (ball_1..ball_8 -> ball).
++
++Caveat: most logs so far are from Dream's MuJoCo YAM sim, not the Metal station. Fit station logs separately
++before trusting the timeouts for a match.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import math
++import sys
++from collections import defaultdict
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++from harness.decide import StageModel, plan_timeouts  # noqa: E402
++
++GRID_P = [i / 50 for i in range(1, 51)]
++GRID_TAU = [2.0 * 1.12 ** k for k in range(45)]          # 2 s .. ~330 s
++
++
++def episodes(dirs: list[Path]) -> dict[str, list[tuple[float, bool]]]:
++    """stage group -> [(time, succeeded)]"""
++    out: dict[str, list[tuple[float, bool]]] = defaultdict(list)
++    for d in dirs:
++        for seg_file in d.rglob("segments.jsonl"):
++            runs: dict[str, list[dict]] = defaultdict(list)
++            for line in seg_file.read_text(encoding="utf-8", errors="replace").splitlines():
++                try:
++                    r = json.loads(line)
++                except json.JSONDecodeError:
++                    continue
++                if r.get("t_start") is None or r.get("t_end") is None:
++                    continue
++                runs[r["stage"]].append(r)
++            for name, segs in runs.items():
++                segs.sort(key=lambda r: r["t_start"])
++                t0 = segs[0]["t_start"]
++                ok = next((r for r in segs if r.get("kind") == "stage" and r.get("outcome") == "ok"), None)
++                if ok is not None:
++                    out[group(name)].append((ok["t_end"] - t0, True))
++                else:
++                    out[group(name)].append((max(r["t_end"] for r in segs) - t0, False))
++    return out
++
++
++def group(name: str) -> str:
++    return name.rstrip("0123456789").rstrip("_") or name
++
++
++def loglik(eps: list[tuple[float, bool]], p: float, tau: float, tmin: float) -> float:
++    ll = 0.0
++    for t, ok in eps:
++        if ok:
++            if t <= tmin:
++                return -math.inf
++            ll += math.log(p) - (t - tmin) / tau - math.log(tau)
++        else:
++            F = 0.0 if t <= tmin else p * (1 - math.exp(-(t - tmin) / tau))
++            ll += math.log(max(1e-12, 1 - F))
++    return ll
++
++
++def fit(eps: list[tuple[float, bool]]) -> tuple[float, float, float, float]:
++    """(p_max, tau_c, t_min, loglik)"""
++    succ = [t for t, ok in eps if ok]
++    tmins = [0.0] if not succ else sorted({0.0, *(round(min(succ) * f, 2) for f in (0.25, 0.5, 0.75, 0.95))})
++    best = (0.0, GRID_TAU[0], 0.0, -math.inf)
++    for tmin in tmins:
++        for p in GRID_P:
++            for tau in GRID_TAU:
++                ll = loglik(eps, p, tau, tmin)
++                if ll > best[3]:
++                    best = (p, tau, tmin, ll)
++    return best
++
++
++def main(argv: list[str] | None = None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    ap.add_argument("dirs", nargs="+", type=Path)
++    ap.add_argument("--out", type=Path, default=None)
++    ap.add_argument("--min-episodes", type=int, default=5)
++    a = ap.parse_args(argv)
++    eps = episodes(a.dirs)
++    fitted = {}
++    print(f"{'stage':<24}{'n':>5}{'ok':>5}{'p_max':>8}{'tau_c s':>9}{'t_min s':>9}  median ok s")
++    for name, e in sorted(eps.items()):
++        if len(e) < a.min_episodes:
++            continue
++        p, tau, tmin, _ = fit(e)
++        succ = sorted(t for t, ok in e if ok)
++        med = f"{succ[len(succ) // 2]:.1f}" if succ else "-"
++        print(f"{name:<24}{len(e):>5}{len(succ):>5}{p:>8.2f}{tau:>9.1f}{tmin:>9.1f}  {med}")
++        fitted[name] = {"p_max": p, "tau_c": round(tau, 2), "t_min": tmin, "episodes": len(e), "successes": len(succ)}
++    if a.out:
++        a.out.write_text(json.dumps(fitted, indent=1) + "\n", encoding="utf-8")
++        print("wrote", a.out)
++    return 0
++
++
++def models(curves: dict, spec: list[tuple[str, str, float, bool]]) -> list[StageModel]:
++    """[(stage name, curve group, points, gate)] -> StageModels for plan_timeouts."""
++    out = []
++    for name, grp, value, gate in spec:
++        c = curves[grp]
++        out.append(StageModel(name, value, c["p_max"], c["tau_c"], c["t_min"], gate))
++    return out
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/start_poses.py b/tools/start_poses.py
+new file mode 100644
+index 0000000..9913da2
+--- /dev/null
++++ b/tools/start_poses.py
+@@ -0,0 +1,56 @@
++"""Build the start-pose reference for harness.start_pose from LeRobot teleop datasets.
++
++    python tools/start_poses.py OUT.json DATASET_DIR [DATASET_DIR ...]
++
++For every episode, the first frame of each task segment (a change of task_index starts a segment) becomes one
++reference start under that task's exact text. observation.state is [left 6 joints, left gripper, right 6 joints,
++right gripper] (the Metal/YAM follower layout in meta/info.json); grippers are dropped. Needs pyarrow.
++"""
++
++from __future__ import annotations
++
++import json
++import sys
++from pathlib import Path
++
++
++def segment_starts(dataset: Path) -> list[tuple[str, dict]]:
++    import pyarrow.parquet as pq  # noqa: PLC0415 - only this tool needs it
++
++    info = json.loads((dataset / "meta" / "info.json").read_text(encoding="utf-8"))
++    names = info["features"]["observation.state"]["names"]
++    idx = {side: [names.index(f"{side}_joint_{j}") for j in range(6)] for side in ("left", "right")}
++    tasks = {}
++    for line in (dataset / "meta" / "tasks.jsonl").read_text(encoding="utf-8").splitlines():
++        if line.strip():
++            t = json.loads(line)
++            tasks[t["task_index"]] = t["task"]
++    out = []
++    for f in sorted((dataset / "data").glob("chunk-*/episode_*.parquet")):
++        cols = pq.read_table(f, columns=["observation.state", "task_index"]).to_pydict()
++        prev, seg = None, 0
++        for state, ti in zip(cols["observation.state"], cols["task_index"]):
++            if ti != prev:
++                start = {side: [round(float(state[i]), 4) for i in ids] for side, ids in idx.items()}
++                start["episode"] = f"{dataset.name}/{f.stem}/seg{seg}"
++                out.append((tasks[ti], start))
++                prev, seg = ti, seg + 1
++    return out
++
++
++def main(argv: list[str]) -> int:
++    if len(argv) < 2:
++        print(__doc__)
++        return 2
++    by: dict[str, list[dict]] = {}
++    for d in argv[1:]:
++        for task, start in segment_starts(Path(d)):
++            by.setdefault(task, []).append(start)
++    Path(argv[0]).write_text(json.dumps({"by_prompt": by}, indent=1) + "\n", encoding="utf-8")
++    for task, starts in by.items():
++        print(f"{len(starts):3d}  {task}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main(sys.argv[1:]))

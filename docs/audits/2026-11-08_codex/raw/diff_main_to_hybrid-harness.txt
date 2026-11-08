@@ -1,0 +1,2192 @@
+diff --git a/HARNESS_GUIDE.md b/HARNESS_GUIDE.md
+index b6b44e7..070cfc4 100644
+--- a/HARNESS_GUIDE.md
++++ b/HARNESS_GUIDE.md
+@@ -297,6 +297,44 @@ dimos mcp list-tools                  # in another terminal
+ 
+ **Rules:** an agent choosing stages live is not a human input. Still, check with the organizers before letting any model other than Dream-1 decide prompts in a match.
+ 
++## 6g. Zero-shot base Dream-1: `plans/hybrid_v4.yaml`
++
++Same match structure as `hill_climb_v4.yaml`, written for base Dream-1 instead of a fine-tune:
++
++- **Specific prompts** naming objects by colour and position ("pick up the pink cube ... onto the blue cube"),
++  and `tower_prompts` with `<piece>` and `<top>` so each stacking prompt names the next piece and the one below it.
++- **`rewrite_prompts: true`**: the monitor may answer `next_prompt`, and the runner sends it as the robot's next
++  instruction (at most `REWRITE_MAX` = 3 an attempt, `REWRITE_COOLDOWN_S` = 15 s apart). `prompt_prefix` is put back
++  on a rewrite when the stage's own prompt opens with it (Dream refuses cable work without the "no power" sentence).
++  `system_prompt` holds the station lessons the monitor follows. Logged as `prompt_rewrite`.
++- **`reset_first: true`**: `/reset` and wait for idle before the first stage, so both grippers start open.
++- After Dream's IK error (`SVD did not converge`) the restart is preceded by `/reset` + idle, at most
++  `AUTO_RESET_MAX` = 2 a run (`auto_reset` events).
++- Gripper sensors (`GET /arms`) overrule the monitor's `holding`: a gripper closed fully on nothing is reported as
++  holding nothing, whatever the images seem to show.
++- Frames come from the station's `/frame/<cam>.jpg?w=640` by default (~35 KB a camera, not the debug view's ~2 MB
++  round trips that slowed Dream to 2-6 s); `HARNESS_FRAMES=view` forces the debug view, which is also the fallback.
++- `--skip cable_` drops the cable section for stack + balls practice.
++- **Fine-tune labels must match the prompts we settle on** (stage prompts, tower prompts, logged rewrites).
++
++### `plans/hybrid_v4_long.yaml`: Dream-1's own prompt style
++
++Dream Labs' examples for Dream-1 are short imperatives that each carry a whole task ("Stack the cubes into a single
++tower", "Pick up all markers one by one and put into black pencil holder using both arms"; dreamlabs.ai/research/dream-1).
++This plan has 6 stages instead of 20: one short prompt each for a cable, the whole tower, the stick on top and all the
++balls, with long timeouts and the monitor stepping in only when the robot is on the wrong thing. Run both plans on the
++same table and keep what scores.
++
++### Talking to it while it runs (testing only)
++
++Type plain words and Enter at any time: "skip the next step", "why did it grab the pink one?", "lower the blocks
++more slowly next time". Claude reads each line with the run so far and the newest frames, answers in the terminal,
++and may end the current stage, skip later ones, send the robot a new instruction now, or keep a note that the monitor
++follows for the rest of the run. Notes are appended to `--lessons` (default `lessons/operator.md`) and read into the
++monitor's system prompt on later runs. Everything is in `events.jsonl` (`operator_input`, `operator_reply`,
++`operator_action`) and on the trace page (`python tools/trace_report.py`). `s` + Enter still stops. Any human input
++during a match is a DQ: run matches with `--no-operator`.
++
+ ## 7. Test in simulation (before the robot)
+ 
+ `sim_station.py` serves the same API (8091) and debug view (8093), driven by Dream's MuJoCo YAM simulator (`dream_examples/yam_mujoco`). The harness can't tell it apart from a real station, and nothing physical moves, so `--live` is safe here. Note that the Hill Climb uses Metal arms, while the sim is YAM only. That makes it a test of the harness logic and prompts, not of the real task.
+diff --git a/harness/cli.py b/harness/cli.py
+index deb6510..2bed145 100644
+--- a/harness/cli.py
++++ b/harness/cli.py
+@@ -3,6 +3,7 @@
+ from __future__ import annotations
+ 
+ import argparse
++import os
+ import hashlib
+ import signal
+ import socket
+@@ -12,10 +13,11 @@ from pathlib import Path
+ from . import __version__
+ from .frames import FrameSource
+ from .log import RunLog
++from .operator import Operator, load_lessons
+ from .plan import load_plan
+ from .runner import Runner
+ from .station_client import StationClient, StationError
+-from .verifiers import ManualVerifier, Verifier, make_verifier
++from .verifiers import ManualVerifier, MonitorVerifier, Verifier, make_verifier
+ 
+ SAFETY = """\
+ LIVE RUN. This drives the real robot through the station agent.
+@@ -40,6 +42,17 @@ def _parser() -> argparse.ArgumentParser:
+                         "the monitor's frames")
+     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
+                    help="override every stage's verifier")
++    p.add_argument("--skip", action="append", default=[], metavar="PREFIX",
++                   help="drop the stages whose names start with PREFIX, e.g. --skip cable_ (repeatable; practice)")
++    p.add_argument("--checkpoint", default=None, help="override the plan's checkpoint, e.g. a fine-tune")
++    p.add_argument("--no-rewrite", action="store_true",
++                   help="never send monitor-written prompts (a fine-tune only follows its recorded task texts)")
++    p.add_argument("--budget", type=float, default=None, metavar="S",
++                   help="override the plan's time_budget_s (practice; a match is 295 s)")
++    p.add_argument("--lessons", default="lessons/operator.md", metavar="FILE",
++                   help="operator lessons: read into the monitor's system prompt, and new ones appended")
++    p.add_argument("--no-operator", action="store_true",
++                   help="ignore typed lines other than s (stop). Use this in a match: any human input is a DQ")
+     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
+                    help="fill a {NAME} placeholder in the plan, e.g. --var color=orange (repeatable)")
+     return p
+@@ -59,6 +72,22 @@ def main(argv: list[str] | None = None) -> int:
+     except (ValueError, OSError) as exc:
+         print(f"plan error: {exc}", file=sys.stderr)
+         return 2
++    if args.skip:
++        plan.stages = [st for st in plan.stages if not any(st.name.startswith(x) for x in args.skip)]
++        if not plan.stages:
++            print("plan error: --skip removed every stage", file=sys.stderr)
++            return 2
++    if args.budget:
++        plan.time_budget_s = args.budget
++    if args.checkpoint:
++        plan.checkpoint = args.checkpoint
++    if args.no_rewrite:
++        plan.rewrite_prompts = False
++    lessons_path = None if args.no_operator else Path(args.lessons)
++    lessons = load_lessons(lessons_path)
++    if lessons:
++        plan.system_prompt = (plan.system_prompt + "\n\n" if plan.system_prompt else "") + \
++            "LESSONS FROM THE OPERATOR IN EARLIER TEST RUNS (follow them)\n" + lessons
+     if args.verifier:
+         for stage in plan.stages:
+             stage.verifier = args.verifier
+@@ -94,7 +123,13 @@ def main(argv: list[str] | None = None) -> int:
+             host=socket.gethostname())
+         dry = args.dry_run
+         station = StationClient(station_url, dry_run=dry, log=lambda m: (print(m), log.event("dry_run", message=m))[0])
+-        frames = FrameSource(view_url)
++        # Small single frames from the station's /frame add-on, not whole debug-view round trips: those carry every
++        # camera's 9-frame window (~2 MB a check) over the station's Wi-Fi and slowed Dream from ~0.8 s to 2-6 s.
++        # The debug view is the fallback (no add-on, or HARNESS_FRAMES=view; the mock station has only the view).
++        light = os.environ.get("HARNESS_FRAMES", "view" if args.mock else "station") == "station"
++        frames = FrameSource(view_url, station_url=station_url if light else None)
++        log.update_manifest(frames="station /frame (light)" if light else "debug view /trip",
++                            skipped_prefixes=args.skip, lessons=str(lessons_path) if lessons else None)
+ 
+         holder: dict[str, Runner] = {}
+         manual = None
+@@ -109,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
+             return 2
+ 
+         runner = Runner(plan, station, frames, verifiers, log)
++        if not args.no_operator:
++            monitor = next((m for v in verifiers.values() for m in (v, getattr(v, "second", None))
++                            if isinstance(m, MonitorVerifier)), None)
++            op = Operator(plan, log, transport=monitor._transport if monitor else None,
++                          model=monitor.model if monitor else "claude-haiku-5-5", lessons_path=lessons_path)
++            log.listeners.append(op.record)
++            manual.on_text = op.submit
++            runner.operator = op
+         if args.detect:
+             from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
+             det = TableDetector.from_file(args.detect)
+@@ -126,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
+             pass
+         mode = "DRY RUN" if dry else ("MOCK" if args.mock else "LIVE")
+         print(f"{mode}: {plan.task or '(no task)'}  [{len(plan.stages)} stages]  type s + Enter to stop")
++        if runner.operator is not None:
++            print("Type anything else to talk to the harness (\"skip the next step\", \"why did it grab the pink one?\", "
++                  "\"approach the tower slower next time\"). Testing only: human input in a match is a DQ.")
+         try:
+             result = runner.run()
+         except StationError as exc:
+diff --git a/harness/frames.py b/harness/frames.py
+index e5f638a..62b4fa3 100644
+--- a/harness/frames.py
++++ b/harness/frames.py
+@@ -9,9 +9,17 @@ import urllib.request
+ from typing import Any
+ 
+ 
++## Width of the frames read from the station's /frame add-on (station_url set): 640 px is ~35 KB a camera, where a
++## debug-view round trip carries every camera's whole 9-frame window (~2 MB) over the station's own uplink.
++FRAME_WIDTH = 640
++CAMERAS = ("scene", "wrist_l", "wrist_r")
++
++
+ class FrameSource:
+-    def __init__(self, base_url: str = "http://127.0.0.1:8093", *, timeout_s: float = 5.0):
++    def __init__(self, base_url: str = "http://127.0.0.1:8093", *, timeout_s: float = 5.0,
++                 station_url: str | None = None):
+         self.base_url = base_url.rstrip("/")
++        self.station_url = station_url.rstrip("/") if station_url else None
+         self.timeout_s = timeout_s
+         self.last_error: str | None = None
+         self._cache_n: int | None = None
+@@ -34,6 +42,18 @@ class FrameSource:
+ 
+     def latest(self) -> dict[str, bytes]:
+         """role -> JPEG bytes: the newest frame of each camera in the newest round trip. {} if none."""
++        if self.station_url:
++            out: dict[str, bytes] = {}
++            for cam in CAMERAS:
++                try:
++                    with urllib.request.urlopen(f"{self.station_url}/frame/{cam}.jpg?w={FRAME_WIDTH}",
++                                                timeout=self.timeout_s) as resp:
++                        out[cam] = resp.read()
++                except (urllib.error.URLError, OSError) as exc:
++                    self.last_error = f"{type(exc).__name__}: {exc}"
++            if out:
++                self.last_error = None
++                return out
+         try:
+             trips = self._get_json("/trips")
+             if not isinstance(trips, list) or not trips:
+diff --git a/harness/log.py b/harness/log.py
+index 3a248e3..464babb 100644
+--- a/harness/log.py
++++ b/harness/log.py
+@@ -26,6 +26,7 @@ class RunLog:
+         self._manifest: dict[str, Any] = {}
+         self._lock = threading.Lock()
+         self._seq = 0
++        self.listeners: list = []   # callables (event, fields), e.g. harness.operator.Operator.record
+ 
+     def event(self, event: str, **fields: Any) -> None:
+         record = {"t": round(time.time(), 3), "event": event, **fields}
+@@ -33,6 +34,8 @@ class RunLog:
+         with self._lock:
+             with self._events.open("a", encoding="utf-8") as fh:
+                 fh.write(line + "\n")
++        for fn in self.listeners:
++            fn(event, fields)
+ 
+     def segment(self, **fields: Any) -> None:
+         """One line of segments.jsonl: a stage attempt or a recovery (see DESIGN_v2.md section 7)."""
+diff --git a/harness/operator.py b/harness/operator.py
+new file mode 100644
+index 0000000..1d6b239
+--- /dev/null
++++ b/harness/operator.py
+@@ -0,0 +1,171 @@
++"""The operator talks to the harness in plain words while it runs (testing and tuning only: any human input during a
++match is a DQ).
++
++Each typed line goes to Claude with the plan and the run so far. Claude answers it and says what to do about it:
++end the current stage, skip later stages, send the robot a new instruction now, or keep a lasting note ("next time
++approach the tower from the left") that the monitor follows for the rest of the run and that is saved as a lesson
++for later runs. The runner applies the actions between checks; everything goes to events.jsonl.
++"""
++
++from __future__ import annotations
++
++import base64
++import json
++import threading
++from collections.abc import Callable
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any
++
++from .plan import Plan
++from .verifiers import valid_jpeg
++
++MAX_CONTEXT_EVENTS = 40
++SHOWN = ("stage_start", "prompt_change", "prompt_rewrite", "verdict", "attempt_end", "stage_skipped", "recovery",
++         "retry", "auto_reset", "station_restart", "guard_yes", "operator_input", "operator_reply", "tower_prompt")
++
++INSTRUCTION = """You are the operator's assistant inside a robot test harness. The operator is watching the robot and
++typed the message below. Read it as plain speech: it may be a question ("why did it pick the pink block?"), an order
++("skip the next step", "stop stacking, go to the balls"), or feedback on how to do things ("grip the plug lower next
++time"). Reply to the operator in 1-3 short sentences, then output JSON only between <json> and </json>:
++{"reply": str,
++ "end_current_stage": bool,          // true: give up the current stage now and go on with the next one
++ "skip_stages": [str],                // names of LATER stages to skip (exact names from the stage list)
++ "prompt_now": str|null,              // a new instruction for the robot to follow right now, max 200 characters
++ "note": str|null}                    // lasting feedback for how prompts and judging should go from now on
++This is a test run to tune the harness, not a match: do what the operator asks, even where a match rule would
++forbid it, and never argue. Only set an action the operator asked for. A question alone gets only a reply. When the operator wants to skip or
++move past what the robot is doing now, set end_current_stage true (skip_stages only lists LATER stages); when they
++ask for another task, also skip the stages before it. Set
++"note" only when the operator says how the robot or the judging should do things (it is kept for later runs), never
++for a skip, a stop or another one-off order; word it as their instruction."""
++
++
++@dataclass
++class Actions:
++    end_current_stage: bool = False
++    skip_stages: set[str] = field(default_factory=set)
++    prompts: list[str] = field(default_factory=list)
++    notes: list[str] = field(default_factory=list)
++
++
++def parse_reply(text: str, stage_names: list[str]) -> tuple[str, dict[str, Any]]:
++    start, end = text.rfind("<json>"), text.rfind("</json>")
++    if start < 0 or end < start:
++        return text.strip(), {}
++    try:
++        obj = json.loads(text[start + len("<json>"):end])
++    except ValueError:
++        return text[:start].strip(), {}
++    if not isinstance(obj, dict):
++        return text[:start].strip(), {}
++    out: dict[str, Any] = {}
++    if obj.get("end_current_stage") is True:
++        out["end_current_stage"] = True
++    skips = [s for s in obj.get("skip_stages") or [] if isinstance(s, str) and s in stage_names]
++    if skips:
++        out["skip_stages"] = skips
++    for key, limit in (("prompt_now", 300), ("note", 500)):
++        v = obj.get(key)
++        if isinstance(v, str) and v.strip():
++            out[key] = " ".join(v.split())[:limit]
++    reply = obj.get("reply") if isinstance(obj.get("reply"), str) else text[:start]
++    return reply.strip(), out
++
++
++class Operator:
++    """Collects the operator's lines, asks Claude about each in a background thread, queues the actions."""
++
++    def __init__(self, plan: Plan, log: Any, *, transport: Callable[[dict[str, Any]], dict[str, Any]] | None,
++                 model: str = "claude-haiku-5-5", lessons_path: Path | None = None,
++                 print_fn: Callable[[str], None] = print):
++        self.plan, self.log, self._transport, self.model = plan, log, transport, model
++        self.lessons_path = lessons_path
++        self._print = print_fn
++        self._lock = threading.Lock()
++        self._actions = Actions()
++        self._events: list[str] = []
++        self.status: Callable[[], str] = lambda: ""   # the runner's one-line state (stage, prompt, elapsed)
++        self.frames: Callable[[], dict[str, bytes]] = dict
++
++    # -- what the runner tells it --------------------------------------------------------------
++    def record(self, event: str, fields: dict[str, Any]) -> None:
++        """A condensed copy of the run's events, the context for the operator's questions."""
++        if event not in SHOWN:
++            return
++        keep = {k: v for k, v in fields.items() if k in ("stage", "prompt", "why", "reason", "done", "progress",
++                                                           "status", "holding", "ok", "error", "text", "next")}
++        with self._lock:
++            self._events = (self._events + [f"{event} {json.dumps(keep, default=str)}"])[-MAX_CONTEXT_EVENTS:]
++
++    def take(self) -> Actions:
++        with self._lock:
++            out, self._actions = self._actions, Actions()
++        return out
++
++    # -- the operator's lines ------------------------------------------------------------------
++    def submit(self, line: str) -> None:
++        self.log.event("operator_input", text=line)
++        self.record("operator_input", {"text": line})
++        if self._transport is None:
++            self._print("[operator] logged (no Claude key, so nothing is done with it)")
++            return
++        threading.Thread(target=self._handle, args=(line,), name="operator", daemon=True).start()
++
++    def _handle(self, line: str) -> None:
++        names = [s.name for s in self.plan.stages]
++        with self._lock:
++            context = "\n".join(self._events)
++        stages = "\n".join(f"  {s.name}: {s.prompt}" for s in self.plan.stages)
++        text = (f"Task: {self.plan.task}\nStages in order:\n{stages}\nNow: {self.status()}\n"
++                f"Recent events, oldest first:\n{context}\n\n{INSTRUCTION}\n\nOperator: {line}")
++        content: list[dict[str, Any]] = []
++        for role, jpeg in sorted(self.frames().items()):
++            if valid_jpeg(jpeg):
++                content += [{"type": "text", "text": f"newest {role}"},
++                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
++                                                         "data": base64.b64encode(jpeg).decode("ascii")}}]
++        content.append({"type": "text", "text": text})
++        payload: dict[str, Any] = {"model": self.model, "max_tokens": 2000, "output_config": {"effort": "low"},
++                                   "messages": [{"role": "user", "content": content}]}
++        if self.plan.system_prompt:
++            payload["system"] = self.plan.system_prompt
++        try:
++            reply = self._transport(payload)
++            raw = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
++        except Exception as exc:  # noqa: BLE001 - the operator's question must never end a run
++            self.log.event("operator_reply", text=line, reply=f"error: {type(exc).__name__}: {exc}")
++            self._print(f"[operator] no answer: {type(exc).__name__}")
++            return
++        answer, acts = parse_reply(raw, names)
++        self.log.event("operator_reply", text=line, reply=answer, actions=acts)
++        self.record("operator_reply", {"text": answer})
++        self._print(f"[claude] {answer}" + (f"  -> {acts}" if acts else ""))
++        with self._lock:
++            a = self._actions
++            a.end_current_stage = a.end_current_stage or bool(acts.get("end_current_stage"))
++            a.skip_stages |= set(acts.get("skip_stages", []))
++            if "prompt_now" in acts:
++                a.prompts.append(acts["prompt_now"])
++            if "note" in acts:
++                a.notes.append(acts["note"])
++        if "note" in acts:
++            self._save_lesson(acts["note"], line)
++
++    def _save_lesson(self, note: str, said: str) -> None:
++        if self.lessons_path is None:
++            return
++        try:
++            self.lessons_path.parent.mkdir(parents=True, exist_ok=True)
++            with self.lessons_path.open("a", encoding="utf-8") as fh:
++                fh.write(f"- {note}  (operator: \"{said}\", run {self.log.path.name})\n")
++        except OSError as exc:
++            self.log.event("warning", message=f"lesson not saved: {exc}")
++
++
++def load_lessons(path: Path | None) -> str:
++    """Earlier operator lessons, for the monitor's system prompt. '' when there are none."""
++    if path is None or not path.exists():
++        return ""
++    lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.startswith("- ")]
++    return "\n".join(lines[-20:])
+diff --git a/harness/plan.py b/harness/plan.py
+index c95efe7..b9758e9 100644
+--- a/harness/plan.py
++++ b/harness/plan.py
+@@ -14,11 +14,12 @@ RECOVERY_KINDS = ("retry", "reset")
+ ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
+ MAX_PROMPT_CHARS = 512
+ 
+-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts"}
++_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
++              "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first"}
+ TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
+ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
+                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
+-               "cameras", "camera_notes", "history_cameras", "watch"}
++               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage"}
+ _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
+ 
+ 
+@@ -58,6 +59,7 @@ class Stage:
+     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
+     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
+     watch: Watch | None = None
++    requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
+ 
+     def note_for(self, role: str) -> str:
+         return next((n for k, n in self.camera_notes.items() if k in role), "")
+@@ -126,8 +128,17 @@ class Plan:
+     tower_target: list[str] = field(default_factory=list)
+     # Optional: name the next piece in the prompt instead of the stage's generic one. Shape word -> template with
+     # <piece>, e.g. {"cube": "put the <piece> on top of the stack"}. The piece is the target's next entry after the
+-    # tower the monitor last reported. Off (empty) for a fine-tune that only knows its recorded texts.
++    # tower the monitor last reported; an optional <top> names the piece it goes on. Off (empty) for a fine-tune
++    # that only knows its recorded texts.
+     tower_prompts: dict[str, str] = field(default_factory=dict)
++    system_prompt: str = ""        # the monitor's system prompt: station rules and lessons from testing
++    # Let the monitor write the robot's next prompt (its `next_prompt`), with a cooldown and a cap per attempt.
++    # Base Dream-1 only: a fine-tune follows only its recorded task texts.
++    rewrite_prompts: bool = False
++    # A sentence a rewritten prompt must open with when the stage's own prompt opens with it (Dream refuses cable
++    # work without the "no power" sentence); added when the monitor drops it.
++    prompt_prefix: str = ""
++    reset_first: bool = False      # POST /reset and wait for idle before the first stage: both grippers start open
+ 
+ 
+ def _roles(value: Any, where: str) -> list[str]:
+@@ -235,6 +246,9 @@ def parse_plan(data: Any) -> Plan:
+         label = f"stage {name!r}"
+         if name in seen:
+             raise ValueError(f"{label}.name: duplicate stage name")
++        prerequisite = raw.get("requires_stage")
++        if prerequisite is not None and (not isinstance(prerequisite, str) or prerequisite not in seen):
++            raise ValueError(f"{label}.requires_stage: must name an earlier stage")
+         seen.add(name)
+         unknown = set(raw) - _STAGE_KEYS
+         if unknown:
+@@ -291,6 +305,7 @@ def parse_plan(data: Any) -> Plan:
+                 camera_notes={k: v.strip() for k, v in notes.items()},
+                 history_cameras=hist,
+                 watch=watch,
++                requires_stage=prerequisite,
+             )
+         )
+ 
+@@ -324,9 +339,19 @@ def parse_plan(data: Any) -> Plan:
+     tower = data.get("tower_target") or []
+     if not isinstance(tower, list) or not all(isinstance(x, str) and x.strip() for x in tower):
+         raise ValueError("plan.tower_target: must be a list of pieces, bottom to top")
++    system_prompt = data.get("system_prompt", "") or ""
++    if not isinstance(system_prompt, str):
++        raise ValueError("plan.system_prompt: must be a string")
++    prefix = data.get("prompt_prefix", "") or ""
++    if not isinstance(prefix, str):
++        raise ValueError("plan.prompt_prefix: must be a string")
+     return Plan(
+         task=task,
+         guard=guard,
++        system_prompt=system_prompt.strip(),
++        rewrite_prompts=_bool(data.get("rewrite_prompts", False), "plan.rewrite_prompts"),
++        prompt_prefix=prefix.strip(),
++        reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
+         tower_target=[x.strip() for x in tower],
+         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
+         done_message=done_message,
+@@ -354,7 +379,7 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
+         name = piece.split(",")[0].strip()
+         if not any(name.endswith(k) for k in raw):
+             raise ValueError(f"plan.tower_prompts: no template for {name!r}")
+-        prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name)
++        prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name).replace("<top>", name)
+         _prompt(prompt, "plan.tower_prompts")
+     return {k: v.strip() for k, v in raw.items()}
+ 
+diff --git a/harness/runner.py b/harness/runner.py
+index 88e711f..c1f212e 100644
+--- a/harness/runner.py
++++ b/harness/runner.py
+@@ -29,6 +29,15 @@ MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prom
+ MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-service faults
+ REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
+ CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
++REWRITE_COOLDOWN_S = 15.0  # no monitor-written prompt sooner than this after any prompt change
++REWRITE_MAX = 3            # monitor-written prompts per attempt
++# Dream's eef IK fails now and then ("SVD did not converge"); a plain /start after it often failed again on the
++# station, a /reset (grippers open, arms to the start pose) and the same prompt got past it. At most this many a run.
++RESET_ERRORS = ("SVD did not converge", "LinAlgError")
++AUTO_RESET_MAX = 2
++# Dream overwrites its run record (last-run.csv, last-run_inputs/) on every /start; the station's archiver copies it
++# when it sees the station not running, polling every 3 s. Run 2 (8 Nov) restarted faster and lost 9 min of record.
++ARCHIVE_WAIT_S = 4.0
+ 
+ 
+ @dataclass
+@@ -46,6 +55,7 @@ class _Attempt:
+     reason: str
+     max_progress: float | None = None
+     recovery_hint: int | None = None   # the monitor's chosen recovery index, if any
++    operator: bool = False             # the operator ended it: no recovery, no retry
+ 
+ 
+ @dataclass
+@@ -150,6 +160,11 @@ class Runner:
+         self._refusals: dict[str, int] = {}
+         self._tower: list[str] | None = None   # the tower the monitor last reported, bottom to top
+         self._guard_answer_t: float | None = None   # last time the guard got a yes/no answer
++        self._auto_resets = 0
++        self._done_in_recovery: str | None = None
++        self.operator: Any = None   # harness.operator.Operator: the operator's typed words, turned into actions
++        self._skip: set[str] = set()   # later stages the operator asked to skip
++        self._stage_name = ""
+ 
+     def request_stop(self) -> None:
+         self._stop_event.set()
+@@ -164,8 +179,25 @@ class Runner:
+         self.log.event("run_start", task=self.plan.task, dry_run=dry, stages=[s.name for s in self.plan.stages])
+         try:
+             self._preflight()
+-            for i, stage in enumerate(self.plan.stages):
+-                results.append(self._run_stage(stage, first=(i == 0)))
++            if self.operator is not None:
++                self.operator.status = self._status_line
++                self.operator.frames = self.frames.latest
++            first = True
++            if self.plan.reset_first:
++                self._reset_and_wait("before the first stage: both grippers open")
++            for stage in self.plan.stages:
++                self._apply_operator()
++                if stage.requires_stage and not any(r.name == stage.requires_stage and r.ok for r in results):
++                    reason = f"{stage.requires_stage} did not pass"   # e.g. no cable came out: nothing to put down
++                    self.log.event("stage_skipped", stage=stage.name, reason=reason)
++                    results.append(StageResult(stage.name, False, 0, 0.0, reason))
++                    continue
++                if stage.name in self._skip:
++                    self.log.event("stage_skipped", stage=stage.name, reason="operator asked to skip it")
++                    results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
++                    continue
++                results.append(self._run_stage(stage, first=first))
++                first = False
+             failed = [r.name for r in results if not r.ok]
+             ok, reason = (not failed), ("completed" if not failed else f"completed with failed stages: {', '.join(failed)}")
+             self._safe_stop("end of plan")
+@@ -244,6 +276,8 @@ class Runner:
+         st = self.station.status()
+         if st.get("state") == "error":
+             self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
++            self._maybe_reset(st.get("last_error"))
++            self._nap(ARCHIVE_WAIT_S)
+             return self._start_run(self._prompt)
+         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
+         if dead:
+@@ -291,6 +325,49 @@ class Runner:
+             if st.get("state") != "error":
+                 return st
+             self._on_station_error(st.get("last_error"))   # a refusal or fault on the way up: retry or raise
++            self._maybe_reset(st.get("last_error"))
++            self._nap(ARCHIVE_WAIT_S)
++
++    def _reset_and_wait(self, why: str) -> None:
++        reset = getattr(self.station, "reset", None)
++        if reset is None:   # a stand-in station without /reset (experiments.stress SimStation)
++            self.log.event("reset_unavailable", why=why)
++            return
++        self.log.event("reset", why=why)
++        reset()
++        self._nap(1.0)   # let the station leave idle before waiting for it to come back
++        self._wait({"idle"}, START_TIMEOUT_S, "idle after reset")
++
++    def _maybe_reset(self, error: Any) -> None:
++        """Before restarting after Dream's transient IK error: /reset and wait for idle (at most AUTO_RESET_MAX)."""
++        text = _error_text(error)
++        if self._auto_resets < AUTO_RESET_MAX and any(k in text for k in RESET_ERRORS):
++            self._auto_resets += 1
++            self.log.event("auto_reset", error=_err(error), n=self._auto_resets, prompt=self._prompt)
++            self._reset_and_wait(f"auto reset {self._auto_resets} after: {_err(error)}")
++
++    def _status_line(self) -> str:
++        return f"stage {self._stage_name or '(none yet)'}, robot prompt: {self._prompt or '(none)'}, " \
++               f"{self._clock() - self._t0:.0f} s into the run of {self.plan.time_budget_s:g} s"
++
++    def _apply_operator(self) -> tuple[bool, list[str]]:
++        """Takes the operator's queued actions: notes go to the monitor, skips are kept. Returns (end the current
++        stage, prompts to send now)."""
++        if self.operator is None:
++            return False, []
++        acts = self.operator.take()
++        if acts.skip_stages:
++            self._skip |= acts.skip_stages
++            self.log.event("operator_action", action="skip_stages", stages=sorted(acts.skip_stages))
++        monitors = {id(m): m for v in self.verifiers.values() for m in (v, getattr(v, "second", None))
++                    if hasattr(m, "operator_notes")}
++        for note in acts.notes:
++            self.log.event("operator_action", action="note", note=note)
++            for m in monitors.values():
++                m.operator_notes.append(note)
++        if acts.end_current_stage:
++            self.log.event("operator_action", action="end_current_stage", stage=self._stage_name)
++        return acts.end_current_stage, acts.prompts
+ 
+     def _issue(self, prompt: str, why: str, *, force_start: bool = False) -> None:
+         """Gets `prompt` to the robot: set_prompt on a running station, else a fresh start. Logs a prompt_change
+@@ -336,15 +413,22 @@ class Runner:
+         """Grip by feel from /arms: commanded closed and stopped partway -> holding; closed fully -> empty."""
+         getter = getattr(self.station, "grippers", None)
+         arms = getter() if getter else {}
++        # Readings on this station (8 Nov run): right shut on nothing 0.03-0.06, right on a USB plug 0.07-0.09 (a
++        # plug is thin), left idle and shut 0.09-0.14. So only <= 0.06 means empty for sure; up to 0.15 it is a thin
++        # object or nothing, and the wrist image decides. commanded_gripper is null until a run commands it.
+         notes = []
+         for side, g in sorted((arms or {}).items()):
+             cmd, got = g.get("commanded_gripper"), g.get("gripper")
+-            if cmd is None or got is None:
++            if got is None:
+                 continue
+-            if cmd > 0.15:
+-                notes.append(f"{side} gripper open ({got:.2f})")
++            if cmd is not None and cmd > 0.15:
++                notes.append(f"{side} gripper commanded open ({got:.2f})")
+             elif got <= 0.06:
+-                notes.append(f"{side} gripper closed fully on nothing ({got:.2f}): it is NOT holding anything")
++                notes.append(f"{side} gripper shut on nothing ({got:.2f}): it is NOT holding anything")
++            elif got <= 0.15:
++                notes.append(f"{side} gripper nearly shut ({got:.2f}): a thin plug or nothing, judge from its wrist image")
++            elif cmd is None:
++                notes.append(f"{side} gripper opening {got:.2f}")
+             else:
+                 notes.append(f"{side} gripper commanded closed but stopped at {got:.2f}: it is holding something")
+         return "; ".join(notes)
+@@ -355,9 +439,10 @@ class Runner:
+             verifier.grip_note = self._grip_note()
+         fn = getattr(verifier, "check_now", verifier.check) if sync else verifier.check
+         try:
+-            return fn(stage, frames, elapsed)
++            verdict = fn(stage, frames, elapsed)
+         except Exception as exc:
+             return Verdict(None, 0.0, f"verifier raised {type(exc).__name__}: {exc}")
++        return verdict
+ 
+     def _note_progress(self, stage: Stage, verdict: Verdict, st: dict[str, Any]) -> None:
+         """Tracks monitor progress; logs the first check after a prompt change where it moved."""
+@@ -377,7 +462,7 @@ class Runner:
+     def _log_verdict(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, saved: list[str],
+                      st: dict[str, Any]) -> None:
+         extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding", "guard",
+-                                                   "tower")
++                                                   "tower", "next_prompt", "latency_s")
+                  if getattr(verdict, k, None) is not None}
+         tower = getattr(verdict, "tower", None)
+         if tower is not None:
+@@ -406,10 +491,22 @@ class Runner:
+         rise_ref = last_rise = None
+         hint: int | None = None
+         consec_unwatched, watch_fixes = 0, 0
++        rewrites, last_prompt_t = 0, 0.0
+         while True:
+             self._nap(self.plan.check_every_s)
+             st = self._poll_health()
+             elapsed = self._clock() - t0
++            end_now, prompts = self._apply_operator()
++            if end_now:
++                if prompts and self.operator is not None:   # "skip this, do the balls": the prompt is for the next stage
++                    with self.operator._lock:
++                        self.operator._actions.prompts[:0] = prompts
++                return _Attempt(False, "operator ended the stage", max_p, hint, operator=True)
++            for prompt in prompts:
++                self._issue(prompt, "operator")
++                rewrites = REWRITE_MAX   # the operator's prompt stands: no monitor rewrite undoes it (run 3)
++                last_prompt_t, consec_done, consec_fail, consec_stalled = elapsed, 0, 0, 0
++                gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
+             if st.get("state") == "idle":
+                 return _Attempt(False, "station went idle during the stage", max_p, hint)
+             if guard is not None and self.fast_guard is not None:
+@@ -436,8 +533,10 @@ class Runner:
+                     take = getattr(verifier, "take_guard_alert", None)
+                     if answer is not True and take is not None and take():
+                         answer = True   # a yes from a call that was in flight across a stage or prompt change
+-                    if isinstance(answer, bool):
+-                        self._guard_answer_t = self._clock()
++                    n = getattr(verifier, "guard_answers", None)
++                    if isinstance(answer, bool) or (isinstance(n, int) and n != getattr(self, "_guard_n", n)):
++                        self._guard_answer_t = self._clock()   # an answer dropped by a prompt change still saw
++                    self._guard_n = n                           # the scene: the guard is not blind
+                     if answer is True:
+                         consec_guard += 1
+                         self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
+@@ -455,6 +554,24 @@ class Runner:
+                     raise _Guard(f"guard blind in stage {stage.name!r}: no answer for {guard.max_blind_s:g} s")
+                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
+                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
++                nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts else None
++                if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
++                        and last_done_t is None and rewrites < REWRITE_MAX
++                        and elapsed - last_prompt_t >= REWRITE_COOLDOWN_S and nxt != self._prompt):
++                    # The monitor's diagnosis as the robot's next instruction. Its verdict was on the old prompt,
++                    # so the counters and the stall clock start over, after the stage's settle time.
++                    prefix = self.plan.prompt_prefix
++                    if prefix and stage.prompt.startswith(prefix) and not nxt.startswith(prefix):
++                        nxt = f"{prefix} {nxt}"
++                    rewrites, last_prompt_t = rewrites + 1, elapsed
++                    self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, n=rewrites, prompt=nxt,
++                                   previous=self._prompt, reason=verdict.reason)
++                    refused = self._try_issue(nxt, f"monitor next_prompt ({verdict.reason[:120]})")
++                    if refused:
++                        self._issue(stage.prompt, "back to the stage prompt after a refused rewrite")
++                    consec_done = consec_fail = consec_stalled = 0
++                    gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
++                    continue
+                 if monitor:
+                     self._note_progress(stage, verdict, st)
+                     if verdict.recovery is not None:
+@@ -512,10 +629,11 @@ class Runner:
+                         return _Attempt(False, why, max_p, hint)
+                 elif verdict.done is not None or monitor:
+                     consec_done = consec_fail = 0
+-                if stage.stall_s is not None and consec_stalled >= confirm:
++                if stage.stall_s is not None and consec_stalled >= confirm and last_done_t is None:
+                     return _Attempt(False, "stalled: monitor says stalled", max_p, hint)
+-            if (stage.stall_s is not None and last_rise is not None and elapsed >= gate
+-                    and elapsed - last_rise >= stage.stall_s):
++            # No stall once done was seen or progress is at the top: a finished stage cannot "rise" any further.
++            if (stage.stall_s is not None and last_rise is not None and elapsed >= gate and last_done_t is None
++                    and (max_p or 0) < 0.95 and elapsed - last_rise >= stage.stall_s):
+                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
+                                 max_p, hint)
+             if elapsed >= stage.timeout_s:
+@@ -547,7 +665,7 @@ class Runner:
+ 
+     def _reset_scene(self, stage: Stage, rec: Recovery, verifier: Verifier) -> tuple[bool, str]:
+         """kind reset: run the recovery prompt, then wait (up to the cap) for the verifier's scene_ok."""
+-        cap = min(stage.timeout_s / 2, 20.0)
++        cap = min(stage.timeout_s / 2, 12.0)
+         settle = min(rec.settle_s, cap)
+         t0 = self._clock()
+         scene: bool | None = None
+@@ -559,6 +677,8 @@ class Runner:
+                 frames = self._frames_for_check(stage)
+                 verdict = self._ask(verifier, stage, frames, elapsed)
+                 self._note_progress(stage, verdict, st)
++                if verdict.done is True and verdict.confidence >= SKIP_MIN_CONFIDENCE:
++                    self._done_in_recovery = verdict.reason   # 8 Nov: the plug was out here and nobody looked
+                 ok = getattr(verdict, "scene_ok", None)
+                 if ok is not None:
+                     scene = ok
+@@ -639,6 +759,15 @@ class Runner:
+                        confidence=verdict.confidence, reason=verdict.reason, run=bool(ok))
+         return bool(ok)
+ 
++    def _confirm_done(self, stage: Stage, verifier: Verifier) -> bool:
++        """A second, synchronous look after a recovery's scene check saw the stage done (the two-look rule)."""
++        frames = self._frames_for_check(stage)
++        verdict = self._ask(verifier, stage, frames, 0.0, sync=True)
++        ok = verdict.done is True and bool(frames) and verdict.confidence >= SKIP_MIN_CONFIDENCE
++        self.log.event("recovery_done_check", stage=stage.name, done=verdict.done, confidence=verdict.confidence,
++                       reason=verdict.reason, passed=ok)
++        return ok
++
+     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
+         """skip_if_done: one synchronous look before the prompt is sent."""
+         frames = self._frames_for_check(stage)
+@@ -666,7 +795,9 @@ class Runner:
+         if n == 0:
+             n = 1   # an empty tower: the first target piece is the base, so the next to place is the second
+         name = plan.tower_target[n].split(",")[0].strip()
++        top = plan.tower_target[n - 1].split(",")[0].strip()
+         prompt = next(v for k, v in plan.tower_prompts.items() if name.endswith(k)).replace("<piece>", name)
++        prompt = prompt.replace("<top>", top)
+         self.log.event("tower_prompt", stage=stage.name, tower=self._tower, next=name, prompt=prompt,
+                        order_ok=tower_matches(self._tower, plan.tower_target))
+         return prompt
+@@ -678,6 +809,7 @@ class Runner:
+             raise _Fail(f"stage {stage.name!r}: no {stage.verifier!r} verifier configured")
+         self._check_global()
+         self._last_progress = None
++        self._stage_name = stage.name
+         self.log.event("stage_start", stage=stage.name, prompt=stage.prompt)
+         if stage.skip_unless and not self._precondition(stage, verifier):
+             self.log.event("stage_skipped", stage=stage.name, reason=f"precondition not met: {stage.skip_unless}")
+@@ -699,6 +831,9 @@ class Runner:
+                 out = self._attempt(stage, verifier, attempts, self._prompt or stage.prompt)
+             if out.ok:
+                 return StageResult(stage.name, True, attempts, self._clock() - t0, out.reason)
++            if out.operator:
++                self.log.event("stage_skipped", stage=stage.name, reason=out.reason)
++                return StageResult(stage.name, False, attempts, self._clock() - t0, out.reason)
+             reason, hint = out.reason, out.recovery_hint
+             if stage.on_fail == "abort":
+                 raise _Fail(f"stage {stage.name!r} failed (on_fail abort): {reason}")
+@@ -713,7 +848,11 @@ class Runner:
+                     break
+                 uses[idx] = uses.get(idx, 0) + 1
+                 last_rec = idx
++                self._done_in_recovery = None
+                 scene_ok, rreason = self._recover(stage, verifier, attempts, idx)
++                if self._done_in_recovery and self._confirm_done(stage, verifier):
++                    return StageResult(stage.name, True, attempts, self._clock() - t0,
++                                       f"done during recovery: {self._done_in_recovery}")
+                 if scene_ok:
+                     break
+                 attempts += 1
+diff --git a/harness/verifiers.py b/harness/verifiers.py
+index 63c3696..3278ac4 100644
+--- a/harness/verifiers.py
++++ b/harness/verifiers.py
+@@ -8,6 +8,7 @@ import json
+ import os
+ import sys
+ import threading
++import time
+ import urllib.error
+ import urllib.request
+ from collections.abc import Callable
+@@ -40,6 +41,8 @@ class MonitorVerdict(Verdict):
+     watch_ok: bool | None = None  # only for stages with a watcher arm
+     frames_sig: str | None = None  # digest of the newest frames this verdict was computed on
+     tower: list[str] | None = None  # the tower the monitor sees, bottom to top (stacking stages with a tower_target)
++    next_prompt: str | None = None  # the monitor's own instruction for the robot (plan.rewrite_prompts)
++    latency_s: float | None = None  # how long the Claude call took
+ 
+ 
+ def valid_jpeg(data: bytes) -> bool:
+@@ -48,6 +51,50 @@ def valid_jpeg(data: bytes) -> bool:
+     return isinstance(data, (bytes, bytearray)) and len(data) > 4 and data[:2] == b"\xff\xd8" and b"\xff\xd9" in data[-32:]
+ 
+ 
++STITCH_TILE_W = 384     # 4 tiles a row: 1536 px wide, under the API's 1568 px long edge, so nothing is rescaled
++STITCH_COLS = 4
++
++
++def stitch(images: list[tuple[str, bytes]]) -> bytes | None:
++    """All the check's frames as one labelled grid JPEG (tile n shows "n. label"), in order. One mid-size image costs
++    the model far fewer tokens than ~10 separate ones, so the answer comes sooner. None when Pillow can't decode."""
++    try:
++        import io
++
++        from PIL import Image, ImageDraw, ImageFont
++    except ImportError:
++        return None
++    tiles = []
++    for label, jpeg in images:
++        try:
++            im = Image.open(io.BytesIO(jpeg)).convert("RGB")
++        except Exception:  # noqa: BLE001 - a bad frame is left out, not fatal
++            continue
++        h = max(1, round(im.height * STITCH_TILE_W / im.width))
++        tiles.append((label, im.resize((STITCH_TILE_W, h))))
++    if not tiles:
++        return None
++    th = max(t.height for _, t in tiles)
++    rows = (len(tiles) + STITCH_COLS - 1) // STITCH_COLS
++    cols = min(STITCH_COLS, len(tiles))
++    sheet = Image.new("RGB", (cols * STITCH_TILE_W + (cols - 1) * 4, rows * th + (rows - 1) * 4), "white")
++    draw = ImageDraw.Draw(sheet)
++    try:
++        font = ImageFont.load_default(size=15)
++    except TypeError:
++        font = ImageFont.load_default()
++    for i, (label, im) in enumerate(tiles):
++        x, y = (i % STITCH_COLS) * (STITCH_TILE_W + 4), (i // STITCH_COLS) * (th + 4)
++        sheet.paste(im, (x, y))
++        text = f"{i + 1}. {label}"
++        box = draw.textbbox((x + 4, y + 3), text, font=font)
++        draw.rectangle((box[0] - 3, box[1] - 2, box[2] + 3, box[3] + 2), fill="black")
++        draw.text((x + 4, y + 3), text, fill="white", font=font)
++    out = io.BytesIO()
++    sheet.save(out, "JPEG", quality=85)
++    return out.getvalue()
++
++
+ def frames_digest(frames: dict[str, bytes]) -> str:
+     h = hashlib.sha1()
+     for role, jpeg in sorted(frames.items()):
+@@ -73,6 +120,7 @@ class ManualVerifier:
+         self._lock = threading.Lock()
+         self._pending: str | None = None
+         self._announced: set[str] = set()
++        self.on_text: Callable[[str], None] | None = None
+         self._thread = threading.Thread(target=self._read_loop, name="manual-verifier", daemon=True)
+         self._thread.start()
+ 
+@@ -85,6 +133,8 @@ class ManualVerifier:
+                         self._pending = key
+                 elif key == "s" and self._on_stop is not None:
+                     self._on_stop()
++                elif key and self.on_text is not None:
++                    self.on_text(line.strip())   # anything else is the operator talking (harness.operator)
+         except (ValueError, OSError):
+             return
+ 
+@@ -183,6 +233,16 @@ MONITOR_SCHEMA = (
+     '"holding": {"left": str, "right": str}, "recovery": <index into the recovery menu or null>, '
+     '"scene_ok": bool, "confidence": 0..1, "reason": str}')
+ GUARD_SCHEMA = MONITOR_SCHEMA[:-1] + ', "guard": bool}'
++# plan.rewrite_prompts: the monitor's diagnosis becomes the robot's next instruction. Base Dream-1 follows a change of
++# object or step well and ignores fine adjustments ("1 cm higher"), so it is asked for a whole short instruction.
++NEXT_PROMPT_RULE = (
++    'next_prompt: only with status "stalled" or "failing", when the robot is on the wrong object or wrong step, '
++    'plainly stuck, or about to fail (e.g. its arm is about to hit the tower), write ONE short instruction for the '
++    'robot that replaces the last prompt: max 200 characters, plain words, one action, naming objects by colour and '
++    'position, e.g. "pick up the yellow block and place it gently on top of the pink block". It must ask for something '
++    'different from the last prompt (another object, another step), never the same request reworded: every new prompt '
++    'makes the robot start its motion over. Follow the system rules and any operator feedback. Otherwise null.')
++NEXT_PROMPT_MAX_CHARS = 300
+ Transport = Callable[[dict[str, Any]], dict[str, Any]]
+ 
+ 
+@@ -231,6 +291,8 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
+     watch_ok = obj.get("watch_ok") if isinstance(obj.get("watch_ok"), bool) else None
+     tower = obj.get("tower")
+     tower = [str(x) for x in tower] if isinstance(tower, list) else None
++    nxt = obj.get("next_prompt")
++    nxt = " ".join(nxt.split())[:NEXT_PROMPT_MAX_CHARS] if isinstance(nxt, str) and nxt.strip() else None
+     holding = obj.get("holding")
+     if isinstance(holding, dict):
+         holding = {str(k): str(v) for k, v in holding.items()}
+@@ -245,7 +307,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
+             reason = f"low confidence: {reason}"
+     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
+                           recovery=rec, scene_ok=scene, holding=holding, guard=guard, watch_ok=watch_ok,
+-                          tower=tower)
++                          tower=tower, next_prompt=nxt)
+ 
+ 
+ class MonitorVerifier:
+@@ -264,6 +326,7 @@ class MonitorVerifier:
+         self.model = model or plan.claude.get("model", "claude-haiku-5-5")
+         self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 4000))
+         self.grip_note = ""   # set by the runner from /arms before each check (station_addons)
++        self.operator_notes: list[str] = []   # feedback typed by the operator during the run (harness.operator)
+         self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
+         if transport is None:
+             key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
+@@ -273,14 +336,22 @@ class MonitorVerifier:
+         self._transport = transport
+         self._lock = threading.Lock()
+         self._gen = 0
+-        self._busy = False
++        # claude.parallel: calls in flight at once, launched at least latency/parallel apart, so with 2 a verdict
++        # lands about twice as often (a call took ~10 s on the station on 8 Nov). The newest launched result wins.
++        self.max_inflight = max(1, int(user.get("parallel", 1)))
++        self.stitch = bool(user.get("stitch", False))   # claude.stitch: one labelled grid image per check
++        self._inflight = 0
++        self._seq = self._result_seq = 0
++        self._last_launch = 0.0
++        self._latency: float | None = None
++        self._threads: list[threading.Thread] = []
+         self._result: MonitorVerdict | None = None
+         self._stage: str | None = None
+         self._first: dict[str, tuple[float, bytes]] = {}
+         self._history: dict[str, list[tuple[float, bytes]]] = {}
+         self._last_prompt: str | None = None
+-        self._thread: threading.Thread | None = None
+         self._guard_alert = False   # a guard "yes" whose verdict was dropped (stage or prompt changed in flight)
++        self.guard_answers = 0      # every yes/no guard answer, kept or dropped: the runner's "not blind" signal
+         # Optional local detector (harness.detect.TableDetector): draws labelled boxes on the frames sent to Claude
+         self.annotator: Callable[[dict[str, bytes]], dict[str, bytes]] | None = None
+         self.legend = ""
+@@ -289,6 +360,10 @@ class MonitorVerifier:
+     def __repr__(self) -> str:
+         return f"MonitorVerifier(model={self.model!r})"
+ 
++    @property
++    def _busy(self) -> bool:   # experiments/stress_match.py reads it
++        return self._inflight > 0
++
+     # -- hooks the runner calls -----------------------------------------------------------------
+     def notify_prompt_change(self, prompt: str) -> None:
+         with self._lock:
+@@ -304,10 +379,9 @@ class MonitorVerifier:
+ 
+     def wait_idle(self, timeout_s: float = 5.0) -> bool:
+         """Tests: wait for the call in flight (if any)."""
+-        t = self._thread
+-        if t is not None:
++        for t in list(self._threads):
+             t.join(timeout_s)
+-        return not self._busy
++        return self._inflight == 0
+ 
+     # -- frames and payload ---------------------------------------------------------------------
+     @staticmethod
+@@ -332,6 +406,9 @@ class MonitorVerifier:
+             lines.append(self.legend)
+         if getattr(self, "grip_note", ""):
+             lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
++        if self.operator_notes:
++            lines.append("Operator feedback during this run (newest last; follow it):")
++            lines += [f"  - {n}" for n in self.operator_notes[-8:]]
+         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
+         lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
+         menu = stage.menu()
+@@ -351,6 +428,8 @@ class MonitorVerifier:
+             lines.append(f"Target tower, bottom to top: {target}. Report the tower you see as `tower`: a list of its "
+                          "pieces bottom to top, worded like the target (empty list if there is no tower).")
+             schema = schema.rstrip()[:-1] + ', "tower": [str]}'
++        if self.plan.rewrite_prompts:
++            schema = schema.rstrip()[:-1] + ', "next_prompt": str|null}\n' + NEXT_PROMPT_RULE
+         if stage.watch is not None:
+             lines.append(f"Watcher check (answer it as watch_ok, from the {stage.watch.camera} images): "
+                          f"{stage.watch.check}")
+@@ -399,13 +478,24 @@ class MonitorVerifier:
+                 self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
+         images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
+         content: list[dict[str, Any]] = []
++        # Stitch the history (stage start and earlier frames) into one grid; the newest frames stay full size,
++        # since the small details that decide a stage (a plug in its port) are in them.
++        old = [(lb, j) for lb, j in images if "(newest)" not in lb]
++        sheet = stitch(old) if self.stitch and len(old) > 1 else None
++        if sheet is not None:
++            listing = "; ".join(f"{i}. {label}" for i, (label, _) in enumerate(old, 1))
++            images = [(f"Earlier frames in ONE image, a grid of numbered tiles read left to right, top to bottom: "
++                       f"{listing}", sheet)] + [(lb, j) for lb, j in images if "(newest)" in lb]
+         for label, jpeg in images:
+             content.append({"type": "text", "text": label})
+             content.append({"type": "image", "source": {
+                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
+         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
+-        return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
+-                "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
++        payload = {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
++                   "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
++        if self.plan.system_prompt:
++            payload["system"] = self.plan.system_prompt
++        return payload
+ 
+     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
+         payload = dict(payload)
+@@ -421,29 +511,40 @@ class MonitorVerifier:
+         except Exception as exc:  # any failure means "can't tell"
+             return MonitorVerdict(None, 0.0, f"monitor error: {type(exc).__name__}: {str(exc)[:200]}")
+ 
+-    def _run_async(self, gen: int, payload: dict[str, Any], menu_len: int) -> None:
++    def _run_async(self, gen: int, seq: int, payload: dict[str, Any], menu_len: int) -> None:
++        t0 = time.monotonic()
+         verdict = self._call(payload, menu_len)
++        verdict.latency_s = round(time.monotonic() - t0, 2)
+         with self._lock:
+-            if gen == self._gen:
+-                self._result = verdict
++            self._latency = verdict.latency_s
++            if isinstance(verdict.guard, bool):
++                self.guard_answers += 1
++            if gen == self._gen and seq > self._result_seq:
++                self._result, self._result_seq = verdict, seq
+             elif verdict.guard is True:
+-                self._guard_alert = True
+-            self._busy = False
++                self._guard_alert = True   # dropped (stale, or older than a delivered one), but a yes still counts
++            self._inflight -= 1
+ 
+     # -- Verifier protocol ----------------------------------------------------------------------
+     def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+         with self._lock:
+-            payload = None if self._busy else self._build(stage, frames, elapsed_s)
++            now = time.monotonic()
++            gap = (self._latency or 0.0) / self.max_inflight if self.max_inflight > 1 else 0.0
++            launch = self._inflight < self.max_inflight and (self._inflight == 0 or now - self._last_launch >= gap)
++            payload = self._build(stage, frames, elapsed_s) if launch else None
+             if self._stage != stage.name:  # busy, so _build did not run
+                 self._stage, self._first, self._history = stage.name, {}, {}
+                 self._gen += 1
+                 self._result = None
+             verdict, self._result = self._result, None
+             if payload is not None:
+-                self._busy = True
+-                self._thread = threading.Thread(target=self._run_async, args=(self._gen, payload, len(stage.menu())),
+-                                                name="monitor-call", daemon=True)
+-                self._thread.start()
++                self._inflight += 1
++                self._seq += 1
++                self._last_launch = now
++                t = threading.Thread(target=self._run_async, args=(self._gen, self._seq, payload, len(stage.menu())),
++                                     name="monitor-call", daemon=True)
++                self._threads = [x for x in self._threads if x.is_alive()] + [t]
++                t.start()
+         if verdict is not None:
+             return verdict
+         if not frames:
+diff --git a/lessons/operator.md b/lessons/operator.md
+new file mode 100644
+index 0000000..a649235
+--- /dev/null
++++ b/lessons/operator.md
+@@ -0,0 +1 @@
++- For cable stages, unplug the cables one at a time, always the rightmost plug still in the strip, and keep going through all of them.  (operator: "good job - it tried to unplug 3rd cable but corrected and unplugged first one instead. is a little slow at places tho and not sure why.  can we unplug all the cables one by one now?", run 20261108T051204Z)
+diff --git a/plans/hybrid_v4.yaml b/plans/hybrid_v4.yaml
+new file mode 100644
+index 0000000..b7c7960
+--- /dev/null
++++ b/plans/hybrid_v4.yaml
+@@ -0,0 +1,281 @@
++# Hybrid Hill Climb plan for ZERO-SHOT base Dream-1 (hillclimb_rubric_v4, 7-8 Nov 2026).
++#
++# Same match structure, pass bars, guard, tower target and 295 s clock as hill_climb_v4.yaml. What differs:
++# - Specific prompts. Base Dream-1 follows short instructions that name objects by colour and position ("pick up the
++#   pink cube ... onto the blue cube") far better than the generic task texts, which are written for a fine-tune.
++# - The monitor writes the robot's next prompt (rewrite_prompts): when it sees the robot on the wrong object or step,
++#   stuck, or about to knock the tower, its diagnosis becomes the next instruction (cooldown 15 s, max 3 an attempt;
++#   runner.REWRITE_COOLDOWN_S / REWRITE_MAX). The station lessons it follows are in system_prompt below.
++# - reset_first: /reset before the first stage, so both grippers start open (a run that started shut grasped nothing).
++# - Longer stall windows on the stacking stages (20 s cut attempts short while Dream was still lining up).
++#
++# FINE-TUNE NOTE: a fine-tune only follows the texts it was trained on. If we fine-tune, the recorded task labels must
++# match whatever prompts we settle on here (stage prompts, tower_prompts and the rewrites logged as prompt_rewrite in
++# events.jsonl), or switch to hill_climb_v4.yaml and turn rewrite_prompts and tower_prompts off.
++#
++# Cable section: the stages named cable_*. In a match they are required (touching a block before a cable is out is a
++# DQ), but cables 3 and 4 don't fit in 295 s: match with --skip cable_extra. For stack + balls practice: --skip cable_
++# For all four cables with time to spare in practice: --budget 600
++#
++# Operator: while it runs you can type plain words ("skip the next step", "why did it grab that block?", "lower the
++# block more slowly next time"); see harness/operator.py. Testing only: in a match any human input is a DQ, so run
++# matches with --no-operator.
++task: >-
++  Hill Climb relay. Stage 1: unplug a USB cable from the power strip and put it down away from the strip (then one
++  more the same way). Never plug a cable in. Stage 2: stack the blocks into a free-standing tower more than 4 inches
++  (10 cm) tall. Do not touch the blocks before a cable is unplugged. Stage 3: put {ball}s into the white bin, never
++  the white ball or a black ball, without touching the tower. Do not touch the balls before the tower passes.
++checkpoint: dreamlabs/dream-1-beta
++time_budget_s: 295
++check_every_s: 3.0
++verifier: monitor
++confirm: 2
++done_message: "ALL STAGES DONE: CALL STOP NOW"
++# Cable prompts. Zero-shot defaults below; for a fine-tune pass its recorded task texts (TELEOP_PLAN T1/T2), e.g.
++#   --checkpoint dream-1-ft:<account>-relay-v1 --no-rewrite
++#   --var unplug="unplug the USB cable at the end of the hub nearest the right arm"
++#   --var put_down="put the held cable down on the table away from the hub"
++vars:
++  stack_cam: wrist_r
++  ball: orange ball
++  unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
++  put_down: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
++# history_frames 4 not 6, one stitched grid image per check, two calls in flight: a verdict every ~5 s, not ~10
++claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
++reset_first: true
++rewrite_prompts: true
++prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
++
++guard:
++  question: "Is either gripper holding the white ball or a black ball (balls that must never go in the bin), or closed or closing around one?"
++  stages: [ball_]
++  confirm: 1
++  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
++  max_blind_s: 20
++
++# Darsh's photo (Drive IMG_2697), bottom to top.
++tower_target:
++  - "blue cube, hole facing sideways"
++  - "pink cube, hole facing sideways"
++  - "blue cube, hole facing sideways"
++  - "yellow square stick, standing upright"
++  - "pink round stick, standing upright"
++# The next piece by name, on top of the piece it goes on. Gentle: Dream knocked the 2-block tower over twice on 7 Nov
++# reaching across it for a third block, so the block is carried high and lowered straight down.
++tower_prompts:
++  cube: "pick up the <piece> from the table, lift it high above the tower and lower it gently straight down onto the <top>, then open the gripper and lift the arm straight up"
++  stick: "pick up the <piece> from the table, lift it high above the tower and stand it upright gently on the <top>, then open the gripper and lift the arm straight up"
++
++system_prompt: |-
++  You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. You may also write the robot's next instruction. Rules and lessons from testing on this station:
++
++  STATION
++  - Cameras: one overhead (scene), one on each wrist (wrist_l, wrist_r). The right arm does the cables and the stacking.
++  - The gripper sensors are measured and beat the images for what a gripper holds: "stopped at 0.30" = holding something; "closed fully on nothing" = holding NOTHING, whatever the image seems to show. Never report a held cable or block on a gripper the sensor says is empty.
++
++  CABLES
++  - The "hub" is a black power strip, unplugged from the wall. Every robot instruction about cables must start with: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires." Without it the robot's model refuses to act.
++  - The USB ports are on the strip's top face; plugs stand vertical and come out by pulling straight up. Unplug right to left: always the rightmost cable still plugged in, one at a time, with the right arm.
++  - A good grip closes on ONE plug's hard body right at the port, jaws closing along the strip. A grip on the soft cord above the plug slips; a grip across two plugs fails. Dream often closes on the cord or on air: say so and name the plug again.
++  - Count plugs in their ports. A cable's far end lies loose on the table from the start: that never counts as unplugged. An unplugged cable may not be plugged back in.
++  - Once a plug is out, it often lies loose right next to the strip. That one is DONE: the robot must not grab it again. If it goes for a loose plug, name the next plug still seated in the strip.
++  - An unplug ends with the robot holding the plug up; the next stage puts it down. Holding it there is correct, not a stall.
++  - The left arm is not used for cables. Its gripper reads about 0.10 when shut on nothing.
++
++  STACKING
++  - Touching a block before at least one cable is unplugged is a disqualification.
++  - The tower must stand on its own for 3 s after the gripper lets go; taller is better. Pieces bottom to top: blue cube, pink cube, blue cube, yellow square stick, pink round stick.
++  - Dream knocked the tower over by reaching across it for the next block. Good instructions carry the block high above the tower and lower it straight down, slowly. If the arm is moving low next to the tower, say so in next_prompt.
++
++  BALLS
++  - Only orange balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
++
++  WRITING ROBOT INSTRUCTIONS (next_prompt)
++  - One short action in plain words, naming objects by colour and position: "pick up the yellow block and place it gently on top of the pink block", "grip the plug body of the rightmost cable still in the strip and pull it straight up".
++  - The robot follows a change of object or step well but ignores fine adjustments like "1 cm higher". Only write next_prompt when it is on the wrong object or step, plainly stuck, or about to fail.
++
++stages:
++  # ---- Stage 1 (pass bar: one cable out). Drop with --skip cable_ for practice. ----
++  - name: cable_unplug
++    prompt: "{unplug}"
++    success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip)? Count the seated plugs; loose far ends of cables do not count."
++    expect: "The right gripper closes on one plug's hard body at the port, jaws along the strip, and pulls it straight up until it is clear."
++    camera_notes:
++      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
++      scene: "top view: every cable's far end lies loose on the table all the time; do not count those as unplugged"
++    timeout_s: 60
++    max_attempts: 99    # pass bar: keep trying until the clock runs out
++    min_run_s: 4
++    settle_s: 4
++    stall_s: 25
++    recovery:
++      - {name: keep_pulling, kind: retry, when: "the gripper is on a plug or right next to the strip", max_uses: 4}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck, holds the cord instead of the plug, or has pushed the strip", settle_s: 5, max_uses: 3}
++    on_fail: retry_in_place
++
++  - name: cable_put_down
++    requires_stage: cable_unplug
++    prompt: "{put_down}"
++    success: "Is the right gripper open and empty, with the unplugged cable lying on the table away from the power strip? (The left arm is not used; ignore its gripper.)"
++    timeout_s: 20
++    min_run_s: 3
++    confirm: 1
++    on_fail: skip
++
++  - name: cable_unplug_more
++    prompt: "{unplug}"
++    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
++    camera_notes:
++      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
++    timeout_s: 30
++    min_run_s: 3
++    on_fail: skip
++
++  - name: cable_put_more_down
++    requires_stage: cable_unplug_more
++    prompt: "{put_down}"
++    success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
++    timeout_s: 15
++    min_run_s: 3
++    confirm: 1
++    on_fail: skip
++
++  # Cable 3 of 4 (+5). A 295 s match has no time for it: drop with --skip cable_extra.
++  - name: cable_extra_3
++    prompt: "{unplug}"
++    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
++    camera_notes:
++      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
++    timeout_s: 45
++    min_run_s: 3
++    stall_s: 25
++    on_fail: skip
++
++  - name: cable_extra_3_down
++    requires_stage: cable_extra_3
++    prompt: "{put_down}"
++    success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
++    timeout_s: 15
++    min_run_s: 3
++    confirm: 1
++    on_fail: skip
++
++  # Cable 4 of 4 (+5). A 295 s match has no time for it: drop with --skip cable_extra.
++  - name: cable_extra_4
++    prompt: "{unplug}"
++    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
++    camera_notes:
++      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
++    timeout_s: 45
++    min_run_s: 3
++    stall_s: 25
++    on_fail: skip
++
++  - name: cable_extra_4_down
++    requires_stage: cable_extra_4
++    prompt: "{put_down}"
++    success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
++    timeout_s: 15
++    min_run_s: 3
++    confirm: 1
++    on_fail: skip
++
++  - name: arms_clear
++    prompt: "open both grippers and move the arms up"
++    success: "Are both grippers open and raised, clear of the power strip, the cables and the blocks?"
++    timeout_s: 10
++    min_run_s: 2
++    confirm: 1
++    on_fail: skip
++
++  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release) ----
++  # The prompt below is the fallback; with tower_prompts the runner names the next piece from the tower it sees.
++  - name: stack_2
++    prompt: "pick up the pink cube from the table, lift it high and lower it gently straight down onto the blue cube, then open the gripper and lift the arm straight up"
++    success: "Is one block resting on top of another block, standing on its own, with no gripper touching either?"
++    expect: "The right arm picks up the next piece, carries it high, lowers it straight down onto the top piece, opens and lifts clear."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 50
++    max_attempts: 99
++    min_run_s: 4
++    stall_s: 35         # 20 s cut attempts short while Dream was still lining up the block
++    recovery:
++      - {name: keep_going, kind: retry, when: "a block is held, or the tower is standing and the arm is near it", max_uses: 3}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
++    on_fail: retry_in_place
++
++  - name: stack_3
++    prompt: "pick up the blue cube from the table, lift it high above the tower and lower it gently straight down onto the pink cube, then open the gripper and lift the arm straight up"
++    success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
++    expect: "The arm carries the third piece high above the two-block tower and lowers it straight down without brushing the tower, opens and lifts clear."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 50
++    max_attempts: 99
++    min_run_s: 4
++    stall_s: 35
++    recovery:
++      - {name: keep_going, kind: retry, when: "the tower is standing and a block is held or near its top", max_uses: 3}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
++    on_fail: retry_in_place
++
++  - name: tower_pass
++    prompt: "pick up the yellow square stick from the table, lift it high above the tower and stand it upright gently on the blue cube, then open the gripper and lift the arm straight up"
++    success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
++    expect: "The arm adds pieces to the tower until it is over 4 inches tall, lowering each straight down, then lifts clear; the tower stays standing."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 50
++    max_attempts: 99
++    min_run_s: 4
++    stall_s: 35
++    skip_if_done: true
++    recovery:
++      - {name: keep_going, kind: retry, when: "the tower is standing and shorter than 4 inches", max_uses: 4}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
++    on_fail: retry_in_place
++
++  # ---- After the pass bar: +3 per full inch, then balls ----
++  - &higher
++    name: higher_1
++    prompt: "pick up the pink round stick from the table, lift it high above the tower and stand it upright gently on the top piece, then open the gripper and lift the arm straight up"
++    success: "Does the tower have one more piece on top than in the first image of this stage, standing on its own with no gripper touching it?"
++    expect: "The arm adds one piece to the top, lowering it straight down without knocking the tower, opens and lifts clear."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 35
++    min_run_s: 4
++    stall_s: 30
++    confirm: 1
++    on_fail: skip
++  - <<: *higher
++    name: higher_2
++
++  # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. ----
++  # Each ball stage asks for ONE more ball than at its own start (8 Nov run 2: with cumulative counts, a missed first
++  # ball made every later stage impossible). 40 s each: 25 s cut zero-shot picks short.
++  - &ball
++    name: ball_1
++    prompt: "pick up one {ball} that is away from the tower and drop it into the white bin"
++    success: "Compared with the stage-start images, is there one more {ball} resting inside the bin than at the start of this stage, with no white or black ball in the bin and the tower (if any) still standing?"
++    expect: "An arm picks up one {ball}, staying clear of the white ball, any black ball and the tower, and releases it over the bin."
++    timeout_s: 40
++    min_run_s: 3
++    stall_s: 30
++    confirm: 1
++    on_fail: skip
++  - <<: *ball
++    name: ball_2
++  - <<: *ball
++    name: ball_3
++  - <<: *ball
++    name: ball_4
++  - <<: *ball
++    name: ball_5
++  - <<: *ball
++    name: ball_6
+diff --git a/plans/hybrid_v4_long.yaml b/plans/hybrid_v4_long.yaml
+new file mode 100644
+index 0000000..883e40a
+--- /dev/null
++++ b/plans/hybrid_v4_long.yaml
+@@ -0,0 +1,140 @@
++# Hill Climb plan in Dream-1's own prompt style ("long" variant of hybrid_v4.yaml), for zero-shot base Dream-1.
++#
++# Why (8 Nov, after three live runs of hybrid_v4): Dream Labs' examples for Dream-1 are short imperatives that each
++# carry a whole task: "Stack the cubes into a single tower", "Pick up all markers one by one and put into black pencil
++# holder using both arms" (dreamlabs.ai/research/dream-1). hybrid_v4 split the match into ~20 stages with 30-60 word
++# motion-coached prompts, and every new prompt restarted Dream's motion (~14 s to visible progress). Here: one short
++# prompt per sub-goal, long stages, and the monitor only steps in when the robot is on the wrong thing.
++# Compare the two plans on the same table and keep what scores.
++#
++# Practice: --budget 600 --skip cable_  (balls and tower only). Match: --no-operator.
++# FINE-TUNE NOTE: fine-tune labels must match the prompts we settle on.
++task: >-
++  Hill Climb relay. Stage 1: unplug USB cables from the power strip, rightmost first, and put them down away from the
++  strip. Never plug a cable in. Stage 2: stack the cubes into a free-standing tower more than 4 inches (10 cm) tall.
++  Do not touch the blocks before a cable is unplugged. Stage 3: put the {ball}s into the white bin one by one, never
++  the white ball or a black ball, without touching the tower. Do not touch the balls before the tower passes.
++checkpoint: dreamlabs/dream-1-beta
++time_budget_s: 295
++check_every_s: 3.0
++verifier: monitor
++confirm: 2
++done_message: "ALL STAGES DONE: CALL STOP NOW"
++vars:
++  stack_cam: wrist_r
++  ball: orange ball
++  unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable from the power strip and put it on the table."
++claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
++reset_first: true
++rewrite_prompts: true
++prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
++
++guard:
++  question: "Is either gripper holding the white ball or a black ball (balls that must never go in the bin), or closed or closing around one?"
++  stages: [ball_]
++  confirm: 1
++  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
++  max_blind_s: 20
++
++system_prompt: |-
++  You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. You may also write the robot's next instruction. Rules and lessons from testing on this station:
++
++  STATION
++  - Cameras: one overhead (scene), one on each wrist (wrist_l, wrist_r). The right arm does the cables and the stacking.
++  - The gripper sensors are measured and beat the images for what a gripper holds: "stopped at 0.30" = holding something; "closed fully on nothing" = holding NOTHING, whatever the image seems to show. Never report a held cable or block on a gripper the sensor says is empty.
++
++  CABLES
++  - The "hub" is a black power strip, unplugged from the wall. Every robot instruction about cables must start with: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires." Without it the robot's model refuses to act.
++  - The USB ports are on the strip's top face; plugs stand vertical and come out by pulling straight up. Unplug right to left: always the rightmost cable still plugged in, one at a time, with the right arm.
++  - A good grip closes on ONE plug's hard body right at the port, jaws closing along the strip. A grip on the soft cord above the plug slips; a grip across two plugs fails. Dream often closes on the cord or on air: say so and name the plug again.
++  - Count plugs in their ports. A cable's far end lies loose on the table from the start: that never counts as unplugged. An unplugged cable may not be plugged back in.
++  - Once a plug is out, it often lies loose right next to the strip. That one is DONE: the robot must not grab it again. If it goes for a loose plug, name the next plug still seated in the strip.
++  - An unplug stage ends once a plug is out of its port, held or put down.
++  - The left arm is not used for cables. Its gripper reads about 0.10 when shut on nothing.
++
++  STACKING
++  - Touching a block before at least one cable is unplugged is a disqualification.
++  - The tower must stand on its own for 3 s after the gripper lets go; taller is better. Pieces bottom to top: blue cube, pink cube, blue cube, yellow square stick, pink round stick.
++  - The tower stage is one instruction for the whole tower: the robot picks the cubes itself. Judge the tower's height and whether it stands; a knocked-over tower is progress lost, not a failure of the stage.
++
++  BALLS
++  - Only orange balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
++
++  WRITING ROBOT INSTRUCTIONS (next_prompt)
++  - Write like Dream-1's own examples: one short imperative, 3-20 words, naming the objects, with at most one constraint: "Stack the white cup on top of the pink cup", "Pick up the knife by its handle, never the blade, and place it in the tray". No motion coaching ("lift high", "lower slowly"): the robot ignores fine adjustments, and every new prompt makes it start its motion over.
++  - Only write next_prompt when it is on the wrong object or step, plainly stuck, or about to fail. A robot making slow progress on the right task should be left alone.
++  - Cable instructions still start with the power-strip sentence above.
++
++stages:
++  # ---- Stage 1 (pass bar: one cable out). Drop with --skip cable_ for practice. ----
++  - name: cable_1
++    prompt: "{unplug}"
++    success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held, or lying loose next to the strip)? Count the seated plugs; loose far ends of cables do not count."
++    camera_notes:
++      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
++      scene: "top view: every cable's far end lies loose on the table all the time; do not count those as unplugged"
++    timeout_s: 75
++    max_attempts: 99    # pass bar
++    min_run_s: 4
++    stall_s: 35
++    recovery:
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck, holds the cord instead of the plug, or has pushed the strip", settle_s: 4, max_uses: 3}
++    on_fail: retry_in_place
++
++  - name: cable_2
++    prompt: "{unplug}"
++    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
++    camera_notes:
++      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
++    timeout_s: 45
++    min_run_s: 3
++    stall_s: 30
++    on_fail: skip
++
++  - name: arms_clear
++    prompt: "open both grippers and move the arms up"
++    success: "Are both grippers open and raised, clear of the power strip, the cables and the cubes?"
++    timeout_s: 8
++    min_run_s: 2
++    confirm: 1
++    on_fail: skip
++
++  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One prompt for the whole tower. ----
++  - name: tower
++    prompt: "Stack the cubes into a single tower"
++    success: "Is there a tower of cubes more than 4 inches (10 cm) tall, standing on its own, with no gripper touching it?"
++    expect: "The arms pick up the cubes one at a time and set each squarely on the tower, which grows until it is over 4 inches tall."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 120
++    max_attempts: 99    # pass bar
++    min_run_s: 5
++    stall_s: 45
++    recovery:
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "a gripper is stuck on a cube or pressing on the tower", settle_s: 4, max_uses: 2}
++    on_fail: retry_in_place
++
++  - name: tower_higher
++    prompt: "Stand the yellow stick upright on top of the tower"
++    success: "Is the yellow stick standing upright on top of the cube tower, the tower still standing, with no gripper touching it?"
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 45
++    min_run_s: 4
++    stall_s: 30
++    confirm: 2
++    on_fail: skip
++
++  # ---- Stage 3: one prompt for all the balls; the guard stops the run if an illegal ball is held. ----
++  - &ball
++    name: ball_all
++    prompt: "Put the {ball}s in the white bin one by one, never the white ball"
++    success: "Are ALL the {ball}s now resting inside the white bin (none left on the table), with no white or black ball in the bin and the tower (if any) still standing?"
++    expect: "An arm picks up one {ball} at a time and drops it in the bin, leaving the white ball and any black ball on the table."
++    timeout_s: 150
++    min_run_s: 3
++    stall_s: 45
++    confirm: 2
++    on_fail: skip
+diff --git a/plans/v4_stack_balls.yaml b/plans/v4_stack_balls.yaml
+new file mode 100644
+index 0000000..6985861
+--- /dev/null
++++ b/plans/v4_stack_balls.yaml
+@@ -0,0 +1,159 @@
++# PRACTICE ONLY (8 Nov): hill_climb_v4.yaml from arms_clear on, no cable stages. In a match, touching the blocks
++# before a cable is out is a DQ, so never use this plan in a match.
++# Hill Climb relay, match plan for hillclimb_rubric_v4.pdf (Physical AI Hacks, 7-8 Nov 2026).
++#
++# Points (v4): first cable out +10 (passes Stage 1), each further one +5, each LOOSE cable plugged into a free port
++# +20 (up to 4); tower > 4 in +20, +3 per full inch at the end, +10 for the taller tower (Sunday head-to-head);
++# each golf ball in your bin at the end +5; either black 8-ball in your bin at the end = match lost.
++# There is NO time bonus in v4: stopping early earns nothing, so this plan uses the whole clock.
++#
++# Every prompt is one of the six task texts in TELEOP_PLAN.md, byte for byte, because a fine-tune only follows
++# the texts it was trained on. Check before a run:  python -m harness.tasks plans/hill_climb_v4.yaml <dataset dirs>
++# Recoveries of kind `retry` re-send the stage's own prompt; the only extra prompt is T6.
++#
++# Rules that shape this plan:
++# - Touching a later stage's object before the current pass bar is a DQ, so a false "done" is a DQ: confirm 2,
++#   and the pass-bar stages (unplug_cable, stack_2, stack_3, tower_pass) are never skipped.
++# - No human input after "go": verifier `monitor` only. Never manual / monitor+manual / time in a match.
++# - The tower must stand 3 s after release: confirm 2 at check_every_s 3 gives two "done" verdicts >= 3 s apart.
++# - An unplugged cable may not be plugged back in: T2 puts it down away from the hub.
++# - on_fail skip ends a stage after its first failed attempt (no recovery), so skip stages are time-boxed by
++#   timeout_s alone.
++#
++# Order: unplug -> put it down -> one extra unplug -> stack to the pass bar -> more height -> balls.
++# No plug-in (decided 7 Nov 17:50): base Dream-1 never seated a plug, no teleop demo completed one, and every failed
++# try cost up to 40 s of the match. The +20 per cable is not reachable this weekend; the clock goes to the tower and balls.
++# Before the match: measure the blocks. tower_pass keeps stacking until the tower is over 4 in, and is skipped at
++# once if stack_3 already got there.
++task: >-
++  Hill Climb practice without the cables. Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
++  Do not touch the golf balls before the tower passes.
++checkpoint: dreamlabs/dream-1-beta   # base Dream-1 (a Metal station has no default model); then dream-1-ft:<account>-relay-v1
++time_budget_s: 295          # 5-minute match, a little margin for the start
++check_every_s: 3.0
++verifier: monitor
++confirm: 2
++done_message: "ALL STAGES DONE: CALL STOP NOW"
++# Camera role of the arm that stacks (the right arm), for the monitor's notes only.
++# The prompts never name an arm, so changing these does not change what the model is asked.
++vars: {stack_cam: wrist_r}
++claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
++# Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
++# the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
++# confirm 1, because a ball goes from gripper to bin in a few seconds; a false yes only costs the balls still to come.
++guard:
++  # The white ball is the illegal one on our table (Darsh, 8 Nov); the rubric's black 8-balls stay in the question.
++  question: "Is either gripper holding the white ball or a black 8-ball (balls that must never go in the bin), or closed or closing around one?"
++  stages: [ball_]
++  confirm: 1
++  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
++  # No guard answer for this long on a ball stage (Claude API down, bad frames) also stops the run: balls are +5
++  # each, a black ball in the bin loses the match, and nobody would be looking for one.
++  max_blind_s: 20
++
++stages:
++  - name: arms_clear
++    prompt: "open both grippers and move the arms up"
++    success: "Are both grippers empty and raised, clear of the hub, the cables and the blocks?"
++    timeout_s: 10
++    min_run_s: 2
++    confirm: 1
++    skip_if_done: true        # usually already true after T2 or T3
++    on_fail: skip
++
++  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release) ----
++  - name: stack_2
++    prompt: "put a block on top of the stack"
++    success: "Is one block resting on top of another block, standing on its own, with no gripper touching either?"
++    expect: "An arm picks up a block, sets it squarely on another block, opens and lifts clear."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 40
++    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
++    min_run_s: 4
++    stall_s: 20
++    recovery:
++      - {name: keep_going, kind: retry, when: "a block is held, or the tower is standing and the arm is near it", max_uses: 3}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
++    on_fail: retry_in_place
++
++  - name: stack_3
++    prompt: "put a block on top of the stack"
++    success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
++    expect: "An arm picks up a third block and places it on the two-block tower without knocking it, opens and lifts clear."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 40
++    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
++    min_run_s: 4
++    stall_s: 20
++    recovery:
++      - {name: keep_going, kind: retry, when: "the tower is standing and a block is held or near its top", max_uses: 3}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
++    on_fail: retry_in_place
++
++  - name: tower_pass
++    prompt: "put a block on top of the stack"
++    success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
++    expect: "The arm adds blocks to the tower until it is over 4 inches tall, then lifts clear; the tower stays standing."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 40
++    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
++    min_run_s: 4
++    stall_s: 20
++    skip_if_done: true        # stack_3 may already be over 4 in: then no extra block is risked here
++    recovery:
++      - {name: keep_going, kind: retry, when: "the tower is standing and shorter than 4 inches", max_uses: 4}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
++    on_fail: retry_in_place   # never skip: the balls are off limits until the tower passes
++
++  # ---- After the pass bar: +3 per full inch, then balls ----
++  - &higher
++    name: higher_1
++    prompt: "put a block on top of the stack"
++    success: "Does the tower have one more block on top than in the first image of this stage, standing on its own with no gripper touching it?"
++    expect: "The arm adds one block to the top without knocking the tower, opens and lifts clear."
++    camera_notes:
++      "{stack_cam}": "view from the gripper doing the stacking"
++    timeout_s: 30
++    min_run_s: 4
++    confirm: 1                # same prompt as the next stage: a false "done" only renames the stage
++    on_fail: skip             # a failed extra block costs only its 30 s; a fallen tower loses its height points
++  - <<: *higher
++    name: higher_2
++
++  # ---- Stage 3: no pass bar. The guard above stops the run if a black ball is held. ----
++  - &ball
++    name: ball_1
++    prompt: "put a golf ball in the bin"
++    success: "Is at least 1 golf ball resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++    expect: "An arm picks up one coloured golf ball, avoiding the white ball, any black ball and the tower, and releases it into the bin."
++    timeout_s: 25
++    min_run_s: 3
++    confirm: 1                # every ball stage sends the same prompt: a false "done" only renames the stage
++    on_fail: skip
++  - <<: *ball
++    name: ball_2
++    success: "Are at least 2 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++  - <<: *ball
++    name: ball_3
++    success: "Are at least 3 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++  - <<: *ball
++    name: ball_4
++    success: "Are at least 4 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++  - <<: *ball
++    name: ball_5
++    success: "Are at least 5 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++  - <<: *ball
++    name: ball_6
++    success: "Are at least 6 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++  - <<: *ball
++    name: ball_7
++    success: "Are at least 7 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
++  - <<: *ball
++    name: ball_8
++    success: "Are at least 8 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+diff --git a/tests/test_hybrid.py b/tests/test_hybrid.py
+new file mode 100644
+index 0000000..6959cd9
+--- /dev/null
++++ b/tests/test_hybrid.py
+@@ -0,0 +1,211 @@
++"""The hybrid pieces: monitor-written prompts, /reset first and after Dream's IK error, gripper sensors over the
++images, tower prompts with <top>, the operator talking in plain words, and plans/hybrid_v4.yaml."""
++
++import json
++from pathlib import Path
++
++from conftest import stage
++from test_v2 import Script, Transport, build, events, mv, prompts, reply_text, routes
++
++from harness.log import RunLog
++from harness.operator import Operator, load_lessons, parse_reply
++from harness.plan import load_plan
++from harness.runner import AUTO_RESET_MAX, Runner
++from harness.verifiers import MonitorVerifier, parse_monitor_reply
++
++ROOT = Path(__file__).resolve().parent.parent
++
++
++def test_hybrid_plan_loads_and_cable_section_is_optional():
++    plan = load_plan(ROOT / "plans/hybrid_v4.yaml")
++    names = [s.name for s in plan.stages]
++    assert plan.reset_first and plan.rewrite_prompts and plan.system_prompt and plan.time_budget_s == 295
++    assert names[0] == "cable_unplug" and "cable_extra_4_down" in names and "stack_2" in names and names[-1].startswith("ball_")
++    assert all(s.prompt.startswith(plan.prompt_prefix) for s in plan.stages if s.name.startswith("cable_"))
++    assert not any(n.startswith("cable_") for n in names[names.index("arms_clear"):])
++    assert all(s.stall_s and s.stall_s >= 30 for s in plan.stages if s.name.startswith(("stack", "tower")))
++    assert "{" not in plan.system_prompt and "orange ball" in plan.stages[-1].prompt
++
++
++def test_next_prompt_parsed_and_asked_for(write_plan):
++    v = parse_monitor_reply(reply_text(next_prompt="  pick up the pink cube\n and place it gently "), 0)
++    assert v.next_prompt == "pick up the pink cube and place it gently"
++    plan = load_plan(write_plan([stage("a", verifier="monitor")], rewrite_prompts=True, system_prompt="lessons"))
++    t = Transport(reply_text())
++    m = MonitorVerifier(plan, transport=t)
++    m.check_now(plan.stages[0], {"video.scene": b"\xff\xd8x\xff\xd9"}, 1.0)
++    assert t.payloads[0]["system"] == "lessons"
++    assert "next_prompt" in t.payloads[0]["messages"][0]["content"][-1]["text"]
++
++
++def test_monitor_rewrites_the_prompt_with_prefix_cooldown_and_cap(fake, write_plan, tmp_path, monkeypatch):
++    monkeypatch.setattr("harness.runner.REWRITE_COOLDOWN_S", 0.0)
++    pre = "No power here."
++    path = write_plan([stage("a", prompt=f"{pre} pull the plug", timeout_s=3.0, max_attempts=1, on_fail="skip")],
++                      rewrite_prompts=True, prompt_prefix=pre)
++    sv = Script([mv(None, "ok", next_prompt="ignored: status ok"), mv(None, "stalled", next_prompt="grip the rightmost plug"),
++                 mv(None, "stalled", next_prompt="grip the second plug"),
++                 mv(None, "failing", next_prompt="grip the third plug"), mv(None, "stalled", next_prompt="grip a fourth plug"),
++                 mv(True, progress=1.0)], repeat=True)
++    r = build(fake, path, tmp_path, sv)
++    r.run()
++    sent = prompts(fake)
++    rewrites = events(r.log, "prompt_rewrite")
++    assert len(rewrites) == 3                                   # REWRITE_MAX per attempt
++    assert sent[1] == f"{pre} grip the rightmost plug"          # the prefix is put back on
++    assert all(e["previous"] for e in rewrites)
++
++
++def test_reset_first_then_auto_reset_after_svd(fake, write_plan, tmp_path):
++    fake.reset_s = fake.home_s = 0.05
++    path = write_plan([stage("a", timeout_s=6.0)], reset_first=True)
++    hits = {"n": 0}
++
++    def svd(st, frames, elapsed):
++        hits["n"] += 1
++        if hits["n"] in (2, 6, 10):
++            with fake._lock:
++                fake.last_error = "LinAlgError: SVD did not converge"
++                fake.state = "error"
++        return mv(True, progress=1.0) if hits["n"] > 14 else mv(None)
++
++    r = build(fake, path, tmp_path, Script([svd]))
++    r.run()
++    rs = routes(fake)
++    assert rs[0] == "/reset" and rs[1] == "/start"              # grippers open before the first stage
++    assert len(events(r.log, "auto_reset")) == AUTO_RESET_MAX   # a third SVD restarts without a reset
++    assert rs.count("/reset") == 1 + AUTO_RESET_MAX
++
++
++def test_gripper_note_reads_this_stations_sensors(fake, write_plan, tmp_path):
++    r = build(fake, write_plan([stage("a")]), tmp_path, Script([mv(None)]))
++    r.station.grippers = lambda: {"right": {"gripper": 0.03, "commanded_gripper": None},
++                                  "left": {"gripper": 0.11, "commanded_gripper": 0.0}}
++    note = r._grip_note()
++    assert "right gripper shut on nothing" in note and "left gripper nearly shut (0.11): a thin plug or nothing" in note
++
++
++def test_done_seen_during_recovery_passes_after_a_second_look(fake, write_plan, tmp_path):
++    rec = [{"name": "lift", "kind": "reset", "prompt": "open and lift", "settle_s": 0.05}]
++    path = write_plan([stage("a", timeout_s=0.3, max_attempts=3, recovery=rec)])
++    sv = Script([mv(None, "ok")])
++    r = build(fake, path, tmp_path, sv)
++    r._reset_scene = lambda st, rc, v: (setattr(r, "_done_in_recovery", "plug out"), (True, "scene ok"))[1]
++    sv.check_now = lambda st, frames, e: mv(True, progress=1.0)
++    res = r.run()
++    assert res.stages[0].ok and res.stages[0].reason == "done during recovery: plug out"
++    assert events(r.log, "recovery_done_check")[0]["passed"]
++
++
++def test_tower_prompt_names_the_piece_below(fake, write_plan, tmp_path):
++    path = write_plan([stage("stack_2")], tower_target=["blue cube", "pink cube", "yellow stick"],
++                      tower_prompts={"cube": "put the <piece> on the <top>", "stick": "stand the <piece> on the <top>"})
++    r = build(fake, path, tmp_path, Script([mv(None)]))
++    r._tower = ["blue cube", "pink cube"]
++    assert r._stage_prompt(r.plan.stages[0], None) == "stand the yellow stick on the pink cube"
++
++
++def test_operator_reply_parsing():
++    text = 'Skipping it.\n<json>{"reply": "ok, skipping stack_3", "skip_stages": ["stack_3", "nope"], ' \
++           '"end_current_stage": false, "prompt_now": null, "note": "lower blocks slowly"}</json>'
++    reply, acts = parse_reply(text, ["stack_2", "stack_3"])
++    assert reply == "ok, skipping stack_3"
++    assert acts == {"skip_stages": ["stack_3"], "note": "lower blocks slowly"}
++    assert parse_reply("just words", ["a"]) == ("just words", {})
++
++
++def test_operator_skips_ends_and_notes(fake, write_plan, tmp_path):
++    path = write_plan([stage("a", timeout_s=5.0), stage("b"), stage("c", timeout_s=0.5)])
++    log = RunLog(tmp_path / "runs")
++    plan = load_plan(path)
++    lessons = tmp_path / "lessons.md"
++    t = Transport('<json>{"reply": "ok", "end_current_stage": true, "skip_stages": ["b"], '
++                  '"note": "carry blocks high"}</json>')
++    op = Operator(plan, log, transport=t, lessons_path=lessons, print_fn=lambda s: None)
++    log.listeners.append(op.record)
++    notes = []
++
++    class V(Script):
++        operator_notes = notes
++
++    sv = V([lambda st, f, e: (op.submit("skip the next step and stop this one") if st.name == "a" and len(sv.calls) == 2
++                              else None) or mv(None)])
++    r = build(fake, path, tmp_path, sv, log=log)
++    r.operator = op
++    res = r.run()
++    by = {s.name: s for s in res.stages}
++    assert by["a"].reason == "operator ended the stage" and by["b"].reason == "skipped by operator"
++    assert not any(c[0] == "b" for c in sv.calls) and any(c[0] == "c" for c in sv.calls)
++    assert notes == ["carry blocks high"]
++    assert "carry blocks high" in load_lessons(lessons)
++    kinds = [e["event"] for e in events(log)]
++    assert "operator_input" in kinds and "operator_reply" in kinds and "operator_action" in kinds
++    assert "skip the next step" in t.payloads[0]["messages"][0]["content"][-1]["text"]
++
++
++def test_trace_report_shows_rewrites_and_operator(tmp_path):
++    import sys
++    sys.path.insert(0, str(ROOT / "tools"))
++    import trace_report
++    run = tmp_path / "20261107T000000Z"
++    run.mkdir()
++    evs = [{"t": 0, "event": "run_start", "task": "t"},
++           {"t": 1, "event": "prompt_rewrite", "stage": "a", "prompt": "new one", "previous": "old one", "reason": "r"},
++           {"t": 2, "event": "operator_input", "text": "why?"},
++           {"t": 3, "event": "operator_reply", "reply": "because", "actions": {}}]
++    (run / "events.jsonl").write_text("\n".join(json.dumps(e) for e in evs))
++    trace_report.render(run)
++    page = (run / "trace.html").read_text()
++    assert "monitor rewrote prompt" in page and "class='was'" in page and "operator said" in page
++
++
++def _jpeg(color):
++    import io
++    from PIL import Image
++    out = io.BytesIO()
++    Image.new("RGB", (640, 360), color).save(out, "JPEG")
++    return out.getvalue()
++
++
++def test_stitched_history_and_two_calls_in_flight(write_plan):
++    import threading
++    plan = load_plan(write_plan([stage("a", verifier="monitor")], claude={"stitch": True, "parallel": 2,
++                                                                        "history_frames": 4}))
++    gate, started = threading.Event(), []
++
++    def slow(payload):
++        started.append(payload)
++        gate.wait(5)
++        return {"content": [{"type": "text", "text": reply_text(progress=len(started) / 10)}]}
++
++    m = MonitorVerifier(plan, transport=slow)
++    st = plan.stages[0]
++    for t in range(4):
++        m.check(st, {"video.scene": _jpeg((t * 40, 0, 0)), "video.wrist_r": _jpeg("blue")}, float(t))
++    assert len(started) == 2                       # at most two in flight
++    gate.set()
++    m.wait_idle(3)
++    m.check(st, {"video.scene": _jpeg("red"), "video.wrist_r": _jpeg("blue")}, 5.0)
++    m.wait_idle(3)
++    last = started[-1]["messages"][0]["content"]
++    images = [c for c in last if c["type"] == "image"]
++    texts = [c["text"] for c in last if c["type"] == "text"]
++    assert len(images) == 3 and texts[0].startswith("Earlier frames in ONE image")   # grid + newest scene + wrist
++    v = m.check(st, {"video.scene": _jpeg("red")}, 6.0)
++    assert v.latency_s is not None
++
++
++def test_put_down_skipped_when_its_unplug_failed(fake, write_plan, tmp_path):
++    path = write_plan([stage("up", timeout_s=0.3, max_attempts=1, on_fail="skip"),
++                       stage("down", requires_stage="up"), stage("next", timeout_s=0.3)])
++    sv = Script([lambda st, f, e: mv(True, progress=1.0) if st.name == "next" else mv(None)])
++    res = build(fake, path, tmp_path, sv).run()
++    by = {s.name: s for s in res.stages}
++    assert by["down"].reason == "up did not pass" and not any(c[0] == "down" for c in sv.calls)
++
++
++def test_long_plan_uses_short_whole_task_prompts():
++    plan = load_plan(ROOT / "plans/hybrid_v4_long.yaml")
++    assert [s.name for s in plan.stages] == ["cable_1", "cable_2", "arms_clear", "tower", "tower_higher", "ball_all"]
++    assert all(len(s.prompt.split()) <= 20 for s in plan.stages if not s.name.startswith("cable_"))
++    assert plan.guard.covers("ball_all") and not plan.tower_prompts and "{" not in plan.system_prompt
+diff --git a/tools/label_rollout.py b/tools/label_rollout.py
+new file mode 100644
+index 0000000..fa3163c
+--- /dev/null
++++ b/tools/label_rollout.py
+@@ -0,0 +1,97 @@
++"""Label Dream's own record of a harness run for fine-tuning.
++
++Dream keeps each run's record (the station's archiver copies it to ~/rollouts/zeroshot_<time>/): last-run.csv (20 Hz
++joints and commands) and last-run_inputs/inputs.jsonl (every model input: frames, state and the prompt it was given).
++The harness knows what those seconds were for. This joins the two:
++
++    python tools/label_rollout.py runs/<stamp> <rollout dir or its inputs.jsonl>
++
++and writes <rollout>/harness_labels.jsonl, one line per model input, plus harness_segments.json:
++  stage, attempt     the harness stage and attempt the input belongs to
++  prompt_sent        what Dream was told (stage prompt, a monitor rewrite, a recovery, an operator prompt)
++  source             stage | rewrite | recovery | operator | tower
++  label              the clean task label for training: the stage's own prompt (rewrites map back to it)
++  outcome            ok | failed for the attempt the input is in; usable = ok and not a recovery
++
++The clocks differ (Dream's t_s is monotonic, the harness logs epoch time). They are aligned on the first /start:
++its harness time is the first model input's time, to about a second.
++"""
++from __future__ import annotations
++
++import json
++import pathlib
++import sys
++
++
++def _load(path: pathlib.Path) -> list[dict]:
++    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
++
++
++def _source(why: str) -> str:
++    why = why or ""
++    if why.startswith("monitor next_prompt"):
++        return "rewrite"
++    if why.startswith("recovery"):
++        return "recovery"
++    if why == "operator":
++        return "operator"
++    return "stage"
++
++
++def label(run: pathlib.Path, rollout: pathlib.Path) -> tuple[list[dict], list[dict]]:
++    inputs_path = rollout if rollout.suffix == ".jsonl" else rollout / "last-run_inputs" / "inputs.jsonl"
++    inputs = [r for r in _load(inputs_path) if r.get("kind") == "inputs"]
++    events = _load(run / "events.jsonl")
++    start = next(e for e in events if e["event"] == "start")
++    offset = start["t"] - inputs[0]["t_s"]   # harness epoch = Dream t_s + offset
++
++    # Spans: [t, stage, attempt, prompt, source, label], each running until the next prompt change.
++    spans, stage, attempt, base = [], None, 1, ""
++    outcomes: dict[tuple[str, int], str] = {}
++    for e in events:
++        ev = e["event"]
++        if ev == "stage_start":
++            stage, attempt, base = e["stage"], 1, e.get("prompt") or ""
++        elif ev == "tower_prompt" and e.get("next"):
++            base = e.get("prompt") or base
++        elif ev == "attempt_end":   # `retry` is logged after the retry's prompt, so count from here
++            outcomes[(e["stage"], e["attempt"])] = "ok" if e.get("ok") else "failed"
++            attempt = e["attempt"] + 1
++        elif ev == "prompt_change" and stage is not None:
++            src = _source(e.get("why"))
++            spans.append({"t": e["t"], "stage": stage, "attempt": attempt, "prompt_sent": e.get("prompt") or "",
++                          "source": src, "label": base if src in ("stage", "rewrite") else e.get("prompt") or ""})
++    rows = []
++    for r in inputs:
++        t = r["t_s"] + offset
++        span = next((s for s in reversed(spans) if s["t"] <= t + 0.5), None)
++        if span is None:
++            continue
++        outcome = outcomes.get((span["stage"], span["attempt"]), "unknown")
++        rows.append({"t_s": r["t_s"], **{k: span[k] for k in ("stage", "attempt", "prompt_sent", "source", "label")},
++                     "prompt_seen": (r.get("state") or {}).get("prompt"), "outcome": outcome,
++                     "usable": outcome == "ok" and span["source"] != "recovery"})
++    segs: list[dict] = []
++    for row in rows:
++        key = (row["stage"], row["attempt"])
++        if segs and (segs[-1]["stage"], segs[-1]["attempt"]) == key:
++            segs[-1]["t_end"] = row["t_s"]
++            segs[-1]["inputs"] += 1
++        else:
++            segs.append({"stage": row["stage"], "attempt": row["attempt"], "t_start": row["t_s"], "t_end": row["t_s"],
++                         "inputs": 1, "label": row["label"], "outcome": row["outcome"]})
++    return rows, segs
++
++
++if __name__ == "__main__":
++    run, rollout = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
++    rows, segs = label(run, rollout)
++    out = rollout.parent if rollout.suffix == ".jsonl" else rollout
++    (out / "harness_labels.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
++    (out / "harness_segments.json").write_text(json.dumps(segs, indent=2))
++    mismatch = sum(1 for r in rows if r["prompt_seen"] and r["prompt_seen"] != r["prompt_sent"])
++    for s in segs:
++        print(f"{s['outcome']:<7} {s['stage']:<18} a{s['attempt']}  {s['t_end'] - s['t_start']:5.0f} s  "
++              f"{s['inputs']:3d} inputs  {s['label'][:70]}")
++    print(f"{len(rows)} inputs labelled, {sum(r['usable'] for r in rows)} usable; prompt mismatches "
++          f"(alignment check, want ~0): {mismatch}  -> {out}/harness_labels.jsonl")
+diff --git a/tools/trace_report.py b/tools/trace_report.py
+new file mode 100644
+index 0000000..0183e6d
+--- /dev/null
++++ b/tools/trace_report.py
+@@ -0,0 +1,170 @@
++"""Readable trace of harness runs: one page per run (what was asked, what the monitor saw, why each stage ended)
++and an index of all runs.
++
++    python tools/trace_report.py                 # every run under runs/, then opens runs/index.html
++    python tools/trace_report.py runs/<stamp>    # one run
++
++Each run page lists, in time order: every prompt sent to Dream (and why), every monitor verdict with its reason,
++confidence and the frames it judged, attempt ends, skips, recoveries and the stop. Frames are the run's own files.
++"""
++from __future__ import annotations
++
++import html
++import json
++import pathlib
++import subprocess
++import sys
++from datetime import datetime
++
++RUNS = pathlib.Path(__file__).resolve().parents[1] / "runs"
++
++CSS = """
++:root { --bg:#fbfbfa; --text:#1d1d1b; --muted:#6b6b66; --line:#e4e4df; --ok:#2f7d4f; --bad:#b3261e; --prompt:#1f5fa8;
++  --rewrite-bg:#fff4dc; --rewrite:#8a5a00; --op-bg:#eef1ff; --op:#3b3fa8; }
++@media (prefers-color-scheme: dark) { :root { --bg:#161615; --text:#ecece8; --muted:#9b9b95; --line:#30302c;
++  --ok:#5cc28a; --bad:#ff6b5e; --prompt:#7fb0ff; --rewrite-bg:#2e2412; --rewrite:#f0b54a; --op-bg:#1d2033; --op:#a9adff; } }
++* { box-sizing:border-box; }
++body { margin:0; padding:24px 16px 64px; background:var(--bg); color:var(--text);
++  font:14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
++main { max-width:1100px; margin:0 auto; }
++h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:15px; margin:28px 0 8px; }
++.muted { color:var(--muted); } a { color:inherit; }
++table { border-collapse:collapse; width:100%; } td, th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
++  vertical-align:top; } th { color:var(--muted); font-weight:500; }
++.ok { color:var(--ok); font-weight:600; } .bad { color:var(--bad); font-weight:600; }
++.row { display:grid; grid-template-columns:64px 130px 1fr; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); }
++.t { color:var(--muted); } .kind { font-weight:600; }
++.prompt { color:var(--prompt); } .stage { border-top:2px solid var(--text); margin-top:18px; }
++.thumbs { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; }
++.thumbs img { height:96px; border-radius:4px; display:block; }
++.filter { margin:8px 0 0; } .filter label { margin-right:14px; }
++body.hide-wait .waiting { display:none; }
++.rewrite { background:var(--rewrite-bg); } .rewrite .kind { color:var(--rewrite); }
++.op { background:var(--op-bg); } .op .kind { color:var(--op); }
++.was { color:var(--muted); text-decoration:line-through; }
++"""
++
++KINDS = {"stage_start": "stage", "start": "prompt", "set_prompt": None, "prompt_change": "prompt", "verdict": "verdict",
++         "attempt_end": "attempt end", "stage_skipped": "skipped", "recovery": "recovery", "retry": "retry",
++         "entry_check": "entry check", "stop": "stop", "run_end": "run end", "guard_stop": "guard stop",
++         "prompt_rewrite": "monitor rewrote prompt", "tower_prompt": "tower prompt", "reset": "reset",
++         "auto_reset": "auto reset", "station_restart": "station restart", "operator_input": "operator said",
++         "operator_reply": "claude replied", "operator_action": "operator action", "guard_tripped": "guard tripped"}
++
++
++def _when(stamp: str) -> str:
++    try:
++        return datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").strftime("%d %b %H:%M UTC")
++    except ValueError:
++        return stamp
++
++
++def render(run: pathlib.Path) -> dict:
++    events = [json.loads(l) for l in (run / "events.jsonl").read_text().splitlines() if l.strip()]
++    if not events:
++        return {}
++    t0 = events[0]["t"]
++    summary = json.loads((run / "summary.json").read_text()) if (run / "summary.json").exists() else {}
++    end = next((e for e in reversed(events) if e["event"] in ("run_end", "stop")), {})
++    task = next((e.get("task") for e in events if e["event"] == "run_start"), "")
++    rows = []
++    for e in events:
++        kind = KINDS.get(e["event"])
++        if kind is None:
++            continue
++        t = f"+{e['t'] - t0:.0f}s"
++        stage = e.get("stage") or ""
++        body = ""
++        cls = "row"
++        if e["event"] == "stage_start":
++            cls += " stage"
++            body = f"<b>{html.escape(stage)}</b> <span class='prompt'>{html.escape(e.get('prompt') or '')}</span>"
++        elif e["event"] == "prompt_rewrite":
++            cls += " rewrite"
++            body = (f"<span class='was'>“{html.escape(e.get('previous') or '')}”</span><br>"
++                    f"<span class='prompt'>“{html.escape(e.get('prompt') or '')}”</span>"
++                    f"<div class='muted'>because: {html.escape(str(e.get('reason') or ''))}</div>")
++        elif e["event"] in ("operator_input", "operator_reply", "operator_action"):
++            cls += " op"
++            if e["event"] == "operator_input":
++                body = f"“{html.escape(e.get('text') or '')}”"
++            elif e["event"] == "operator_reply":
++                acts = e.get("actions") or {}
++                body = html.escape(str(e.get("reply") or "")) + (
++                    f"<div class='muted'>{html.escape(json.dumps(acts))}</div>" if acts else "")
++            else:
++                body = html.escape(f"{e.get('action')}: {e.get('note') or e.get('stages') or e.get('stage') or ''}")
++        elif e["event"] == "prompt_change" and str(e.get("why") or "").startswith("monitor next_prompt"):
++            continue   # shown by its prompt_rewrite row
++        elif e["event"] in ("start", "prompt_change"):
++            why = e.get("why")
++            body = f"<span class='prompt'>“{html.escape(e.get('prompt') or '')}”</span>" + (
++                f" <span class='muted'>({html.escape(str(why))})</span>" if why else "")
++        elif e["event"] in ("verdict", "entry_check"):
++            done = e.get("done")
++            if e.get("reason") == "monitor call in flight":
++                cls += " waiting"
++            mark = "<span class='ok'>done</span>" if done else "<span class='muted'>not yet</span>" if done is None \
++                else "<span class='bad'>failing</span>"
++            conf = e.get("confidence")
++            body = f"{mark} <span class='muted'>{'' if conf is None else f'conf {conf:.2f}'}</span> " \
++                   f"{html.escape(str(e.get('reason') or ''))}"
++            frames = e.get("frames") or []
++            if frames:
++                body += "<div class='thumbs'>" + "".join(
++                    f"<a href='{html.escape(f)}' target='_blank'><img loading='lazy' src='{html.escape(f)}' "
++                    f"title='{html.escape(f)}'></a>" for f in frames) + "</div>"
++        elif e["event"] == "attempt_end":
++            ok = e.get("ok")
++            body = ("<span class='ok'>passed</span> " if ok else "<span class='bad'>ended</span> ") + \
++                html.escape(str(e.get("reason") or ""))
++        else:
++            body = html.escape(str(e.get("reason") or e.get("why") or e.get("prompt") or e.get("mode") or ""))
++        rows.append(f"<div class='{cls}'><div class='t'>{t}</div><div class='kind'>{html.escape(kind)}"
++                    f"<div class='muted'>{html.escape(stage)}</div></div><div>{body}</div></div>")
++    stages = summary.get("stages") or []
++    stage_rows = "".join(
++        f"<tr><td>{html.escape(s['name'])}</td><td class='{'ok' if s.get('ok') else 'bad'}'>"
++        f"{'passed' if s.get('ok') else 'no'}</td><td>{s.get('attempts') or 0}</td>"
++        f"<td>{round(s.get('seconds') or 0)} s</td><td class='muted'>{html.escape(str(s.get('reason') or ''))[:160]}</td></tr>"
++        for s in stages if s.get("attempts"))
++    secs = round(end.get("seconds") or (events[-1]["t"] - t0))
++    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1"><title>Run {run.name}</title><style>{CSS}</style></head>
++<body><main><p><a href="../index.html">All runs</a></p>
++<h1>Run {html.escape(run.name)}</h1>
++<div class="muted">{_when(run.name)} · {secs} s · ended: {html.escape(str(end.get('reason') or end.get('why') or '?'))}</div>
++<p class="muted">{html.escape(task or '')}</p>
++<h2>Stages</h2><table><tr><th>Stage</th><th>Passed</th><th>Attempts</th><th>Time</th><th>How it ended</th></tr>{stage_rows}</table>
++<h2>Timeline</h2>
++<div class="filter muted"><label><input type="checkbox" id="w" onchange="document.body.classList.toggle('hide-wait', this.checked)">
++hide "monitor call in flight"</label></div>
++{''.join(rows)}
++</main></body></html>"""
++    (run / "trace.html").write_text(page)
++    passed = [s["name"] for s in stages if s.get("ok")]
++    return {"run": run.name, "secs": secs, "end": str(end.get("reason") or end.get("why") or ""), "passed": passed,
++            "tried": [s["name"] for s in stages if s.get("attempts")]}
++
++
++def index(items: list[dict]) -> pathlib.Path:
++    rows = "".join(
++        f"<tr><td><a href='{i['run']}/trace.html'>{_when(i['run'])}</a></td><td>{i['secs']} s</td>"
++        f"<td class='ok'>{html.escape(', '.join(i['passed'])) or '<span class=muted>none</span>'}</td>"
++        f"<td class='muted'>{html.escape(i['end'])[:120]}</td></tr>" for i in items)
++    path = RUNS / "index.html"
++    path.write_text(f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1"><title>Harness runs</title><style>{CSS}</style></head>
++<body><main><h1>Harness runs</h1><p class="muted">Newest first. Click a run for its timeline.</p>
++<table><tr><th>Run</th><th>Length</th><th>Stages passed</th><th>How it ended</th></tr>{rows}</table></main></body></html>""")
++    return path
++
++
++if __name__ == "__main__":
++    targets = [pathlib.Path(a) for a in sys.argv[1:]] or sorted(
++        (p for p in RUNS.iterdir() if (p / "events.jsonl").exists()), reverse=True)
++    items = [i for i in (render(t) for t in targets) if i]
++    out = index(items) if not sys.argv[1:] else targets[0] / "trace.html"
++    print(out)
++    if sys.platform == "darwin":
++        subprocess.run(["open", str(out)], check=False)

@@ -1,0 +1,716 @@
+===== A01: A logging error can leave the robot running, including when stop is requested =====
+harness/harness/runner.py:256
+256:     def _safe_stop(self, why: str) -> None:
+257:         self.log.event("stop", why=why)
+258:         try:
+259:             self.station.stop()
+260:         except (StationError, OSError) as exc:
+261:             self.log.event("stop_failed", error=str(exc))
+262: 
+
+harness-cloud-sims/harness/runner.py:326
+326:     def _safe_stop(self, why: str) -> None:
+327:         self.log.event("stop", why=why)
+328:         try:
+329:             self.station.stop()
+330:         except (StationError, OSError) as exc:
+331:             self.log.event("stop_failed", error=str(exc))
+332: 
+
+harness-cloud-sims/harness/log.py:64
+64:             p.write_bytes(jpeg)
+65:             paths.append(p)
+66:         return paths
+
+===== A02: tower_pass can pass on one image with no stability confirmation =====
+harness/harness/runner.py:645
+645:     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
+646:         """skip_if_done: one synchronous look before the prompt is sent."""
+647:         frames = self._frames_for_check(stage)
+648:         verdict = self._ask(verifier, stage, frames, 0.0, sync=True)
+649:         done = verdict.done is True and (verdict.immediate or (frames and verdict.confidence >= SKIP_MIN_CONFIDENCE))
+650:         self.log.event("entry_check", stage=stage.name, done=verdict.done, confidence=verdict.confidence,
+651:                        reason=verdict.reason, skipped=bool(done))
+652:         return bool(done)
+653: 
+
+harness-cloud-sims/harness/runner.py:894
+894:     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
+895:         """skip_if_done: one synchronous look before the prompt is sent."""
+896:         frames = self._frames_for_check(stage)
+897:         verdict = self._ask(verifier, stage, frames, 0.0, sync=True)
+898:         done = verdict.done is True and (verdict.immediate or (frames and verdict.confidence >= SKIP_MIN_CONFIDENCE))
+899:         self.log.event("entry_check", stage=stage.name, done=verdict.done, confidence=verdict.confidence,
+900:                        reason=verdict.reason, skipped=bool(done))
+901:         return bool(done)
+902: 
+
+harness/plans/hill_climb_v4.yaml:176
+176:   - name: tower_pass
+177:     prompt: "put a block on top of the stack"
+178:     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
+179:     expect: "The arm adds blocks to the tower until it is over 4 inches tall, then lifts clear; the tower stays standing."
+180:     camera_notes:
+181:       "{stack_cam}": "view from the gripper doing the stacking"
+182:     timeout_s: 40
+183:     max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+184:     min_run_s: 4
+185:     stall_s: 20
+186:     skip_if_done: true        # stack_3 may already be over 4 in: then no extra block is risked here
+187:     recovery:
+188:       - {name: keep_going, kind: retry, when: "the tower is standing and shorter than 4 inches", max_uses: 4}
+189:       - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+
+===== A03: Success confirmation ignores intervening failure and can bypass the configured count =====
+harness/harness/runner.py:498
+498:                         consec_done += 1
+499:                         recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
+500:                         last_done_t, last_done_sig = elapsed, sig
+501:                         if verdict.immediate or consec_done >= confirm or recent:
+502:                             return _Attempt(True, verdict.reason or "verified", max_p, hint)
+503:                     else:
+504:                         consec_done = 0
+505:                         self.log.event("no_frames", stage=stage.name, attempt=attempt,
+506:                                        note="done verdict ignored: no frames to back it")
+507:                 elif failing and last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S:
+508:                     pass                           # one flicker after a done does not undo it
+509:                 elif failing:
+510:                     consec_done = 0
+511:                     consec_fail += 1
+
+harness-cloud-sims/harness/runner.py:718
+718:                         consec_done += 1
+719:                         recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
+720:                         last_done_t, last_done_sig = elapsed, sig
+721:                         if verdict.immediate or consec_done >= confirm or recent:
+722:                             return _Attempt(True, verdict.reason or "verified", max_p, hint)
+723:                     else:
+724:                         consec_done = 0
+725:                         self.log.event("no_frames", stage=stage.name, attempt=attempt,
+726:                                        note="done verdict ignored: no frames to back it")
+727:                 elif failing and last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S:
+728:                     pass                           # one flicker after a done does not undo it
+729:                 elif failing:
+730:                     consec_done = 0
+731:                     consec_fail += 1
+
+harness-cloud-sims/harness/plan.py:140
+140:     confirm_gap_s: float = 0.0   # min seconds between two "done" verdicts that count toward confirm
+141:     prompt_level: int = 1        # harness.promptgen level for base Dream-1 (1 = the plan's prompt as written)
+
+harness/tests/test_v2.py:345
+345: def test_confirm_two_needs_consecutive_done(fake, write_plan, tmp_path):
+346:     path = write_plan([stage("a")], confirm=2)
+347:     sv = Script([mv(True), mv(None, "ok"), mv(True), mv(True)], repeat=False)
+348:     result = build(fake, path, tmp_path, sv).run()
+349:     assert result.ok, result.reason
+350:     assert len(sv.calls) == 3          # kaushik-fixes: a second done within DONE_WINDOW_S passes despite the flicker
+351: 
+
+===== A04: The image labelled stage start is captured after the action has begun =====
+harness/harness/runner.py:431
+431:             if elapsed >= gate:
+432:                 frames = self._frames_for_check(stage)
+433:                 verdict = self._ask(verifier, stage, frames, elapsed)
+434:                 self._last_verdict = verdict
+435:                 saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
+
+harness/harness/verifiers.py:455
+455:             if role not in self._first:
+456:                 self._first[role] = (elapsed_s, frames[role])
+457:             else:
+458:                 self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
+459:         images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
+
+harness-cloud-sims/harness/verifiers.py:697
+697:             if role not in self._first:
+698:                 self._first[role] = (elapsed_s, frames[role])
+699:             else:
+700:                 self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
+701:         images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
+
+harness/plans/hill_climb_v4.yaml:80
+80:     success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
+81:     expect: "The right gripper closes fully on the plug at the end of the hub nearest it and pulls it straight out along the port until the plug is clear."
+82:     timeout_s: 60
+
+===== A05: Main has no fast live guard, and cached images can keep its guard falsely fresh =====
+harness/harness/runner.py:420
+420:                 local, why = self.fast_guard(self.frames.latest())
+421:                 if isinstance(local, bool):
+422:                     self._guard_answer_t = self._clock()
+423:                 if local is True:
+424:                     consec_guard += 1
+425:                     self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
+426:                                    question=guard.question, reason=why, source="local")
+
+harness/harness/frames.py:45
+45:                 if n == self._cache_n and self._cache:
+46:                     self.last_error = None
+47:                     return dict(self._cache)
+48:                 try:
+49:                     trip = self._get_json(f"/trip/{n}")
+
+harness/harness/cli.py:39
+39:     p.add_argument("--detect", default=None, metavar="COLORS.yaml",
+40:                    help="local ball/block detector (e.g. plans/table_colors.yaml): fast black-ball guard + boxes on "
+41:                         "the monitor's frames")
+42:     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
+
+harness/plans/hill_climb_v4.yaml:55
+55:   max_blind_s: 20
+56: 
+
+===== A06: A healthy wrist camera masks a missing camera on the carrying arm =====
+harness-cloud-sims/harness/detect.py:342
+342:         looked = False
+343:         avoid = [c for c in self.cfg.classes if "avoid" in c.kinds.values()]   # only the colours that can trip it
+344:         for role, jpeg in frames.items():
+345:             if not any(w in role for w in self.cfg.wrist_roles):
+346:                 continue
+347:             im = _load(jpeg, WORK_W)
+348:             if im is None:
+349:                 continue
+350:             looked = True
+351:             b = held(detect_image(im, self.cfg, classes=avoid), self.cfg)
+352:             if b is not None:
+353:                 return True, f"local detector: {b.cls} between the fingers in {role} ({b.frac:.1%} of the view)"
+354:         return (False, "local detector: none held") if looked else (None, "local detector: no wrist view")
+355: 
+356:     def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
+
+harness-cloud-sims/harness/live_guard.py:165
+165:                 self._sig[role] = sig
+166:                 if answer is None:
+167:                     continue
+168:                 self.last_answer_t = self._clock()
+169:                 if answer is False:
+170:                     self._count[role] = 0
+171:                     continue
+
+harness-cloud-sims/harness/runner.py:584
+584:                     return _Attempt(False, "fast loop: " + ("failing" if fd.get("fail") else "stalled"), max_p, hint)
+585:             if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
+586:                 self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
+
+===== A07: The white-ball guard misses neutral white by construction =====
+harness/plans/table_colors.yaml:21
+21:   white:  {hsv: [[135, 22, 225], [168, 70, 255]], min_frac: 0.0001, max_frac: 0.25, kinds: {ball: avoid}, small_ball: true}
+22:   black:  {hsv: [[0, 0, 0], [255, 255, 55]], min_frac: 0.002, max_frac: 0.25, kinds: {ball: avoid}}
+23:   green:  {hsv: [[72, 60, 120], [110, 255, 255]], min_frac: 0.0001, kinds: {ball: target}, small_ball: true}
+
+harness-cloud-sims/plans/table_colors.yaml:21
+21:   white:  {hsv: [[135, 22, 225], [168, 70, 255]], min_frac: 0.0001, max_frac: 0.25, kinds: {ball: avoid}, small_ball: true}
+22:   black:  {hsv: [[0, 0, 0], [255, 255, 55]], min_frac: 0.002, max_frac: 0.25, kinds: {ball: avoid}}
+23:   green:  {hsv: [[72, 60, 120], [110, 255, 255]], min_frac: 0.0001, kinds: {ball: target}, small_ball: true}
+
+harness-cloud-sims/harness/detect.py:153
+153: def _in_range(hsv: np.ndarray, lo: tuple[int, int, int], hi: tuple[int, int, int]) -> np.ndarray:
+154:     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+155:     hue = (h >= lo[0]) & (h <= hi[0]) if lo[0] <= hi[0] else (h >= lo[0]) | (h <= hi[0])   # red wraps around
+156:     return hue & (s >= lo[1]) & (s <= hi[1]) & (v >= lo[2]) & (v <= hi[2])
+
+===== A08: Fine-tune defaults conflict with runtime prompt generation and the prompt audit misses it =====
+harness/plans/hill_climb_v4.yaml:71
+71: tower_prompts:
+72:   cube: "put a block on top of the stack"   # the recorded text, byte for byte
+73:   stick: "stand a stick upright on top of the stack"
+
+harness/harness/tasks.py:35
+35: def plan_prompts(plan: Plan) -> dict[str, list[str]]:
+36:     """Every prompt the plan can send -> where it is used ("stage" or "stage/recovery"), in plan order."""
+37:     out: dict[str, list[str]] = {}
+38:     for stage in plan.stages:
+39:         out.setdefault(stage.prompt, []).append(stage.name)
+40:         for rec in stage.menu():
+41:             if rec.prompt:   # kind retry re-sends the stage prompt
+42:                 out.setdefault(rec.prompt, []).append(f"{stage.name}/{rec.name}")
+43:     return out
+44: 
+45: 
+
+harness-cloud-sims/plans/hybrid_v4.yaml:37
+37: prompt_technique: true
+38: verifier: monitor
+39: confirm: 2
+
+harness-cloud-sims/plans/hybrid_v4.yaml:54
+54: rewrite_prompts: true
+55: prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
+
+harness/TELEOP_PLAN.md:245
+245:    each model (`plans/hill_climb_v4.yaml`, same `--var model=...`) show whether it stacks as well as base Dream-1.
+246:    If the fine-tune wins the cable but stacks worse, a per-stage model is a harness change to make then. If stacking
+247:    runs on the fine-tune, delete `tower_prompts` from the plan (the fine-tune only knows "put a block on top of the
+248:    stack").
+
+===== A09: Blocking I/O can carry motion far beyond the match deadline =====
+harness/harness/station_client.py:31
+31:         timeout_s: float = 70.0,
+32:         dry_run: bool = False,
+33:         log: Callable[[str], None] | None = None,
+34:     ):
+
+harness-cloud-sims/harness/station_client.py:31
+31:         timeout_s: float = 70.0,
+32:         dry_run: bool = False,
+33:         log: Callable[[str], None] | None = None,
+34:     ):
+
+harness-cloud-sims/harness/verifiers.py:789
+789:     def check_now(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+790:         """Synchronous: waits for any call in flight, then asks once and returns that answer."""
+791:         self.wait_idle(self.plan.claude_user.get("timeout_s", 60.0))
+792:         with self._lock:
+793:             payload = self._build(stage, frames, elapsed_s)
+794:             self._result = None
+795:         if payload is None:
+796:             return Verdict(None, 0.0, "no frames available")
+797:         return self._call(payload, len(stage.menu()))
+798: 
+
+harness-cloud-sims/harness/runner.py:372
+372:             self._motion(self.station.start, prompt, self.plan.checkpoint)
+373:             left = self.plan.time_budget_s - (self._clock() - self._t0)
+374:             st = self._wait({"running", "error"}, max(5.0, min(START_TIMEOUT_S, left)), "running")
+
+===== A10: --match accepts timer-only verification and removal of pass-bar stages =====
+harness-cloud-sims/harness/cli.py:81
+81: def match_problems(args: argparse.Namespace, plan) -> list[str]:
+82:     """Why these args and this plan can't run as a match (empty list = fine). Any human input after go is a DQ."""
+83:     problems = []
+84:     if args.budget:
+85:         problems.append("--budget: a match runs on the plan's own time_budget_s")
+86:     if args.verifier in MANUAL_VERIFIERS:
+87:         problems.append(f"--verifier {args.verifier}: a typed y/n is human input")
+88:     manual = sorted({st.name for st in plan.stages if st.verifier in MANUAL_VERIFIERS})
+89:     if manual and args.verifier not in ("monitor", "claude", "time"):
+90:         problems.append(f"stages answered by a person: {', '.join(manual)} (use --verifier monitor)")
+91:     return problems
+92: 
+93: 
+94: def main(argv: list[str] | None = None) -> int:
+
+harness-cloud-sims/harness/cli.py:112
+112:     if args.skip:
+113:         plan.stages = [st for st in plan.stages if not any(st.name.startswith(x) for x in args.skip)]
+114:         if not plan.stages:
+115:             print("plan error: --skip removed every stage", file=sys.stderr)
+116:             return 2
+117:     if args.budget:
+118:         plan.time_budget_s = args.budget
+
+harness-cloud-sims/harness/verifiers.py:800
+800: class TimeVerifier:
+801:     """For stages with no real check: done once 90% of the stage timeout has passed."""
+802: 
+803:     def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
+804:         if elapsed_s >= stage.timeout_s * 0.9:
+805:             return Verdict(True, 0.5, "time elapsed", immediate=True)
+806:         return Verdict(None, 0.0, "waiting")
+807: 
+
+===== A11: Inference restarts retain old monitor results and success evidence =====
+harness/harness/runner.py:245
+245:     def _poll_health(self) -> dict[str, Any]:
+246:         self._check_global()
+247:         st = self.station.status()
+248:         if st.get("state") == "error":
+249:             self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
+250:             return self._start_run(self._prompt)
+251:         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
+252:         if dead:
+253:             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
+254:         return st
+
+harness-cloud-sims/harness/runner.py:299
+299:     def _poll_health(self) -> dict[str, Any]:
+300:         self._check_global()
+301:         st = self.station.status()
+302:         if st.get("state") == "error":
+303:             self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
+304:             self._maybe_reset(st.get("last_error"))
+305:             self._nap(ARCHIVE_WAIT_S)
+306:             return self._start_run(self._prompt)
+307:         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
+308:         if dead:
+309:             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
+
+harness-cloud-sims/harness/verifiers.py:584
+584:     def notify_prompt_change(self, prompt: str) -> None:
+585:         with self._lock:
+586:             self._last_prompt = prompt
+587:             self._gen += 1
+588:             self._result = None
+589: 
+
+===== A12: The refusal restart limit does not stop stage retries from resending the same unsafe instruction =====
+harness/harness/runner.py:275
+275:         if kind == "refusal":
+276:             n = self._refusals[self._prompt] = self._refusals.get(self._prompt, 0) + 1
+277:             if n > REFUSAL_RESTARTS:
+278:                 self.log.event("prompt_refused", prompt=self._prompt, refusals=n, error=_err(error))
+279:                 raise _Refused(f"Dream refused the prompt ({n}x): {_err(error)}")
+280:         elif kind == "transient" and self._restarts < MAX_STATION_RESTARTS:
+281:             self._restarts += 1   # one gateway timeout must not end a 5-minute match
+282:         else:
+
+harness-cloud-sims/harness/runner.py:356
+356:         if kind == "refusal":
+357:             n = self._refusals[self._prompt] = self._refusals.get(self._prompt, 0) + 1
+358:             if n > REFUSAL_RESTARTS:
+359:                 self.log.event("prompt_refused", prompt=self._prompt, refusals=n, error=_err(error))
+360:                 raise _Refused(f"Dream refused the prompt ({n}x): {_err(error)}")
+361:         elif kind == "transient" and self._restarts < MAX_STATION_RESTARTS:
+362:             self._restarts += 1   # one gateway timeout must not end a 5-minute match
+363:         else:
+
+harness/plans/hill_climb_v4.yaml:83
+83:     max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+84:     min_run_s: 4
+
+===== A13: Failed cable-release steps can lead directly into stacking with an occupied gripper =====
+harness/plans/hill_climb_v4.yaml:109
+109:   - name: release_cable
+110:     prompt: "open both grippers and move the arms up"
+111:     success: "Are both grippers open and empty, with no cable held?"
+112:     timeout_s: 10
+113:     min_run_s: 2
+114:     confirm: 1
+115:     on_fail: skip
+116: 
+117:   # One extra unplug, +5. Same prompt as unplug_cable: once the end port is empty, the end cable nearest the right arm
+118:   # is the next one along (TELEOP_PLAN: record some T1 with the end port already empty). Then put that cable down too.
+119:   - name: unplug_more
+120:     prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+121:     success: "Compared with the stage-start overhead image, is one more cable now fully out of the hub than at the start of this stage?"
+
+harness/plans/hill_climb_v4.yaml:144
+144:   - name: stack_2
+145:     prompt: "put a block on top of the stack"
+146:     success: "Is one block resting on top of another block, standing on its own, with no gripper touching either?"
+147:     expect: "An arm picks up a block, sets it squarely on another block, opens and lifts clear."
+148:     camera_notes:
+149:       "{stack_cam}": "view from the gripper doing the stacking"
+150:     timeout_s: 40
+151:     max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+152:     min_run_s: 4
+153:     stall_s: 20
+
+harness-cloud-sims/harness/runner.py:1049
+1049:             if stage.on_fail == "skip":
+1050:                 self.log.event("stage_skipped", stage=stage.name, reason=reason)
+1051:                 return StageResult(stage.name, False, attempts, self._clock() - t0, reason)
+1052:             while True:   # choose a recovery; a reset that leaves the scene broken burns an attempt
+
+===== A14: A three-block tower is treated as a mandatory gate even when two blocks already pass =====
+harness/plans/hill_climb_v4.yaml:160
+160:   - name: stack_3
+161:     prompt: "put a block on top of the stack"
+162:     success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
+163:     expect: "An arm picks up a third block and places it on the two-block tower without knocking it, opens and lifts clear."
+164:     camera_notes:
+165:       "{stack_cam}": "view from the gripper doing the stacking"
+166:     timeout_s: 40
+167:     max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+168:     min_run_s: 4
+169:     stall_s: 20
+170:     recovery:
+171:       - {name: keep_going, kind: retry, when: "the tower is standing and a block is held or near its top", max_uses: 3}
+172:       - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+173:          when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
+174:     on_fail: retry_in_place
+175: 
+176:   - name: tower_pass
+
+harness-cloud-sims/plans/hill_climb_v4.yaml:182
+182:   - name: stack_3
+183:     prompt: "put a block on top of the stack"
+184:     success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
+185:     expect: "An arm picks up a third block and places it on the two-block tower without knocking it, opens and lifts clear."
+186:     camera_notes:
+187:       "{stack_cam}": "view from the gripper doing the stacking"
+188:     timeout_s: 40
+189:     max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+190:     min_run_s: 4
+191:     stall_s: 20
+192:     recovery:
+193:       - {name: keep_going, kind: retry, when: "the tower is standing and a block is held or near its top", max_uses: 3}
+194:       - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+195:          when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
+196:     on_fail: retry_in_place
+197: 
+198:   - name: tower_pass
+
+harness-cloud-sims/tests/test_hill_climb_scene.py:60
+60:     # Stage 2: two cubes stacked is 12 cm, over the 4-inch bar; free-standing for 3 s.
+61:     place(env, "cube_1", (*h.CUBES[0], h.TABLE_Z + 3 * h.CUBE_HALF + 0.001))   # on top of cube_0
+62:     settle(env, ref, h.FREE_STANDING_S + 1)
+63:     assert ref.stage2_at is not None
+64:     # Stage 3: two golf balls in the bin.
+
+===== A15: The simulated tower gate does not establish a supported stable tower =====
+task_simulation/sim_scenes/hill_climb_table.py:196
+196:     def _tower_m(self, data: Any) -> float:
+197:         top = TABLE_Z
+198:         for b in self.groups[2]:
+199:             # A block's highest point, from its geom's world AABB (cheap and orientation-proof).
+200:             gid = self._geom_of(b)
+201:             half = self._half_height(data, gid)
+202:             top = max(top, float(data.geom_xpos[gid][2]) + half)
+203:         return top - TABLE_Z
+204: 
+
+harness-cloud-sims/sim_scenes/hill_climb_table.py:370
+370:         if (self.stage1_at is not None and self.stage2_at is None and self._tower_m(data) >= TOWER_BAR_M
+371:                 and self._t - self._last_block_touch >= FREE_STANDING_S):
+372:             self.stage2_at = self._t
+373: 
+
+harness-cloud-sims/experiments/sim_match.py:97
+97:         elif name == "tower_pass":
+98:             done = tower > h.TOWER_BAR_M and self._tower_clear(snap)
+99:         elif name.startswith("higher_"):
+
+===== A16: Cumulative ball targets carry missed stages forward as extra work =====
+harness/plans/hill_climb_v4.yaml:219
+219:     name: ball_2
+220:     success: "Are at least 2 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+221:   - <<: *ball
+222:     name: ball_3
+223:     success: "Are at least 3 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+
+harness-cloud-sims/plans/hill_climb_v4.yaml:241
+241:     name: ball_2
+242:     success: "Are at least 2 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+243:   - <<: *ball
+244:     name: ball_3
+245:     success: "Are at least 3 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+
+harness-cloud-sims/plans/hybrid_v4.yaml:268
+268:   # Each ball stage asks for ONE more ball than at its own start (8 Nov run 2: with cumulative counts, a missed first
+269:   # ball made every later stage impossible). 40 s each: 25 s cut zero-shot picks short.
+270:   - &ball
+271:     name: ball_1
+
+===== A17: The older MuJoCo table treats white balls as legal and has a different object inventory =====
+task_simulation/sim_scenes/hill_climb_table.py:7
+7:   Stage 1  a 4-port USB hub (ports on top) with 2 cables plugged in and 2 loose cables on the table
+8:   Stage 2  10 foam blocks: 6 cubes of 6 cm and 4 cylinders of 2.5 cm x 10 cm (one alone is under 4 in)
+9:   Stage 3  6 white golf balls, 2 black pool 8-balls and a wire bin by the right arm
+
+task_simulation/sim_scenes/hill_climb_table.py:263
+263:             points += 20 + 3 * int(tower / INCH)
+264:         points += 5 * golf
+265:         return {
+266:             "t": round(self._t, 2), "points": 0 if self.dq else points, "dq": self.dq,
+267:             "loses": bool(self.dq or eight), "unplugged": unplugged, "seated": seated,
+
+harness-cloud-sims/sim_scenes/hill_climb_table.py:78
+78: GOLF_RGBA = (".15 .7 .3 1", ".9 .9 .15 1", "1 .45 .05 1")       # green, yellow, orange
+79: EIGHT = ((0.34, -0.12),) + tuple(((0.08 + 0.06 * i, -0.30) for i in range(int(os.environ.get("SIM_BLACK_8BALLS", "0")))))
+80: ILLEGAL = ((GOLF_R, "0.0459", ".97 .97 .97 1"),) + tuple(
+81:     (EIGHT_R, "0.16", ".03 .03 .03 1") for _ in range(len(EIGHT) - 1))   # eight_0 white golf ball, then black 8-balls
+82: 
+
+===== A18: The bin success check counts objects below the table and does not require rest/release =====
+task_simulation/sim_scenes/hill_climb_table.py:219
+219:     def _in_bin(self, data: Any, prefix: str) -> int:
+220:         bx, by, bh = BIN_HALF
+221:         count = 0
+222:         for name in self.id:
+223:             if name.startswith(prefix):
+224:                 x, y, z = self._pos(data, name)
+225:                 if abs(x - BIN_POS[0]) < bx and abs(y - BIN_POS[1]) < by and z < TABLE_Z + 2 * bh:
+226:                     count += 1
+227:         return count
+
+harness-cloud-sims/sim_scenes/hill_climb_table.py:339
+339:     def _in_bin(self, data: Any, prefix: str) -> int:
+340:         bx, by, bh = BIN_HALF
+341:         count = 0
+342:         for name in self.id:
+343:             if name.startswith(prefix) and "_" in name and name.split("_", 1)[1].isdigit():
+344:                 x, y, z = self._pos(data, name)
+345:                 if abs(x - BIN_POS[0]) < bx and abs(y - BIN_POS[1]) < by and z < TABLE_Z + 2 * bh:
+346:                     count += 1
+347:         return count
+
+===== A19: A losing hedged judge reply can contain the only illegal-ball alert and be discarded =====
+harness-cloud-sims/harness/verifiers.py:727
+727:             res = first_of(lambda: self._call_once(payload, menu_len), self.hedge,
+728:                            timeout_s=float(self.plan.claude_user.get("timeout_s", 60.0)),
+729:                            good=lambda v: not v.reason.startswith("monitor error"))
+730:             verdict = res.value if res.value is not None else MonitorVerdict(
+731:                 None, 0.0, f"monitor error: all {self.hedge} hedged calls failed ({'; '.join(res.errors)[:200]})")
+732:             if res.winner is not None:
+733:                 self.hedge_wins.append(res.winner)
+734:         else:
+
+harness-cloud-sims/harness/verifiers.py:755
+755:             if isinstance(verdict.guard, bool):
+756:                 self.guard_answers += 1
+757:             if gen == self._gen and seq > self._result_seq:
+758:                 self._result, self._result_seq = verdict, seq
+759:             elif verdict.guard is True:
+760:                 self._guard_alert = True   # dropped (stale, or older than a delivered one), but a yes still counts
+761:             self._inflight -= 1
+
+harness-cloud-sims/harness/hedge.py:63
+63:             elif not ok and state["fallback"] is None:
+64:                 state["fallback"] = v
+65:             if ok and state["winner"] is None:
+66:                 state["winner"], state["value"] = k, v
+67:             cond.notify_all()
+
+===== A20: The oracle cannot evaluate the newly inserted ball_push_white stage =====
+harness-cloud-sims/plans/operator_notes.yaml:101
+101:     - name: ball_push_white   # ball_ prefix: the black/white-ball guard covers it
+102:       prompt: "push the white ball off the edge of the table, away from the bin and the tower"
+103:       success: "Is the white ball off the table top (it has fallen off the edge)?"
+104:       skip_unless: "Is the white ball on the table with a clear path to the nearest table edge that does not pass the tower, the bin or any coloured golf ball?"
+105:       expect: "One arm comes down beside the white ball and sweeps it in a straight line to the table edge and off, without picking it up."
+106:       technique: "Use the side of the open gripper to push; do not pick the ball up."
+107:       watch_for: "the gripper closes on the white ball; the ball rolls toward the bin or the tower; the arm sweeps through other balls."
+108:       timeout_s: 40
+109:       max_attempts: 1
+110:       min_run_s: 4
+
+harness-cloud-sims/experiments/sim_match.py:101
+101:         elif name.startswith("ball_"):
+102:             relative = "one more" in stage.success.lower()
+103:             need = base["golf_in_bin"] + 1 if relative else int(name.split("_")[1])
+104:             done = ref["golf_in_bin"] >= need and not ref["eight_in_bin"]
+105:         else:
+
+===== A21: The subscription transport drops plan-specific system instructions =====
+harness-cloud-sims/harness/verifiers.py:272
+272:         cmd = [exe, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+273:                "--model", str(payload["model"]), "--tools", "", "--strict-mcp-config", "--no-session-persistence",
+274:                "--system-prompt", CLI_SYSTEM_PROMPT]
+275:         effort = (payload.get("output_config") or {}).get("effort")
+276:         if effort:
+277:             cmd += ["--effort", str(effort)]
+278:         lines = "".join(json.dumps({"type": "user", "message": {"role": m["role"], "content": m["content"]}}) + "\n"
+279:                         for m in payload["messages"] if m.get("role") == "user")
+280:         proc = subprocess.run(cmd, input=lines, capture_output=True, text=True, timeout=timeout_s,
+281:                               cwd=tempfile.gettempdir(), env=env)
+
+harness-cloud-sims/harness/verifiers.py:718
+718:         if self.plan.system_prompt:
+719:             payload["system"] = self.plan.system_prompt
+
+harness/harness/verifiers.py:211
+211:         cmd = [exe, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+212:                "--model", str(payload["model"]), "--tools", "", "--strict-mcp-config", "--no-session-persistence",
+213:                "--system-prompt", CLI_SYSTEM_PROMPT]
+214:         effort = (payload.get("output_config") or {}).get("effort")
+215:         if effort:
+216:             cmd += ["--effort", str(effort)]
+217:         lines = "".join(json.dumps({"type": "user", "message": {"role": m["role"], "content": m["content"]}}) + "\n"
+218:                         for m in payload["messages"] if m.get("role") == "user")
+219:         proc = subprocess.run(cmd, input=lines, capture_output=True, text=True, timeout=timeout_s,
+
+===== A22: The real station add-on ignores the requested 640-pixel frame limit =====
+harness-cloud-sims/harness/frames.py:60
+60:                 try:
+61:                     with urllib.request.urlopen(f"{self.station_url}/frame/{cam}.jpg?w={FRAME_WIDTH}",
+62:                                                 timeout=self.timeout_s) as resp:
+63:                         out[cam] = resp.read()
+
+harness-cloud-sims/station_addons/sitecustomize.py:20
+20:         m = _re.match(r"^/frame/([A-Za-z0-9_]+)\.jpg$", self.path.split("?", 1)[0])
+21:         if not m:
+22:             return _orig_get(self)
+23:         frame = self.server.api.controller.frames.get(m.group(1))
+24:         if frame is None:
+25:             return self._reply(404, {"error": f"no frame from camera {m.group(1)!r}"})
+26:         ok, buf = _cv2.imencode(".jpg", _cv2.cvtColor(frame.data, _cv2.COLOR_RGB2BGR), [_cv2.IMWRITE_JPEG_QUALITY, 85])
+27:         body = buf.tobytes()
+28:         self.send_response(200)
+29:         self.send_header("Content-Type", "image/jpeg")
+30:         self.send_header("Content-Length", str(len(body)))
+31:         self.end_headers()
+32:         self.wfile.write(body)
+
+===== A23: Missing SDK dependencies silently skip otherwise dependency-free hedge tests =====
+harness-cloud-sims/tests/test_hedge_cancel.py:110
+110: transport = pytest.importorskip("dream.transport")
+111: 
+112: 
+
+harness-cloud-sims/tests/test_hedge_cancel.py:52
+52: def test_first_reply_wins_and_the_loser_is_cancelled_and_logged():
+53:     hp = HedgedPolicy([Fake("slow", 0.4), Fake("fast", 0.02)])
+54:     assert hp.get_action()["from"] == "fast" and hp.last_winner == 1
+55:     time.sleep(0.5)
+
+harness-cloud-sims/tests/test_sim_station.py:46
+46:     except Exception as exc:  # no usable GL, etc.
+47:         pytest.skip(f"simulator could not start here: {exc}")
+48:     yield station
+
+===== A25: The start-pose gate is advisory on several failure paths despite a hard-gate claim =====
+harness-cloud-sims/harness/runner.py:972
+972:         if chk.status != "far" or not cfg.homes(stage.name):
+973:             return False
+974:         if self._homes.get(stage.name, 0) >= cfg.max_homes:
+975:             self.log.event("start_pose_home", stage=stage.name, done=False, reason=f"max_homes {cfg.max_homes} used")
+976:             return False
+977:         home = self.start_poses.check(prompt, cfg.home_pose, cfg.tolerance_rad, "home_pose")
+978:         if home.status != "ok":
+979:             self.log.event("start_pose_home", stage=stage.name, done=False,
+980:                            reason="the home pose is not a training start for this prompt either", **home.as_event())
+981:             return False
+982:         left = self.plan.time_budget_s - (self._clock() - self._t0)
+983:         if left < HOME_RESERVE_S:
+984:             self.log.event("start_pose_home", stage=stage.name, done=False,
+
+harness-cloud-sims/harness/runner.py:1022
+1022:         homed = self._start_pose_gate(stage, prompt, "stage start")
+1023:         refused = self._try_issue(prompt, "stage", force_start=first or homed)
+1024:         attempts = 0
+
+harness-cloud-sims/harness/start_pose.py:76
+76: def _linf(a: list[float], b: list[float]) -> float:
+77:     n = min(len(a), len(b))
+78:     return max((abs(float(a[i]) - float(b[i])) for i in range(n)), default=0.0)
+79: 
+
+harness-cloud-sims/FINAL_HARNESS.md:36
+36: | Start-pose gate (`start_pose:` + `plans/start_poses.json`) | start-pose-live-guard | It won't send a prompt from a pose the policy never started from. |
+
+===== A24: Pacing tests fail on missing simulator dependencies instead of following the documented skip contract =====
+harness-cloud-sims/tests/test_async_pacing.py:8
+8: from sim_station import SimStation
+9: 
+10: 
+11: def call(sim, method, path, body=None):
+
+harness-cloud-sims/tests/test_async_pacing.py:22
+22:     sim = SimStation(policy="scripted", scene="hill_climb", realtime=True, api_port=0, view_port=0,
+23:                      scripted_latency_s=latency, execution_horizon=10)
+24:     sim.dream_pipeline = pipeline
+25:     sim = sim.start()
+
+harness-cloud-sims/tests/test_sim_station.py:17
+17: pytest.importorskip("mujoco")
+18: pytest.importorskip("PIL")
+19: np = pytest.importorskip("numpy")
+
+===== A26: Two subscription-backend tests use a non-executable Windows shebang stub =====
+harness/tests/test_claude_cli.py:36
+36:     exe = tmp_path / "claude"
+37:     exe.write_text(FAKE.format(python=sys.executable))
+38:     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+39:     log = tmp_path / "log.json"
+40:     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+41:     monkeypatch.setenv("HARNESS_CLAUDE_BIN", str(exe))
+42:     return log
+
+harness-cloud-sims/tests/test_claude_cli.py:39
+39:     if os.name == "nt":      # Windows can't run a shebang script: launch it through a .cmd next to it
+40:         wrapper = tmp_path / "claude.cmd"
+41:         wrapper.write_text(f'@"{sys.executable}" "{exe}" %*' + chr(10))
+42:         exe = wrapper
+43:     log = tmp_path / "log.json"

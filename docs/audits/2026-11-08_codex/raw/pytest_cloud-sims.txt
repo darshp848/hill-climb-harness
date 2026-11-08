@@ -1,0 +1,21 @@
+
+=================================== ERRORS ====================================
+_________ ERROR collecting harness-cloud-sims/tests/test_cable_end.py _________
+ImportError while importing test module 'C:\Users\darsh\TAMU\EMPE_Lab\Actuator-controls\codex_audit_2026-11-08\harness-cloud-sims\tests\test_cable_end.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Users\darsh\AppData\Local\Programs\Python\Python313\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\harness-cloud-sims\tests\test_cable_end.py:5: in <module>
+    import cv2
+E   ModuleNotFoundError: No module named 'cv2'
+=========================== short test summary info ===========================
+SKIPPED [1] ..\harness-cloud-sims\tests\test_dataset_tools.py:12: could not import 'pyarrow': No module named 'pyarrow'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_dimos_skills.py:10: could not import 'dimos': No module named 'dimos'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_hedge_cancel.py:110: could not import 'dream.transport': No module named 'dream'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_hill_climb_scene.py:9: could not import 'mujoco': No module named 'mujoco'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_sim_station.py:17: could not import 'mujoco': No module named 'mujoco'
+ERROR ..\harness-cloud-sims\tests\test_cable_end.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+5 skipped, 1 error in 1.75s

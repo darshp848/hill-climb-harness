@@ -1,0 +1,8 @@
+..                                                                       [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] ..\harness-cloud-sims\tests\test_dataset_tools.py:12: could not import 'pyarrow': No module named 'pyarrow'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_dimos_skills.py:10: could not import 'dimos': No module named 'dimos'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_hedge_cancel.py:110: could not import 'dream.transport': No module named 'dream'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_hill_climb_scene.py:9: could not import 'mujoco': No module named 'mujoco'
+SKIPPED [1] ..\harness-cloud-sims\tests\test_sim_station.py:17: could not import 'mujoco': No module named 'mujoco'
+2 passed, 5 skipped, 386 deselected in 1.45s

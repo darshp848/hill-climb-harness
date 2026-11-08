@@ -1,0 +1,28 @@
+FF                                                                       [100%]
+================================== FAILURES ===================================
+_______________ test_cli_transport_sends_the_request_unchanged ________________
+..\harness\tests\test_claude_cli.py:56: in test_cli_transport_sends_the_request_unchanged
+    reply = claude_cli_transport()({"model": "claude-haiku-5-5", "max_tokens": 4000,
+..\harness\harness\verifiers.py:219: in send
+    proc = subprocess.run(cmd, input=lines, capture_output=True, text=True, timeout=timeout_s,
+C:\Users\darsh\AppData\Local\Programs\Python\Python313\Lib\subprocess.py:554: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\darsh\AppData\Local\Programs\Python\Python313\Lib\subprocess.py:1039: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+C:\Users\darsh\AppData\Local\Programs\Python\Python313\Lib\subprocess.py:1554: in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+E   OSError: [WinError 193] %1 is not a valid Win32 application
+_____________________________ test_backend_switch _____________________________
+..\harness\tests\test_claude_cli.py:85: in test_backend_switch
+    assert v.done is True and v.reason == "done"
+E   AssertionError: assert (None is True)
+E    +  where None = MonitorVerdict(done=None, confidence=0.0, reason='monitor error: OSError: [WinError 193] %1 is not a valid Win32 appli...=None, status=None, recovery=None, scene_ok=None, holding=None, guard=None, watch_ok=None, frames_sig=None, tower=None).done
+=========================== short test summary info ===========================
+SKIPPED [1] ..\harness\tests\test_dataset_tools.py:12: could not import 'pyarrow': No module named 'pyarrow'
+SKIPPED [1] ..\harness\tests\test_dimos_skills.py:10: could not import 'dimos': No module named 'dimos'
+SKIPPED [1] ..\harness\tests\test_hill_climb_scene.py:9: could not import 'mujoco': No module named 'mujoco'
+SKIPPED [1] ..\harness\tests\test_sim_station.py:17: could not import 'mujoco': No module named 'mujoco'
+FAILED ..\harness\tests\test_claude_cli.py::test_cli_transport_sends_the_request_unchanged
+FAILED ..\harness\tests\test_claude_cli.py::test_backend_switch - AssertionEr...
+2 failed, 4 skipped, 239 deselected in 1.53s

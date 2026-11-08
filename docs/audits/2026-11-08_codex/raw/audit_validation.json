@@ -1,0 +1,13 @@
+{
+  "findings": 26,
+  "branches": 14,
+  "documentation_files": 62,
+  "unique_strategy_documents": 24,
+  "all_repositories_clean": true,
+  "candidate_heads": {
+    "main": "b1f6e4b",
+    "cloud-sims": "c6a3255"
+  },
+  "markdown_bytes": 90138,
+  "json_bytes": 23054
+}
