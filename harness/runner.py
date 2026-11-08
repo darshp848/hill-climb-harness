@@ -177,6 +177,7 @@ class Runner:
         self._filler_given = filler is not None
         self._next_stage: Stage | None = None
         self._done_names: list[str] = []
+        self._try_n = 1   # the try of the current stage the next prompt is for (picks the template variant)
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -209,6 +210,11 @@ class Runner:
                 if stage.name in self._skip:
                     self.log.event("stage_skipped", stage=stage.name, reason="operator asked to skip it")
                     results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
+                    continue
+                if self._past_cutoff(stage):
+                    reason = f"match clock past this stage's cutoff ({stage.not_after_s:g} s)"
+                    self.log.event("stage_skipped", stage=stage.name, reason=reason)
+                    results.append(StageResult(stage.name, False, 0, 0.0, reason))
                     continue
                 later = self.plan.stages[self.plan.stages.index(stage) + 1:]
                 self._next_stage = next((s for s in later if s.name not in self._skip), None)
@@ -585,7 +591,7 @@ class Runner:
                         self.log.event("rewrite_suggested", stage=stage.name, attempt=attempt, prompt=nxt,
                                        note="free text not sent: composed mode re-fills the template instead")
                     rewrites, last_prompt_t = rewrites + 1, elapsed
-                    text = self._compose(stage, verifier, "refill", hint=verdict.reason or verdict.status)
+                    text = self._compose(self._variant(stage), verifier, "refill", hint=verdict.reason or verdict.status)
                     if text != self._prompt:
                         self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, n=rewrites, prompt=text,
                                        previous=self._prompt, reason=verdict.reason, how="refill")
@@ -774,7 +780,7 @@ class Runner:
         menu = stage.menu()
         usable = [i for i, r in enumerate(menu)
                   if uses.get(i, 0) < r.max_uses and i != last
-                  and (not r.legacy or stage.on_fail == "retry_in_place")]
+                  and (not r.legacy or stage.on_fail in ("retry_in_place", "retry_then_skip"))]
         if hint in usable:
             return hint
         return usable[0] if usable else None
@@ -888,9 +894,20 @@ class Runner:
             eng.filler = ClaudeFiller(transport, eng.lib.filler_model, self.plan.system_prompt)
         return eng
 
+    def _past_cutoff(self, stage: Stage) -> bool:
+        return stage.not_after_s is not None and self._clock() - self._t0 > stage.not_after_s
+
+    def _variant(self, stage: Stage) -> Stage:
+        """The stage with the template for this try: ([template] + variants)[(try - 1) % n]. A failed try is
+        worded differently on the next one, and the slots are filled again from the scene as it is now."""
+        ids = [stage.template, *stage.variants] if stage.template else []
+        if len(ids) < 2:
+            return stage
+        return replace(stage, template=ids[(self._try_n - 1) % len(ids)])
+
     def _compose(self, stage: Stage, verifier: Verifier, why: str, hint: str | None = None) -> str:
         eng = self._engine_ready(verifier)
-        c = eng.take(stage, wait_s=PREFETCH_WAIT_S) if hint is None else None
+        c = eng.take(stage, wait_s=PREFETCH_WAIT_S) if hint is None and why == "stage" else None
         if c is None:
             c = eng.compose(stage, self._frames_for_check(stage), self._engine_ctx(), hint)
         self.log.event("prompt_composed", stage=stage.name, why=why, template=c.template, slots=c.slots,
@@ -911,7 +928,7 @@ class Runner:
         the tower the monitor last reported (one synchronous look if it hasn't reported one yet)."""
         plan = self.plan
         if self.engine is not None and self.engine.applies(stage):
-            return self._compose(stage, verifier, "stage")
+            return self._compose(self._variant(stage), verifier, "stage" if self._try_n == 1 else f"try {self._try_n}")
         if plan.write_prompts:
             written = self._write_prompt(stage, verifier)
             if written:
@@ -953,6 +970,7 @@ class Runner:
         if stage.skip_if_done and self._entry_check(stage, verifier):
             self.log.event("stage_already_done", stage=stage.name)
             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
+        self._try_n = 1
         refused = self._try_issue(self._stage_prompt(stage, verifier), "stage", force_start=first)
         attempts = 0
         uses: dict[int, int] = {}
@@ -976,8 +994,12 @@ class Runner:
             if stage.on_fail == "skip":
                 self.log.event("stage_skipped", stage=stage.name, reason=reason)
                 return StageResult(stage.name, False, attempts, self._clock() - t0, reason)
+            moved_on = None
             while True:   # choose a recovery; a reset that leaves the scene broken burns an attempt
                 if attempts >= stage.max_attempts:
+                    if stage.on_fail == "retry_then_skip":
+                        moved_on = f"{attempts} tries failed, moving on: {reason}"
+                        break
                     raise _Fail(f"stage {stage.name!r} failed after {attempts} attempts: {reason}")
                 idx = self._pick_recovery(stage, uses, last_rec, hint)
                 if idx is None:
@@ -994,6 +1016,12 @@ class Runner:
                 attempts += 1
                 reason, hint = rreason, None
                 self.log.event("attempt_end", stage=stage.name, attempt=attempts, ok=False, reason=rreason)
+            if moved_on is None and stage.on_fail == "retry_then_skip" and self._past_cutoff(stage):
+                moved_on = f"match clock past this stage's cutoff ({stage.not_after_s:g} s): {reason}"
+            if moved_on is not None:
+                self.log.event("stage_skipped", stage=stage.name, reason=moved_on)
+                return StageResult(stage.name, False, attempts, self._clock() - t0, moved_on)
+            self._try_n = attempts + 1
             if idx is None and stage.on_fail == "home_and_retry":
                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="home_and_retry")
                 self.station.stop()

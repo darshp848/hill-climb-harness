@@ -11,7 +11,9 @@ import yaml
 
 VERIFIERS = ("manual", "claude", "time", "claude+manual", "monitor", "monitor+manual")
 RECOVERY_KINDS = ("retry", "reset")
-ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
+# retry_then_skip: retry in place (recovery menu as usual) up to max_attempts, then move on instead of ending the run.
+# Darsh's rule (decisions.pdf): "if a task fails more than twice, move on; three times if it is worth a lot".
+ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort", "retry_then_skip")
 MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
@@ -21,7 +23,7 @@ TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower ta
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
                "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check",
-               "template", "slots"}
+               "template", "slots", "variants", "not_after_s"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -73,6 +75,11 @@ class Stage:
     # (also the fallback). `prompt` stays the intent the monitor reads and the text a verbatim run sends.
     template: str | None = None
     slots: dict[str, str] = field(default_factory=dict)
+    # More templates for later tries of the same stage: try n uses ([template] + variants)[(n - 1) % len].
+    variants: list[str] = field(default_factory=list)
+    # Match clock (s since run start) after which this optional stage is not started or retried: leaves time for the
+    # stages after it. Only on skip / retry_then_skip stages (a pass bar can't be left).
+    not_after_s: float | None = None
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -250,6 +257,24 @@ def _recovery_item(raw: Any, j: int, label: str, seen: set[str]) -> str | Recove
     return item
 
 
+def _variants(raw: Any, template: Any, label: str) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(v, str) and v.strip() for v in raw):
+        raise ValueError(f"{label}.variants: must be a list of template ids")
+    if not template:
+        raise ValueError(f"{label}.variants: needs a stage template")
+    return [v.strip() for v in raw]
+
+
+def _not_after(raw: dict, label: str) -> float | None:
+    if raw.get("not_after_s") is None:
+        return None
+    if raw.get("on_fail") not in ("skip", "retry_then_skip"):
+        raise ValueError(f"{label}.not_after_s: only on on_fail skip or retry_then_skip stages (a pass bar can't be left)")
+    return float(_num(raw["not_after_s"], f"{label}.not_after_s"))
+
+
 def parse_plan(data: Any) -> Plan:
     """Validates an already-loaded mapping."""
     if not isinstance(data, dict):
@@ -338,6 +363,8 @@ def parse_plan(data: Any) -> Plan:
                 confirm_check=None if raw.get("confirm_check") is None else _text(raw["confirm_check"], f"{label}.confirm_check"),
                 template=None if raw.get("template") is None else _text(raw["template"], f"{label}.template"),
                 slots=_slot_defaults(raw.get("slots"), label),
+                variants=_variants(raw.get("variants"), raw.get("template"), label),
+                not_after_s=_not_after(raw, label),
             )
         )
 

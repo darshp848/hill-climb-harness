@@ -83,7 +83,7 @@ class OracleVerifier:
             done = self._open(snap) and not held_out
         elif name in ("plug_1", "plug_2"):
             done = ref["seated"] > base["seated"] and self._open(snap)
-        elif name == "arms_clear":
+        elif name.startswith("arms_clear"):
             done = (self._open(snap) and self._near(snap, bodies["hub"]) > CLEAR_M
                     and all(snap["tcp"][s][2] > h.TABLE_Z + 0.10 for s in ("left", "right")))
         elif name == "stack_2":
@@ -116,6 +116,41 @@ class OracleFiller:
 
     def __init__(self, station_url: str) -> None:
         self.url = station_url
+        self.left_x: float | None = None   # sign of x towards the robot's left, from the arms at the first look
+
+    PORT_NAMES = ("the port at the left end", "the second port from the left", "the second port from the right",
+                  "the port at the right end")
+
+    def _ports_left_to_right(self, tcp: dict) -> list[int]:
+        """Port indices ordered from the robot's left (the left arm's side), whichever way the sim's x runs."""
+        if self.left_x is None:
+            self.left_x = -1.0 if tcp["left"][0] < tcp["right"][0] else 1.0
+        return sorted(range(len(h.PORT_X)), key=lambda p: self.left_x * -h.PORT_X[p])
+
+    @staticmethod
+    def _seated_in(bodies: dict, port: int) -> bool:
+        return any(math.hypot(b[0] - h.HUB_POS[0] - h.PORT_X[port], b[1] - h.HUB_POS[1]) < 0.006
+                   and b[2] > h.TABLE_Z + 0.02 for n, b in bodies.items() if n.startswith(("loose_", "plugged_")))
+
+    def _plug_slots(self, bodies: dict, tcp: dict, v: dict) -> dict[str, str]:
+        """Plug-in: a cable loose at the start (loose_*; an unplugged one may never go back in) that isn't seated
+        yet, and a port that was free at the start (the sim referee scores those) and is still empty."""
+        out: dict[str, str] = {}
+        order = self._ports_left_to_right(tcp)
+        free = [p for p in order if p not in h.PLUGGED_PORTS and not self._seated_in(bodies, p)]
+        if free:
+            want = self.PORT_NAMES[order.index(free[0])]
+            if want in v["port"]:
+                out["port"] = want
+        loose = [n for n in bodies if n.startswith("loose_") and bodies[n][2] < h.TABLE_Z + 0.02]
+        if len(loose) == 1:
+            out["cable"] = "the loose orange cable"
+        elif loose and free:
+            px = h.HUB_POS[0] + h.PORT_X[free[0]]
+            near = min(loose, key=lambda n: math.dist(bodies[n][:2], (px, h.HUB_POS[1])))
+            far = max(loose, key=lambda n: math.dist(bodies[n][:2], (px, h.HUB_POS[1])))
+            out["cable"] = "the nearer loose orange cable" if near != far else "the loose orange cable"
+        return {k: x for k, x in out.items() if x in v.get(k, [x])}
 
     @staticmethod
     def colour(body: str) -> str:
@@ -150,10 +185,12 @@ class OracleFiller:
         out = lib.defaults(tpl, stage.slots)
         v = {s: lib.vocab[n] for s, n in tpl.slots.items()}
         tower, txy = self._tower(bodies)
-        if tpl.id == "unplug":
+        if tpl.id.startswith("plug"):
+            out.update(self._plug_slots(bodies, tcp, v))
+        elif tpl.id.startswith("unplug"):
             if snap["referee"]["unplugged"] == len(h.PLUGGED_PORTS) - 1 and "the cable still plugged in" in v["plug"]:
                 out["plug"] = "the cable still plugged in"
-        elif tpl.id == "stack":
+        elif tpl.id.startswith("stack"):
             free = [b for b in bodies if b.startswith(("cube_", "cylinder_")) and b not in tower
                     and bodies[b][2] < h.TABLE_Z + 0.05]
             cubes = [b for b in free if b.startswith("cube_")] or free
@@ -169,7 +206,7 @@ class OracleFiller:
                 out["piece"] = f"the {self.colour(piece)}"
                 out["piece_where"] = self._where(tuple(bodies[piece][:2]), txy, v["piece_where"])
             out["top"] = top
-        elif tpl.id == "ball":
+        elif tpl.id.startswith("ball"):
             balls = [b for b in bodies if b.startswith("golf_") and not self._in_bin(bodies[b])]
             if balls:
                 side, ball = min(((s, b) for s in ("left", "right") for b in balls),

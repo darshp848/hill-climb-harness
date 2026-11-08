@@ -160,3 +160,55 @@ def test_runner_prefetches_the_next_stage_during_the_confirm_look(fake, write_pl
     comp = {e["stage"]: e for e in events(r.log, "prompt_composed")}
     assert events(r.log, "prompt_prefetch")[0]["stage"] == "b"
     assert comp["b"]["source"] == "prefetch" and prompts(fake)[-1] == "put the blue cube on top of the tower"
+
+
+# -- the relay state machine (docs/STATE_MACHINE.md): per-try variants, retry_then_skip, cutoffs ---------------------
+
+def test_relay_plan_follows_the_decisions_order_and_every_variant_is_clean():
+    plan = load_plan(ROOT / "plans/relay_sm_sim.yaml")
+    names = [s.name for s in plan.stages]
+    first = {k: next(i for i, n in enumerate(names) if n.startswith(k)) for k in ("unplug", "plug_", "stack", "ball")}
+    assert first["unplug"] < first["plug_"] < first["stack"] < first["ball"]   # unplug all, plug in, tower, balls
+    eng = PromptEngine(plan.prompts)
+    for s in plan.stages:
+        for tid in ([s.template, *s.variants] if s.template else []):
+            assert not eng.compose(stage_obj(s, tid), {}, {}).issues
+    by = {s.name: s for s in plan.stages}
+    pass_bars = ("unplug_cable", "stack_2", "stack_3", "tower_pass")
+    assert all(by[n].on_fail == "retry_in_place" and by[n].not_after_s is None for n in pass_bars)
+    assert by["plug_1"].max_attempts == 3 and by["unplug_more"].max_attempts == 2   # 3 tries when worth 20
+    assert not by["tower_pass"].skip_if_done                                          # audit A02
+
+
+def stage_obj(s, tid):
+    from dataclasses import replace
+    return replace(s, template=tid)
+
+
+def test_variants_and_cutoffs_are_checked_at_load():
+    with pytest.raises(ValueError, match="no template 'nope'"):
+        plan_with([stage("a", template="stack", variants=["nope"])], prompt_engine=engine())
+    with pytest.raises(ValueError, match="needs a stage template"):
+        plan_with([stage("a", variants=["stack"])], prompt_engine=engine())
+    with pytest.raises(ValueError, match="pass bar"):
+        plan_with([stage("a", not_after_s=10)])                       # retry_in_place: a pass bar can't be left
+    p = plan_with([stage("a", on_fail="retry_then_skip", not_after_s=10)])
+    assert p.stages[0].not_after_s == 10
+
+
+def test_retry_then_skip_rewords_each_try_then_moves_on(fake, write_plan, tmp_path):
+    path = write_plan([stage("a", template="stack", variants=["pull"], timeout_s=0.3, max_attempts=2,
+                             on_fail="retry_then_skip"),
+                       stage("b", prompt="do b", timeout_s=0.3, max_attempts=1, on_fail="skip"),
+                       stage("c", prompt="do c", on_fail="skip", not_after_s=0.01)],
+                      prompt_engine=engine())
+    r = build(fake, path, tmp_path, Script([mv(None)], repeat=True))
+    res = r.run()
+    sent = prompts(fake)
+    assert sent[0] == "put the pink cube on top of a blue cube"
+    assert sent[1] == f"{PRE} pull the plug straight up"          # try 2: the next template, not the same words
+    assert "do b" in sent and "do c" not in sent                  # moved on after 2 tries; c past its cutoff
+    skipped = {e["stage"]: e["reason"] for e in events(r.log, "stage_skipped")}
+    assert "2 tries failed" in skipped["a"] and "cutoff" in skipped["c"]
+    assert [e["why"] for e in events(r.log, "prompt_composed")] == ["stage", "try 2"]
+    assert "failed after" not in res.reason                       # the run was not ended by stage a

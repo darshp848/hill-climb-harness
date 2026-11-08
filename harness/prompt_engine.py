@@ -160,10 +160,16 @@ def parse_library(raw: Any, stages: list[Any]) -> Library | None:
             continue
         if tid not in lib.templates:
             raise ValueError(f"stage {st.name!r}.template: no template {tid!r}")
-        tpl = lib.templates[tid]
-        for s, v in (st.slots or {}).items():
-            if s not in tpl.slots or v not in lib.vocab[tpl.slots[s]]:
-                raise ValueError(f"stage {st.name!r}.slots.{s}: {v!r} is not an option of {tpl.slots.get(s)!r}")
+        ids = [tid, *getattr(st, "variants", [])]
+        for vid in ids[1:]:
+            if vid not in lib.templates:
+                raise ValueError(f"stage {st.name!r}.variants: no template {vid!r}")
+        tpls = [lib.templates[i] for i in ids]
+        for s, v in (st.slots or {}).items():   # a default must fit every template of the stage that has that slot
+            having = [t for t in tpls if s in t.slots]
+            if not having or any(v not in lib.vocab[t.slots[s]] for t in having):
+                raise ValueError(f"stage {st.name!r}.slots.{s}: {v!r} is not an option of "
+                                 f"{sorted({t.slots[s] for t in having}) or s!r}")
     return lib
 
 
