@@ -67,6 +67,7 @@ def apply_raw(data: dict[str, Any], notes: dict[str, Any]) -> dict[str, Any]:
                 raw.pop("watch_for")
         if not inserted and raw.get("on_fail", "retry_in_place") == "skip":
             raw["max_attempts"] = attempts_for(notes, entry)
+            raw["retry_skip"] = True   # without this, on_fail skip moves on after the first failed attempt
     out["stages"] = stages
     last = notes.get("tower_target_last_cube")
     target = out.get("tower_target") or []

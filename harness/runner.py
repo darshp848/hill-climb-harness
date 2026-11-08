@@ -1040,6 +1040,12 @@ class Runner:
             reason, hint = out.reason, out.recovery_hint
             if stage.on_fail == "abort":
                 raise _Fail(f"stage {stage.name!r} failed (on_fail abort): {reason}")
+            if stage.on_fail == "skip" and stage.retry_skip and attempts < stage.max_attempts:
+                prompt = self._stage_prompt(stage, verifier)   # operator notes: try again before moving on
+                homed = self._start_pose_gate(stage, prompt, "retry")
+                refused = self._try_issue(prompt, "retry", force_start=homed)
+                self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="skip_stage_retry")
+                continue
             if stage.on_fail == "skip":
                 self.log.event("stage_skipped", stage=stage.name, reason=reason)
                 return StageResult(stage.name, False, attempts, self._clock() - t0, reason)

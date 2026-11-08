@@ -16,7 +16,7 @@ MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first", "confirm_gap_s", "fast", "prompt_level", "operator_notes", "prompt_technique"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
-_STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
+_STAGE_KEYS = {"retry_skip", "name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
                "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "technique", "watch_for"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
@@ -59,6 +59,7 @@ class Stage:
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     watch: Watch | None = None
     requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
+    retry_skip: bool = False       # on_fail skip stages: use max_attempts before moving on (operator notes)
     technique: str | None = None   # operator technique (plans/operator_notes.yaml): Dream prompt + monitor
     watch_for: str | None = None   # error detection: signs this stage is going wrong, for the monitor
 
@@ -326,6 +327,7 @@ def parse_plan(data: Any) -> Plan:
                 success=success.strip(),
                 timeout_s=float(_num(raw.get("timeout_s", 60.0), f"{label}.timeout_s")),
                 max_attempts=int(_num(raw.get("max_attempts", 3), f"{label}.max_attempts", integer=True)),
+                retry_skip=bool(raw.get("retry_skip", False)),
                 min_run_s=float(_num(raw.get("min_run_s", 4.0), f"{label}.min_run_s")),
                 verifier=_enum(raw.get("verifier", default_verifier), VERIFIERS, f"{label}.verifier"),
                 recovery=recs,

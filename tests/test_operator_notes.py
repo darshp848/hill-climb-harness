@@ -64,3 +64,14 @@ def test_apply_raw_does_not_mutate_and_respects_plan_overrides():
     assert raw["stages"][0]["technique"] == "mine" and "watch_for" not in raw["stages"][0]
     assert out["stages"][-1]["technique"] == "mine" and out["stages"][-1]["watch_for"]
     assert out["tower_target"] == ["red cube, hole facing up"]
+
+
+def test_retry_rule_gives_skip_stages_their_tries():
+    """Darsh's rule was ignored on skip stages: on_fail skip used to move on after one failed attempt."""
+    plan = load_plan(Path(__file__).resolve().parents[1] / "plans" / "hill_climb_v4.yaml")
+    higher = next(s for s in plan.stages if s.name.startswith("higher_"))
+    ball = next(s for s in plan.stages if s.name == "ball_1")
+    assert higher.retry_skip and higher.on_fail == "skip" and higher.max_attempts == 2
+    assert ball.retry_skip and ball.max_attempts == 2
+    tower = next(s for s in plan.stages if s.name == "tower_pass")
+    assert not tower.retry_skip and tower.max_attempts == 99
