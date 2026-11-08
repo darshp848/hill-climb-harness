@@ -97,6 +97,12 @@ class FakeStation:
         self._closed = threading.Event()
         self.api_url = ""
         self.view_url = ""
+        # Gripper add-on (GET /arms, GET /pose, POST /move), off unless a test sets grip_readings: the right
+        # gripper's readings, one popped per GET /arms (the last repeats). on_move(body) runs after each /move, e.g.
+        # to script what the gripper reads after a regrip.
+        self.grip_readings: list[float] | None = None
+        self.on_move: Any = None
+        self.hand_z = 0.10
 
     # ---------------------------------------------------------------- lifecycle
     def start(self) -> "FakeStation":
@@ -209,6 +215,27 @@ class FakeStation:
                     self._run_epoch += 1
                     self._set_state(ERROR)
 
+    def _arms(self, *, pop: bool, pose: bool) -> dict:
+        with self._lock:
+            r = self.grip_readings
+            g = (r.pop(0) if pop and len(r) > 1 else r[0]) if r else 0.9
+            right = {"gripper": g, "commanded_gripper": None}
+            if pose:
+                right["xyz"] = [0.30, -0.10, round(self.hand_z, 4)]
+            return {"right": right, "left": {"gripper": 0.10, "commanded_gripper": None}}
+
+    def _do_move(self, body: dict) -> dict:
+        dxyz = body.get("dxyz")
+        if not isinstance(dxyz, list) or len(dxyz) != 3 or sum(d * d for d in dxyz) ** 0.5 > 0.12 + 1e-9:
+            raise ValueError("dxyz must be 3 numbers, at most 12 cm")
+        with self._lock:
+            if self.state != IDLE:
+                raise _Refused(f"move refused: station is {self.state}; stop the run first")
+            self.hand_z += dxyz[2]
+        if self.on_move is not None:
+            self.on_move(body)
+        return {"ok": True}
+
     def _do_stop(self) -> dict:
         with self._lock:
             if self.state == HOMING:
@@ -302,10 +329,12 @@ class FakeStation:
             def do_GET(self) -> None:
                 route = self.path.split("?", 1)[0]
                 fake.calls.append(("GET", route, None))
-                if route != "/status":
-                    self._reply(404, {"error": f"no such route: GET {self.path}"})
-                else:
+                if route == "/status":
                     self._reply(200, fake._status())
+                elif route in ("/arms", "/pose") and fake.grip_readings is not None:
+                    self._reply(200, fake._arms(pop=route == "/arms", pose=route == "/pose"))
+                else:
+                    self._reply(404, {"error": f"no such route: GET {self.path}"})
 
             def do_POST(self) -> None:
                 route = self.path.split("?", 1)[0]
@@ -327,6 +356,8 @@ class FakeStation:
                         result = fake._do_reset()
                     elif route == "/prompt":
                         result = fake._do_prompt(body)
+                    elif route == "/move" and fake.grip_readings is not None:
+                        result = fake._do_move(body)
                     else:
                         self._reply(404, {"error": f"no such route: POST {route}"})
                         return

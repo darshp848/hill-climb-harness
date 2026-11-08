@@ -131,6 +131,22 @@ class StationClient:
         except Exception:  # noqa: BLE001 - optional route
             return {}
 
+    def move(self, arm: str, dxyz: list[float], gripper: float, duration_s: float) -> dict[str, Any]:
+        """POST /move: move one hand by dxyz (m, robot frame, z up) and set its gripper (0 shut .. 1 open) over
+        duration_s. The station takes it only while no Dream run is going, and at most 12 cm per call; the reply
+        comes once the move is done."""
+        if sum(d * d for d in dxyz) ** 0.5 > 0.12 + 1e-9:
+            raise ValueError(f"/move takes at most 12 cm per call, got {dxyz}")
+        body = {"arm": arm, "dxyz": [float(d) for d in dxyz], "gripper": float(gripper), "duration_s": float(duration_s)}
+        return self._post("/move", body)
+
+    def pose(self) -> dict[str, Any]:
+        """GET /pose: each hand's xyz (m) and gripper reading. {} when the station has no /pose."""
+        try:
+            return self._request("GET", "/pose")
+        except Exception:  # noqa: BLE001 - optional route, used for the log only
+            return {}
+
     def wait_for_state(self, states: set[str], timeout_s: float, poll_s: float = 0.5) -> dict[str, Any]:
         """Polls /status until its state is in `states`. Raises TimeoutError."""
         deadline = time.monotonic() + timeout_s
