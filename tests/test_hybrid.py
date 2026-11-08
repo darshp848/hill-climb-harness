@@ -202,3 +202,10 @@ def test_put_down_skipped_when_its_unplug_failed(fake, write_plan, tmp_path):
     res = build(fake, path, tmp_path, sv).run()
     by = {s.name: s for s in res.stages}
     assert by["down"].reason == "up did not pass" and not any(c[0] == "down" for c in sv.calls)
+
+
+def test_long_plan_uses_short_whole_task_prompts():
+    plan = load_plan(ROOT / "plans/hybrid_v4_long.yaml")
+    assert [s.name for s in plan.stages] == ["cable_1", "cable_2", "arms_clear", "tower", "tower_higher", "ball_all"]
+    assert all(len(s.prompt.split()) <= 20 for s in plan.stages if not s.name.startswith("cable_"))
+    assert plan.guard.covers("ball_all") and not plan.tower_prompts and "{" not in plan.system_prompt

@@ -317,6 +317,14 @@ Same match structure as `hill_climb_v4.yaml`, written for base Dream-1 instead o
 - `--skip cable_` drops the cable section for stack + balls practice.
 - **Fine-tune labels must match the prompts we settle on** (stage prompts, tower prompts, logged rewrites).
 
+### `plans/hybrid_v4_long.yaml`: Dream-1's own prompt style
+
+Dream Labs' examples for Dream-1 are short imperatives that each carry a whole task ("Stack the cubes into a single
+tower", "Pick up all markers one by one and put into black pencil holder using both arms"; dreamlabs.ai/research/dream-1).
+This plan has 6 stages instead of 20: one short prompt each for a cable, the whole tower, the stick on top and all the
+balls, with long timeouts and the monitor stepping in only when the robot is on the wrong thing. Run both plans on the
+same table and keep what scores.
+
 ### Talking to it while it runs (testing only)
 
 Type plain words and Enter at any time: "skip the next step", "why did it grab the pink one?", "lower the blocks
