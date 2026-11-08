@@ -226,6 +226,10 @@ def run_trial(plan: Plan, judge: Judge, case: tuple, frames: dict[str, bytes], r
     events, drained = accounting.drain(judge.attempts, timeout_s + 5)
     transport_failed = any(e["error_type"] for e in events)
     parse_failed = verdict.stage_done is None and any(not e["error_type"] for e in events)
+    # A call that failed (HTTP error, timeout) returned no usage: OpenRouter does not bill it, so it counts $0.
+    for e in events:
+        if e["cost_usd"] is None and e.get("error_type"):
+            e["cost_usd"] = 0.0
     cost_complete = drained and all(e["cost_usd"] is not None for e in events)
     return {
         "judge": judge.name, "backend": judge.backend, "models": list(judge.models), "hedge": judge.hedge,
@@ -346,7 +350,8 @@ def main(argv: list[str] | None = None) -> int:
                         if args.dry_run:
                             if not row["dry_run_valid"]:
                                 metadata["stopped"] = "dry_run_validation_failed"
-                        elif not row["cost_complete"]:
+                        elif not row["cost_complete"] and judge.backend != "subscription":
+                            # A subscription call (claude CLI on the user's plan) has no per-call dollar cost.
                             metadata["stopped"] = "incomplete_cost_accounting"
                         elif spent >= args.max_cost_usd:
                             metadata["stopped"] = "max_cost_usd"
