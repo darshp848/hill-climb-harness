@@ -416,9 +416,9 @@ def test_per_poll_guard_ignores_a_frozen_wrist_when_the_scene_changes(fake, writ
 def test_a_dead_camera_does_not_slow_the_live_one():
     import time as _t
     lf = LiveFrames("http://127.0.0.1:9", ("wrist_l", "wrist_r"))
-    lf._one = lambda role: (_t.sleep(0.5), None)[1] if role == "wrist_l" else (_t.sleep(0.4), b"jpeg")[1]
+    lf._one = lambda role: (_t.sleep(1.0), None)[1] if role == "wrist_l" else (_t.sleep(0.01), b"jpeg")[1]
     t0 = _t.monotonic()
-    out = lf.grab()
+    got = [lf.grab(wait_s=0.05) for _ in range(5)]
     took = _t.monotonic() - t0
-    assert out == {"wrist_r": b"jpeg"}
-    assert took < 0.8                                  # in parallel: ~0.5 s, not 0.9 s
+    assert all(g == {"wrist_r": b"jpeg"} for g in got)  # the live camera every tick
+    assert took < 0.5                                  # the dead one (1 s per try) never held a tick up

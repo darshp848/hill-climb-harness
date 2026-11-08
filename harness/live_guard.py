@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
 import time
 import urllib.error
 import urllib.request
@@ -44,6 +44,7 @@ class LiveFrames:
         self.timeout_s = timeout_s
         self.last_error: str | None = None
         self._pool = ThreadPoolExecutor(max_workers=max(1, len(self.roles)), thread_name_prefix="live-frame")
+        self._pending: dict[str, Future] = {}
 
     def _one(self, role: str) -> bytes | None:
         try:
@@ -55,13 +56,20 @@ class LiveFrames:
             self.last_error = f"{role}: {exc}"
         return None
 
-    def grab(self) -> dict[str, bytes]:
-        jobs = {role: self._pool.submit(self._one, role) for role in self.roles}
+    def grab(self, wait_s: float = 0.05) -> dict[str, bytes]:
+        """The frames that are in within `wait_s`. A camera whose fetch is still running is not waited for: its
+        fetch keeps going and its frame is returned by a later grab, so a dead camera never slows a live one."""
+        for role in self.roles:
+            if role not in self._pending:
+                self._pending[role] = self._pool.submit(self._one, role)
+        wait(list(self._pending.values()), timeout=wait_s, return_when=ALL_COMPLETED)
         out: dict[str, bytes] = {}
-        for role, job in jobs.items():
-            data = job.result()
-            if data is not None:
-                out[role] = data
+        for role, job in list(self._pending.items()):
+            if job.done():
+                del self._pending[role]
+                data = job.result()
+                if data is not None:
+                    out[role] = data
         return out
 
     def probe(self, tries: int = 3) -> list[str]:
