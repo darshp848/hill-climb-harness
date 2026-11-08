@@ -5,9 +5,11 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -25,23 +27,68 @@ def redact(text):
     return text
 
 
+METADATA_TOKEN = ("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+TOKEN_FILE = Path("/tmp/hill-climb-gcloud-token")
+
+
+def inherited_cloudsdk():
+    return {k: v for k, v in os.environ.items() if k.startswith("CLOUDSDK_")}
+
+
+def vm_token():
+    """The VM service account's access token, straight from the metadata server, or None off GCE."""
+    request = urllib.request.Request(METADATA_TOKEN, headers={"Metadata-Flavor": "Google"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as reply:
+            return json.loads(reply.read())["access_token"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def gcloud(*args):
-    # Batch's runtime can hand the container a CLOUDSDK_PYTHON that does not exist (/usr/bin/python3), so pin
-    # gcloud to this interpreter.
-    env = {**os.environ, "CLOUDSDK_PYTHON": sys.executable}
+    # Batch's runtime hands the container its own CLOUDSDK_* settings (a CLOUDSDK_PYTHON of /usr/bin/python3 that
+    # does not exist here, and no usable account), so drop all of them, pin this interpreter, and authenticate
+    # with the VM's own service-account token. Fetched per call: tokens expire after about an hour.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLOUDSDK_")}
+    env["CLOUDSDK_PYTHON"] = sys.executable
+    token = vm_token()
+    if token:
+        TOKEN_FILE.write_text(token, encoding="utf-8")
+        TOKEN_FILE.chmod(0o600)
+        env["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"] = str(TOKEN_FILE)
     result = subprocess.run(["gcloud", *args, "--quiet"], capture_output=True, env=env)
     if result.returncode:
         print(redact(result.stderr.decode("utf-8", "replace"))[-800:], flush=True)
+        if not token:
+            print("No metadata-server token: not on a GCE VM, or the metadata server is unreachable.", flush=True)
     return result.returncode == 0
+
+
+def put(source: Path, destination: str, recursive=False):
+    """Copy a result file or folder to gs://... (gcloud) or to a local/NFS folder (the home cluster)."""
+    if destination.startswith("gs://"):
+        return gcloud("storage", "cp", *(["--recursive"] if recursive else []), str(source), destination)
+    try:
+        target = Path(destination)
+        if recursive:
+            shutil.copytree(source, target / source.name, dirs_exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        return True
+    except OSError as exc:
+        print(f"local copy failed: {exc}", flush=True)
+        return False
 
 
 def preflight(prefix, attempt, out):
     """Prove this VM can upload before spending a Dream match."""
     probe = out / f"preflight-{attempt}.json"
     probe.parent.mkdir(parents=True, exist_ok=True)
-    probe.write_text(json.dumps({"attempt": attempt, "inherited_cloudsdk_python": os.environ.get("CLOUDSDK_PYTHON"),
+    probe.write_text(json.dumps({"attempt": attempt, "inherited_cloudsdk": inherited_cloudsdk(),
                                  "python": sys.executable}), encoding="utf-8")
-    if not gcloud("storage", "cp", str(probe), f"{prefix.rstrip('/')}/_preflight/{attempt}.json"):
+    print(f"Inherited gcloud settings: {sorted(inherited_cloudsdk().items())}", flush=True)
+    if not put(probe, f"{prefix.rstrip('/')}/_preflight/{attempt}.json"):
         print("USER ACTION NEEDED: upload preflight failed before any match ran; check bucket IAM and network.",
               flush=True)
         raise SystemExit(UPLOAD_FAILED)
@@ -88,8 +135,8 @@ def main():
     if args.dry_run:
         print(json.dumps([{k: x[k] for k in ("name", "seed", "plan", "args")} for x in entries]))
         return
-    if not prefix.startswith("gs://") or not os.environ.get("DREAM_API_KEY"):
-        raise SystemExit("USER ACTION NEEDED: set OUTPUT_PREFIX and provide DREAM_API_KEY from Secret Manager.")
+    if not (prefix.startswith("gs://") or Path(prefix).is_absolute()) or not os.environ.get("DREAM_API_KEY"):
+        raise SystemExit("USER ACTION NEEDED: set OUTPUT_PREFIX (gs://... or an absolute folder) and DREAM_API_KEY.")
     if args.judge == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("USER ACTION NEEDED: upload anthropic-api-key and submit with --judge api.")
     if args.judge == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
@@ -119,7 +166,7 @@ def main():
             if path.suffix in (".json", ".jsonl", ".txt", ".log"):
                 path.write_text(redact(path.read_text(encoding="utf-8")), encoding="utf-8")
         destination = f"{prefix.rstrip('/')}/{attempt}/{key}"
-        if not gcloud("storage", "cp", "--recursive", str(folder), f"{prefix.rstrip('/')}/{attempt}/"):
+        if not put(folder, f"{prefix.rstrip('/')}/{attempt}/", recursive=True):
             print("USER ACTION NEEDED: output upload failed; check bucket IAM and network. Local logs remain in /out.",
                   flush=True)
             raise SystemExit(UPLOAD_FAILED)
@@ -132,7 +179,7 @@ def main():
         marker = folder / "complete.json"
         marker.write_text(json.dumps({"match": key, "run_id": os.environ.get("RUN_ID", "manual"),
                                       "attempt": attempt}), encoding="utf-8")
-        if not gcloud("storage", "cp", str(marker), destination + "/complete.json"):
+        if not put(marker, destination + "/complete.json"):
             print("USER ACTION NEEDED: completion upload failed; rerun collection after checking bucket IAM.",
                   flush=True)
             raise SystemExit(UPLOAD_FAILED)

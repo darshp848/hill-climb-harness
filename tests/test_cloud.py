@@ -60,10 +60,13 @@ def test_preflight_failure_runs_no_match_and_pins_gcloud_python(monkeypatch, tmp
     seen = []
 
     def fake_run(cmd, **kw):
-        seen.append((cmd, kw.get("env", {}).get("CLOUDSDK_PYTHON")))
+        seen.append((cmd, kw.get("env", {}).get("CLOUDSDK_PYTHON"), kw.get("env", {})))
         return argparse.Namespace(returncode=1, stderr=b"denied")
 
     monkeypatch.setattr(entrypoint.subprocess, "run", fake_run)
+    monkeypatch.setattr(entrypoint, "vm_token", lambda: "tok")
+    monkeypatch.setattr(entrypoint, "TOKEN_FILE", tmp_path / "token")
+    monkeypatch.setenv("CLOUDSDK_CONFIG", "/host/config")
     monkeypatch.setattr(entrypoint.subprocess, "Popen", lambda *a, **k: pytest.fail("match started"))
     monkeypatch.setenv("OUTPUT_PREFIX", "gs://example/runs/x")
     monkeypatch.setenv("DREAM_API_KEY", "k")
@@ -77,6 +80,27 @@ def test_preflight_failure_runs_no_match_and_pins_gcloud_python(monkeypatch, tmp
     assert seen and seen[0][0][:3] == ["gcloud", "storage", "cp"]
     import sys
     assert seen[0][1] == sys.executable
+    env = seen[0][2]
+    assert "CLOUDSDK_CONFIG" not in env
+    assert env["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"] == str(tmp_path / "token")
+
+
+def test_local_output_folder_for_home_cluster(monkeypatch, tmp_path):
+    from cloud import entrypoint
+    monkeypatch.setattr(entrypoint.subprocess, "run", lambda *a, **k: pytest.fail("gcloud used for local output"))
+    out, results = tmp_path / "out", tmp_path / "results"
+    monkeypatch.setenv("OUTPUT_PREFIX", str(results))
+    monkeypatch.setenv("DREAM_API_KEY", "k")
+    monkeypatch.delenv("MATRIX_SHA256", raising=False)
+    monkeypatch.setattr("sys.argv", ["entrypoint", "--matrix", str(ROOT / "cloud/matrix.yaml"), "--config",
+                                     "hill_climb_v4", "--seed-start", "900", "--out", str(out), "--preflight-only"])
+    entrypoint.main()
+    assert len(list((results / "_preflight").glob("*.json"))) == 1
+    match = tmp_path / "m" / "hill_climb_v4-900"
+    match.mkdir(parents=True)
+    (match / "match.json").write_text("{}")
+    assert entrypoint.put(match, str(results / "a1") + "/", recursive=True)
+    assert (results / "a1" / "hill_climb_v4-900" / "match.json").exists()
 
 
 def test_openrouter_judge_and_private_network():
