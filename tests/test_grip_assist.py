@@ -195,7 +195,7 @@ def test_monitor_model_flag(monkeypatch):
 def test_bot_v1_plan():
     plan = load_plan(ROOT / "plans/bot_v1.yaml")
     names = [s.name for s in plan.stages]
-    first_stack, first_ball = names.index("stack_base"), names.index("ball_1")
+    first_stack, first_ball = names.index("stack_2"), names.index("ball_1")
     assert all(n.startswith(("cable_", "arms_")) for n in names[:first_stack])
     assert all(n.startswith(("stack", "tower")) for n in names[first_stack:first_ball])
     assert all(n.startswith("ball_") for n in names[first_ball:])
@@ -205,20 +205,20 @@ def test_bot_v1_plan():
     assert len(unplugs) == 1 and all(s.grip_assist and s.confirm_check and not s.write_prompt for s in unplugs)
     assert unplugs[0].grip_assist.loop_until_s == 150
     ga = unplugs[0].grip_assist
-    assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.06, 0.04], 3.0, 2, (0.045, 0.20))
+    assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.06, 0.04], 3.0, 2, (0.062, 0.20))
     assert "to the right" in ga.put_down_prompt and "open the gripper" in ga.put_down_prompt
-    assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt
+    assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss it" in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert all(not s.write_prompt and "arm" not in s.prompt for s in stacks)
-    assert stacks[0].prompt == "move a blue cube to the middle of the table, close in front of the robot"
-    assert stacks[1].prompt == "put a cube on top of the other cube"
-    assert stacks[1].retry_prompt == "stack the blocks and sticks as high as possible"
+    assert [x.prompt for x in stacks] == ["put the pink cube on top of the blue cube in front of the robot",
+                                          "put the other blue cube on top of the pink cube"]
+    assert all(x.retry_prompt == "stack the blocks and sticks as high as possible" for x in stacks)
     assert not plan.tower_prompts
     balls = plan.stages[first_ball:]
     assert all(s.write_prompt and "nearest" in s.prompt and "white basket" in s.prompt and s.writer_notes
                and "left arm" in s.writer_notes and "SKIP" in s.writer_notes and s.confirm_check for s in balls)
     assert plan.stop_on_pass and plan.claude_user["hedge"] == 2
-    assert all(s.confirm == 1 and s.confirm_check for s in stacks[1:])
+    assert all(s.confirm == 1 and s.confirm_check for s in stacks)
     assert all(plan.guard.covers(s.name) for s in balls) and not plan.guard.covers("cable_unplug")
 
 
@@ -464,3 +464,8 @@ def test_engine_bot_plan_composes_every_stage_and_runs_the_grip_assist(fake, wri
     assert plan.prompts is not None and plan.prompts.mode == "compose" and not plan.write_prompts and plan.hands_off
     assert all(s.template for s in plan.stages if s.name != "arms_clear")
     assert plan.stages[0].grip_assist and plan.stages[0].grip_assist.loop_until_s
+def test_shut_on_air_then_half_reopen_is_not_a_hold(fake, write_plan, tmp_path):
+    fake.grip_readings = [0.85, 0.85, 0.035, 0.168, 0.12, 0.12, 0.12]   # 8 Nov live run 21:46
+    r = build(fake, _cable_plan(write_plan, _assist(regrip=0), timeout_s=0.6), tmp_path, Script([mv(None)]))
+    r.run()
+    assert not events(r.log, "grip_assist") and not _moves(fake)

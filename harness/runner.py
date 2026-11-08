@@ -823,9 +823,13 @@ class Runner:
             seen.append(g)
             if len(seen) < 3 or not any(x > ga.open_above for x in seen[:-2]):
                 continue   # it must have been open on the way in: a gripper that starts shut proves nothing
+            last_open = max(i for i, x in enumerate(seen) if x > ga.open_above)
+            since = seen[last_open + 1:]
             if all(x <= lo for x in seen[-2:]) and gs["regrips"] > 0:
                 action = "regrip"
-            elif all(lo < x < hi for x in seen[-2:]):
+            elif all(lo < x < hi for x in seen[-2:]) and not any(x <= lo for x in since[:-2]):
+                # a real hold closes from open straight onto the plug. 8 Nov live: 0.85 -> 0.035 -> 0.17 -> 0.12 was
+                # Dream shutting on air on the way down and half reopening, not a plug.
                 action = "pull"
             else:
                 continue
