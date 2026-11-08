@@ -135,8 +135,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"--live-guard: no live wrist frame at {station_url}/frame/<camera>.jpg "
                           f"({live.last_error}); running without it", file=sys.stderr)
                     log.event("warning", message=f"live guard off: no /frame route ({live.last_error})")
-                else:
-                    live.roles = found
+                else:   # all roles stay in: a camera missing at startup is used once it answers
                     runner.live_guard = LiveGuard(live.grab, det.guard, station.stop, rate_hz=args.live_guard_hz,
                                                   confirm_frames=args.live_guard_frames, log=log.event)
                     runner.live_guard.start()

@@ -339,3 +339,42 @@ def test_live_guard_trip_ends_the_match_mid_stage(fake, write_plan, tmp_path):
     assert trip and trip[0]["stage"] == "ball_1" and trip[0]["stop"] == "sent"
     assert routes(fake).count("/stop") >= 1
     assert not wait_until(lambda: g.ticks > 10_000, timeout=0.05)   # thread is idle after the trip
+
+
+# -- second Codex review -----------------------------------------------------------------------------------------------
+def test_trip_during_a_motion_command_stops_again(fake, write_plan, tmp_path):
+    from harness.runner import _Guard
+    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+    runner._t0 = runner._clock()
+    g = LiveGuard(_Feed(), lambda f: (True, "y"), lambda: None, confirm_frames=1)
+    runner.live_guard = g
+    g.arm("ball_1")
+
+    def slow_start(prompt, checkpoint):
+        g.step()                                       # the guard trips while this POST is in flight
+        return runner.station.start(prompt, checkpoint)
+    with pytest.raises(_Guard):
+        runner._motion(slow_start, "do ball_1", None)
+    r = routes(fake)
+    assert r[-2:] == ["/start", "/stop"]               # the start that overtook the trip is stopped
+
+
+def test_guard_trip_does_not_wait_for_the_runner():
+    stops = []
+    g = LiveGuard(_Feed(), lambda f: (True, "y"), lambda: stops.append(1), confirm_frames=1)
+    assert not hasattr(g, "command_lock")
+    g.arm("ball_1")
+    g.step()
+    assert stops == [1]
+
+
+def test_per_poll_guard_counts_new_frames_only(fake, write_plan, tmp_path):
+    q = "Is a gripper holding a black ball?"
+    path = write_plan([stage("ball_1", timeout_s=1.5, on_fail="skip")], verifier="monitor",
+                      guard={"question": q, "stages": ["ball_"], "confirm": 2})
+    runner = build(fake, path, tmp_path, Script([mv(None)]))
+    runner.frames.latest = lambda: {"wrist_r": b"the-same-cached-trip"}
+    runner.fast_guard = lambda f: (True, "white ball")
+    result = runner.run()
+    assert not result.guard_tripped                    # one frame, judged once: never two yes answers
+    assert len([e for e in events(runner.log, "guard_yes") if e.get("source") == "local"]) == 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from datetime import datetime, timezone
@@ -157,6 +158,7 @@ class Runner:
         # harness.start_pose.StartPoses for plan.start_pose; None = no start-pose checks
         self.start_poses: StartPoses | None = None
         self._homes: dict[str, int] = {}
+        self._fast_sig: str | None = None   # frames the per-poll local guard judged last
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -263,15 +265,15 @@ class Runner:
         return st
 
     def _motion(self, fn: Callable[..., Any], *args: Any) -> Any:
-        """Sends a command that can move an arm. With a live guard, under its command lock and only if it has not
-        tripped: a trip either happened before (raise, nothing sent) or comes after, and its /stop follows this."""
+        """Sends a command that can move an arm, never after an operator stop, the deadline or a guard trip. A live
+        guard trip found right after the command may have been overtaken by it: stop again and end the match."""
+        self._check_global()
+        reply = fn(*args)
         lg = self.live_guard
-        if lg is None:
-            return fn(*args)
-        with lg.command_lock:
-            if lg.tripped is not None:
-                raise _Guard(f"guard tripped (live frames): {lg.tripped}")
-            return fn(*args)
+        if lg is not None and lg.tripped is not None:
+            self._safe_stop(f"guard tripped while sending a command: {lg.tripped}")
+            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
+        return reply
 
     def _safe_stop(self, why: str) -> None:
         self.log.event("stop", why=why)
@@ -449,9 +451,14 @@ class Runner:
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
             if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
                 self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
-            if guard is not None and self.fast_guard is not None:   # kept with a live guard too: a fallback
+            fast_frames = self.frames.latest() if guard is not None and self.fast_guard is not None else {}
+            fast_sig = hashlib.sha1(b"".join(fast_frames[k] for k in sorted(fast_frames))).hexdigest()
+            if fast_frames and fast_sig != self._fast_sig:   # kept with a live guard too, as a fallback
                 # Local detector on every poll, from the stage's first second: no API latency, works offline.
-                local, why = self.fast_guard(self.frames.latest())
+                # Only new frames count: the debug view repeats a trip's frames until the next one, and a frozen
+                # view must neither confirm a yes nor keep max_blind_s satisfied.
+                self._fast_sig = fast_sig
+                local, why = self.fast_guard(fast_frames)
                 if isinstance(local, bool):
                     self._guard_answer_t = self._clock()
                 if local is True:
@@ -821,7 +828,9 @@ class Runner:
                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="home_and_retry")
                 self.station.stop()
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
-                self._motion(self.station.home)
+                if self.plan.time_budget_s - (self._clock() - self._t0) < HOME_RESERVE_S:
+                    raise _Fail("not enough match time left to home safely after the stop")
+                self._motion(self.station.home)   # checks operator stop, deadline and guard first
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
                 refused = self._try_issue(self._stage_prompt(stage, verifier), "retry", force_start=True)
             else:

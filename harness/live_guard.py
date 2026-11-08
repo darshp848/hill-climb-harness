@@ -11,9 +11,9 @@ any guard trip.
 Reads only GET /frame; the one thing it sends is /stop, and only while armed (a stage the plan guard covers).
 
 Safety rules (from the Codex review of the first version):
-- `command_lock` is shared with the runner: the runner holds it while it sends /start, /prompt or /home and checks
-  `tripped` first; the guard holds it while it sets `tripped` and sends /stop. So no motion command can follow a
-  trip unseen, and a trip right after a motion command still stops it.
+- The guard never waits on the runner: it sets `tripped` and sends /stop at once. The runner checks `tripped` before
+  each /start, /prompt or /home and again after it; a trip it finds afterwards may have been overtaken by its own
+  command, so it sends /stop again (Runner._motion).
 - Arming has a generation: a judgment that started before a disarm (or a re-arm for another stage) is dropped.
 - Only a new frame counts as a look: the same bytes judged again neither add a yes nor refresh `last_answer_t`, so a
   frozen camera shows up as blindness (plan guard max_blind_s), not as "all clear".
@@ -80,7 +80,6 @@ class LiveGuard:
         self.confirm_frames = confirm_frames
         self._log = log or (lambda *a, **k: None)
         self._clock = clock
-        self.command_lock = threading.RLock()   # shared with the runner's motion commands (see module doc)
         self._lock = threading.Lock()           # guards the fields below
         self._armed: str | None = None          # the covered stage's name while armed
         self._gen = 0                           # bumped on every arm-from-disarmed and every disarm
@@ -103,12 +102,11 @@ class LiveGuard:
             self._armed = stage
 
     def disarm(self) -> None:
-        with self.command_lock:          # waits for a stop being sent; after this no stop is dispatched
-            with self._lock:
-                if self._armed is not None:
-                    self._log("live_guard_disarmed", stage=self._armed, ticks=self.ticks)
-                self._armed = None
-                self._gen += 1
+        with self._lock:
+            if self._armed is not None:
+                self._log("live_guard_disarmed", stage=self._armed, ticks=self.ticks)
+            self._armed = None
+            self._gen += 1
 
     def start(self) -> None:
         if self._thread is None:
@@ -156,16 +154,15 @@ class LiveGuard:
                 return
 
     def _trip(self, stage: str, gen: int, why: str) -> None:
-        with self.command_lock:
-            with self._lock:
-                if gen != self._gen or self.tripped is not None:
-                    return
-                self.tripped = why
-            try:
-                self._stop()
-                self._log("guard_tripped", stage=stage, reason=why, source="live", stop="sent")
-            except Exception as exc:  # noqa: BLE001 - the runner's own stop follows on its next check
-                self._log("guard_tripped", stage=stage, reason=why, source="live", stop=f"failed: {exc}")
+        with self._lock:
+            if gen != self._gen or self.tripped is not None:
+                return
+            self.tripped = why   # set before /stop: the runner sends nothing that moves an arm from here on
+        try:
+            self._stop()
+            self._log("guard_tripped", stage=stage, reason=why, source="live", stop="sent")
+        except Exception as exc:  # noqa: BLE001 - the runner's own stop follows on its next check
+            self._log("guard_tripped", stage=stage, reason=why, source="live", stop=f"failed: {exc}")
 
     def _loop(self) -> None:
         while not self._closed.is_set():
