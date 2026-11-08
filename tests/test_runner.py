@@ -213,3 +213,40 @@ def test_verifier_gets_frames(fake, write_plan, tmp_path):
     build(fake, path, tmp_path, fv).run()
     assert fv.calls and fv.calls[-1][2] == ["scene", "wrist_l", "wrist_r"]
     assert all(c[1] >= 0.05 for c in fv.calls)   # never asked before min_run_s
+
+
+class FaultOnce:
+    """Puts the fake station into error with `message` at the first check of stage b, then verifies everything."""
+
+    def __init__(self, fake, message):
+        self.fake, self.message, self.faulted = fake, message, False
+
+    def check(self, stage, frames, elapsed_s):
+        if stage.name == "b" and not self.faulted:
+            self.faulted = True
+            with self.fake._lock:
+                self.fake.last_error = self.message
+                self.fake.state = "error"   # the run died mid-stage
+            return Verdict(None, 0.0, "running")
+        return Verdict(True, 1.0, "scripted ok")
+
+
+def test_inference_fault_restarts_the_run_with_the_same_prompt(fake, write_plan, tmp_path):
+    # Cluster sim matches lost minutes to one DA-6000 gateway timeout; that must not end a match.
+    path = write_plan([stage(n, min_run_s=0.05) for n in ("a", "b", "c")], confirm=1)
+    msg = "DreamAPI refused the inference request: DA-6000 GATEWAY_FAULT (connection_timed_out)"
+    runner = build(fake, path, tmp_path, FaultOnce(fake, msg))
+    result = runner.run()
+    assert result.ok, result.reason
+    events = (runner.log.path / "events.jsonl").read_text()
+    assert '"station_restart"' in events and "DA-6000" in events
+    starts = [b["prompt"] for _, r, b in fake.posts() if r == "/start"]
+    assert starts == ["do a", "do b"]
+
+
+def test_hardware_fault_still_ends_the_run(fake, write_plan, tmp_path):
+    path = write_plan([stage(n, min_run_s=0.05) for n in ("a", "b", "c")], confirm=1)
+    runner = build(fake, path, tmp_path, FaultOnce(fake, "arm 'right' motor 4 over-current"))
+    result = runner.run()
+    assert not result.ok and "over-current" in result.reason
+    assert '"station_restart"' not in (runner.log.path / "events.jsonl").read_text()

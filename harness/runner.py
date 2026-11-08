@@ -26,6 +26,7 @@ DONE_WINDOW_S = 15.0       # two done verdicts this close pass the stage, flicke
 EXTEND_S = 20.0            # one timeout extension while the monitor sees the gripper on the target    # a monitor "failing" ends an attempt only after this share of timeout_s
 SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-manual verifier
 MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prompt change
+MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-service faults
 
 
 @dataclass
@@ -52,6 +53,17 @@ class RunResult:
     seconds: float = 0.0
     reason: str = ""
     guard_tripped: bool = False
+
+
+def _inference_fault(last_error: Any) -> bool:
+    """A fault of the Dream inference service (gateway timeout, model call failed): restarting the run with the
+    same prompt is safe. Anything else (an arm, a motor, a safety stop) is not retried."""
+    if isinstance(last_error, dict):
+        text = f"{last_error.get('type', '')} {last_error.get('error_code', '')} {last_error.get('message', '')}"
+    else:
+        text = str(last_error or "")
+    return any(key in text for key in ("DreamAPI", "DreamServerError", "DreamProtocolError", "DA-5000", "DA-6000",
+                                       "GATEWAY_FAULT", "connection_timed_out"))
 
 
 def _err(last_error: Any) -> str:
@@ -87,6 +99,8 @@ class Runner:
         self._t0 = 0.0
         self._last_progress: float | None = None
         self._change: dict[str, Any] | None = None   # the latest prompt change, for the progress_moved event
+        self._prompt: str | None = None   # what the robot should be running, for a restart after a fault
+        self._restarts = 0
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -177,7 +191,13 @@ class Runner:
         self._check_global()
         st = self.station.status()
         if st.get("state") == "error":
-            raise _Fail(f"station error: {_err(st.get('last_error'))}")
+            error = st.get("last_error")
+            if self._prompt and _inference_fault(error) and self._restarts < MAX_STATION_RESTARTS:
+                # One gateway timeout must not end a 5-minute match: restart with the same prompt.
+                self._restarts += 1
+                self.log.event("station_restart", error=_err(error), restart=self._restarts, prompt=self._prompt)
+                return self._start_run(self._prompt)
+            raise _Fail(f"station error: {_err(error)}")
         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
         if dead:
             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
@@ -212,6 +232,7 @@ class Runner:
         else:
             reply, how = self.station.set_prompt(prompt), "set_prompt"
             self.log.event("set_prompt", prompt=prompt)
+        self._prompt = prompt
         chunks = reply.get("chunks") if isinstance(reply, dict) else None
         self.log.event("prompt_change", prompt=prompt, why=why, how=how, chunks=chunks)
         self._change = {"t": self._clock(), "baseline": self._last_progress, "logged": False}
