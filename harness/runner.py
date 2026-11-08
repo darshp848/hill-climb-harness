@@ -901,13 +901,15 @@ class Runner:
     def _layered(self, stage: Stage, prompt: str) -> str:
         """plan.prompt_level (harness.promptgen): add context levels to the prompt for base Dream-1. 1 = as is."""
         level = int(getattr(self.plan, "prompt_level", 1))
-        if level == 1:
+        technique = (stage.technique or "") if getattr(self.plan, "prompt_technique", False) else ""
+        if level == 1 and not technique:
             return prompt
         from .promptgen import Context, compose  # noqa: PLC0415
         v = getattr(self, "_last_verdict", None)
         ctx = Context(prefix=self.plan.prompt_prefix or "", holding=getattr(v, "holding", None),
                       tower=self._tower, attempt=getattr(self, "_attempt_n", 1),
-                      progress=getattr(v, "progress", None), last_failure=getattr(self, "_last_fail_reason", ""))
+                      progress=getattr(v, "progress", None), last_failure=getattr(self, "_last_fail_reason", ""),
+                      technique=technique)
         out = compose(prompt, level, ctx)
         self.log.event("prompt_layered", stage=stage.name, level=level, prompt=out)
         return out

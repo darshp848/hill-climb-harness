@@ -14,11 +14,11 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first", "confirm_gap_s", "fast", "prompt_level"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first", "confirm_gap_s", "fast", "prompt_level", "operator_notes", "prompt_technique"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "technique", "watch_for"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -59,6 +59,8 @@ class Stage:
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     watch: Watch | None = None
     requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
+    technique: str | None = None   # operator technique (plans/operator_notes.yaml): Dream prompt + monitor
+    watch_for: str | None = None   # error detection: signs this stage is going wrong, for the monitor
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -165,6 +167,9 @@ class Plan:
     # work without the "no power" sentence); added when the monitor drops it.
     prompt_prefix: str = ""
     reset_first: bool = False      # POST /reset and wait for idle before the first stage: both grippers start open
+    operator_notes: str | None = None   # plans/operator_notes.yaml applied at load (harness.operator_notes)
+    # Add each stage's operator technique to the Dream prompt (harness.promptgen). Base Dream-1 only.
+    prompt_technique: bool = False
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -336,6 +341,8 @@ def parse_plan(data: Any) -> Plan:
                 history_cameras=hist,
                 watch=watch,
                 requires_stage=prerequisite,
+                technique=None if raw.get("technique") is None else _text(raw["technique"], f"{label}.technique"),
+                watch_for=None if raw.get("watch_for") is None else _text(raw["watch_for"], f"{label}.watch_for"),
             )
         )
 
@@ -382,6 +389,8 @@ def parse_plan(data: Any) -> Plan:
         rewrite_prompts=_bool(data.get("rewrite_prompts", False), "plan.rewrite_prompts"),
         prompt_prefix=prefix.strip(),
         reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
+        operator_notes=data.get("operator_notes") or None,
+        prompt_technique=_bool(data.get("prompt_technique", False), "plan.prompt_technique"),
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
         start_pose=_start_pose(data.get("start_pose"), [st.name for st in stages]),
@@ -495,10 +504,13 @@ def substitute(text: str, variables: dict[str, str] | None) -> str:
     return _VAR.sub(lambda m: variables[m.group(1)], text)
 
 
-def load_plan(path: str | Path, variables: dict[str, str] | None = None) -> Plan:
+def load_plan(path: str | Path, variables: dict[str, str] | None = None, *,
+              operator_notes: bool | None = None, prompt_technique: bool | None = None) -> Plan:
     """Reads and validates a plan YAML file. Raises ValueError (or OSError if unreadable).
 
-    {name} placeholders are filled from the plan's own `vars:` defaults, then from `variables` (--var wins)."""
+    {name} placeholders are filled from the plan's own `vars:` defaults, then from `variables` (--var wins).
+    The plan's `operator_notes` file is applied unless operator_notes=False; prompt_technique overrides the plan's."""
+    plan_dir = Path(path).resolve().parent
     text = Path(path).read_text(encoding="utf-8")
     merged: dict[str, str] = {}
     try:
@@ -515,4 +527,15 @@ def load_plan(path: str | Path, variables: dict[str, str] | None = None) -> Plan
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ValueError(f"{path}: invalid YAML: {exc}") from None
+    if isinstance(data, dict):
+        notes_file = data.get("operator_notes")
+        if notes_file is not None and not isinstance(notes_file, str):
+            raise ValueError("plan.operator_notes: must be a path to a notes YAML file")
+        if notes_file and operator_notes is not False:
+            from .operator_notes import apply_raw, load  # noqa: PLC0415
+            data = apply_raw(data, load(plan_dir / notes_file))
+        elif operator_notes is False:
+            data = {k: v for k, v in data.items() if k != "operator_notes"}
+        if prompt_technique is not None:
+            data = {**data, "prompt_technique": prompt_technique}
     return parse_plan(data)

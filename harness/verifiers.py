@@ -615,6 +615,11 @@ class MonitorVerifier:
         lines.append(f"Current stage question: {stage.success}")
         if stage.expect:
             lines.append(f"What correct behaviour looks like: {stage.expect}")
+        if getattr(stage, "technique", None):
+            lines.append(f"Operator's technique for this stage: {stage.technique}")
+        if getattr(stage, "watch_for", None):
+            lines.append("Error detection: if you see any of these, the attempt is going wrong (set `failing` "
+                         f"true and pick a recovery if one fits): {stage.watch_for}")
         if stage.camera_notes:
             lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
             lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]

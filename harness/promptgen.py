@@ -30,6 +30,7 @@ class Context:
     attempt: int = 1
     progress: float | None = None
     last_failure: str = ""
+    technique: str = ""                # operator technique for this stage (plans/operator_notes.yaml), or ""
 
 
 def _strip_prefix(prompt: str, prefix: str) -> str:
@@ -39,11 +40,16 @@ def _strip_prefix(prompt: str, prefix: str) -> str:
 def compose(stage_prompt: str, level: int, ctx: Context) -> str:
     """The prompt at `level`. Level 1 returns the plan's prompt unchanged."""
     core = _strip_prefix(stage_prompt, ctx.prefix)
+    how = " ".join(ctx.technique.split())
     if level <= 0:
-        return core
+        return f"{how} {core}".strip() if how else core
     if level == 1:
-        return stage_prompt
+        if not how:
+            return stage_prompt
+        return " ".join(p for p in (ctx.prefix, how, core) if p)
     parts = [ctx.prefix] if ctx.prefix else []
+    if how:
+        parts.append(how)
     if level >= 2:
         held = {k: v for k, v in (ctx.holding or {}).items() if v and str(v).lower() not in ("nothing", "none")}
         if held:

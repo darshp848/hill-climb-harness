@@ -10,6 +10,7 @@ import os
 import signal
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import psutil
@@ -51,8 +52,57 @@ def sim_text(value):
     return value
 
 
-def prepare_plan(path, skip=()):
-    plan = sim_text(load_plan(path))
+def start_live_snapshots(sim, log, folder, stop, every_s=15.0, keep_every=4):
+    """For watching running jobs: every `every_s` write live/{scene,wrist_l,wrist_r}.jpg (latest), live/status.json
+    and a line in live/timeline.jsonl; every `keep_every`-th scene frame is also kept as live/scene_NNN.jpg.
+    The entrypoint uploads live/ while the match runs. Never raises into the match."""
+    folder.mkdir(parents=True, exist_ok=True)
+    state = {"stage": None, "attempt": None, "last_verdict": None, "started": time.monotonic()}
+
+    def track(event, fields):
+        if event == "stage_start":
+            state["stage"] = fields.get("stage")
+        elif event == "attempt_start":
+            state["attempt"] = fields.get("attempt")
+        elif event == "verdict":
+            state["last_verdict"] = {k: fields.get(k) for k in ("done", "confidence", "reason")}
+            state["last_verdict"]["reason"] = str(state["last_verdict"]["reason"])[:200]
+    log.listeners.append(track)
+
+    def loop():
+        n = 0
+        while not stop.wait(every_s if n else 2.0):
+            try:
+                for cam in ("scene", "wrist_l", "wrist_r"):
+                    with urllib.request.urlopen(f"{sim.api_url}/frame/{cam}.jpg?w=480", timeout=5) as reply:
+                        (folder / f"{cam}.jpg").write_bytes(reply.read())
+                if n % keep_every == 0:
+                    (folder / f"scene_{n // keep_every:03d}.jpg").write_bytes((folder / "scene.jpg").read_bytes())
+                with sim._lock:
+                    ref = dict(sim._poses.get("referee") or {})
+                status = {"wall_s": round(time.monotonic() - state["started"], 1), "sim_t": ref.get("t"),
+                          "stage": state["stage"], "attempt": state["attempt"], "points": ref.get("points"),
+                          "unplugged": ref.get("unplugged"), "tower_in": ref.get("tower_in"),
+                          "balls": ref.get("golf_in_bin"), "eight_in_bin": ref.get("eight_in_bin"),
+                          "dream": sim.dream_summary(),
+                          "last_verdict": state["last_verdict"]}
+                (folder / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                with (folder / "timeline.jsonl").open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(status) + "\n")
+            except Exception as exc:   # a missed snapshot must never touch the match
+                (folder / "snapshot_error.txt").write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
+            n += 1
+
+    thread = threading.Thread(target=loop, name="live-snapshots", daemon=True)
+    thread.start()
+    return thread
+
+
+def prepare_plan(path, skip=(), *, notes=True, technique=None, level=None):
+    """technique/level None = as the plan file says."""
+    plan = sim_text(load_plan(path, operator_notes=notes, prompt_technique=technique))
+    if level is not None:
+        plan.prompt_level = level
     plan.stages = [s for s in plan.stages if not any(s.name.startswith(x) for x in skip)]
     if not plan.stages or any(s.verifier != "monitor" for s in plan.stages):
         raise ValueError("cloud matches require monitor-only stages and no human input")
@@ -75,7 +125,8 @@ def run_match(args):
     if args.judge == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("USER ACTION NEEDED: supply ANTHROPIC_API_KEY through Secret Manager")
     plan_path = ROOT / args.plan
-    plan = prepare_plan(plan_path, args.skip)
+    plan = prepare_plan(plan_path, args.skip, notes=args.operator_notes != "off",
+                        technique={"on": True, "off": False}.get(args.prompt_technique), level=args.prompt_level)
     detector = TableDetector.from_file(ROOT / args.detect)
     log = RunLog(args.out)
     proc = psutil.Process()
@@ -94,10 +145,13 @@ def run_match(args):
     summary = None
     try:
         sim = SimStation(policy=args.policy, scene="hill_climb", realtime=True,
-                         api_port=0, view_port=0, max_trips=4)
+                         api_port=0, view_port=0, max_trips=4,
+                         execution_horizon=args.execution_horizon or None, sync_above_ms=args.sync_above_ms)
         sim.hedge = args.dream_hedge     # Dream sessions raced per action chunk (sim_station.HedgedPolicy)
+        sim.dream_pipeline = args.dream_pipeline   # Dream sessions used in turn for throughput (PipelinedPolicy)
         sim = sim.start()
         station = StationClient(sim.api_url)
+        live_thread = start_live_snapshots(sim, log, Path(args.out) / "live", done)
         station.reset()
         if args.judge == "oracle":
             mon = DelayedOracle(plan, sim.api_url, args.seed)
@@ -171,6 +225,12 @@ def run_match(args):
             ("no judge verdicts", health["verdicts"] == 0)] if bad]
         summary = {"schema_version": 1, "scenario": "hill_climb", "label": args.label,
                    "seed": args.seed, "policy": args.policy, "judge": args.judge,
+                   "judge_models": args.judge_models, "judge_mode": args.judge_mode,
+                   "judge_reasoning": os.environ.get("HARNESS_OPENROUTER_REASONING"),
+                   "operator_notes": bool(plan.operator_notes), "prompt_technique": plan.prompt_technique,
+                   "prompt_level": plan.prompt_level, "dream_hedge": args.dream_hedge, "dream_pipeline": args.dream_pipeline,
+                   "execution_horizon": args.execution_horizon,
+                   "dream": sim.dream_summary(),
                    "harness": dataclasses.asdict(result), "referee": ref,
                    "stages": [dataclasses.asdict(s) for s in result.stages],
                    "match_wall_s": wall,
@@ -212,6 +272,18 @@ def parser():
     p.add_argument("--dream-hedge", type=int, default=1, help="Dream sessions raced per chunk (N x Dream usage)")
     p.add_argument("--plan", default="plans/hill_climb_v4.yaml")
     p.add_argument("--skip", action="append", default=[])
+    p.add_argument("--operator-notes", choices=["plan", "off"], default="plan",
+                   help="off = ignore the plan's operator_notes (A/B control)")
+    p.add_argument("--prompt-technique", choices=["plan", "on", "off"], default="plan")
+    p.add_argument("--prompt-level", type=int, choices=range(0, 6), default=None)
+    p.add_argument("--execution-horizon", type=int, default=10,
+                   help="Dream async pacing: rows per chunk before the next takes over (10 at 20 Hz = 2 Hz calls); "
+                        "0 = Dream's example loop (whole chunk, physics holds during inference)")
+    p.add_argument("--dream-pipeline", type=int, default=1,
+                   help="Dream sessions used in turn, so a new chunk can land every 0.5 s even with a ~1 s round trip "
+                        "(N x Dream usage); needs --execution-horizon")
+    p.add_argument("--sync-above-ms", type=float, default=1900.0,
+                   help="round trip past which the pacing goes sync (10 rows + 1.9 s x 20 Hz = the 48-row chunk)")
     p.add_argument("--detect", default="plans/sim_table_colors.yaml")
     p.add_argument("--match", action="store_true", default=True)
     p.add_argument("--live-guard", action="store_true", default=True)

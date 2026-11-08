@@ -21,6 +21,8 @@ def normalize(match):
             "valid": match.get("valid", True), "invalid_because": match.get("invalid_because", []),
             "health": match.get("health", {}), "sim_t": match.get("sim_t", ref.get("t")),
             "sim_rate": match.get("sim_rate"),
+            **{k: match.get(k) for k in ("judge_models", "judge_mode", "judge_reasoning", "operator_notes",
+                                         "prompt_technique", "prompt_level", "dream_hedge", "dream")},
             "policy": match["policy"], "judge": match["judge"], "metrics": match["metrics"],
             "monitor_calls": match["monitor_calls"], "versions": match["versions"],
             "source_revision": match.get("source_revision", "unknown"),

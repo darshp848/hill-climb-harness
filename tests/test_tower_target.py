@@ -15,7 +15,10 @@ def test_v4_target_is_the_photo_tower():
     t = load_plan(V4).tower_target
     assert [p.split(",")[0] for p in t] == ["blue cube", "pink cube", "blue cube", "yellow square stick",
                                            "pink round stick"]
-    assert "upright" in t[3] and "upright" in t[4] and all("sideways" in p for p in t[:3])
+    assert "upright" in t[3] and "upright" in t[4] and all("sideways" in p for p in t[:2])
+    # Darsh's decisions (docs/decisions.pdf): the last block's hole faces up so the stick goes through it.
+    assert t[2] == "blue cube, hole facing up"
+    assert all("sideways" in p for p in load_plan(V4, operator_notes=False).tower_target[:3])   # the photo
 
 
 def test_target_goes_to_stacking_stages_only():

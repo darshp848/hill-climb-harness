@@ -28,6 +28,11 @@ task: >-
 checkpoint: dreamlabs/dream-1-beta
 time_budget_s: 295
 check_every_s: 3.0
+# Darsh's operator decisions (docs/decisions.pdf): per-stage technique + error detection, the retry rule
+# (2 tries, 3 for high points), push the white ball off first. prompt_technique adds the technique to the
+# Dream prompt: base Dream-1 only (a fine-tune needs its recorded texts byte for byte; set it false then).
+operator_notes: operator_notes.yaml
+prompt_technique: true
 verifier: monitor
 confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"

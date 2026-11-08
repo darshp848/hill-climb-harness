@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import urllib.request
 import uuid
 from pathlib import Path
@@ -156,11 +157,22 @@ def main():
                    "--judge-hedge", str(args.judge_hedge), "--dream-hedge", str(args.dream_hedge), *entry["args"]]
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         signal.signal(signal.SIGTERM, lambda *_: child.terminate())
+        # Live view of the running match (cloud.run writes live/): upload it every 30 s so jobs can be watched.
+        live_stop = threading.Event()
+
+        def push_live(folder=folder, key=key):
+            while not live_stop.wait(30):
+                if (folder / "live").is_dir():
+                    put(folder / "live", f"{prefix.rstrip('/')}/{attempt}/{key}/", recursive=True)
+        live_pusher = threading.Thread(target=push_live, name="live-upload", daemon=True)
+        live_pusher.start()
         with (folder / "worker.log").open("w", encoding="utf-8") as log:
             for line in child.stdout:
                 log.write(redact(line))
                 log.flush()
         code = child.wait()
+        live_stop.set()
+        live_pusher.join(timeout=60)
         # Scrub known secrets from structured logs too, before they leave this task.
         for path in folder.rglob("*"):
             if path.suffix in (".json", ".jsonl", ".txt", ".log"):

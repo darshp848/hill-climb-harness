@@ -7,7 +7,7 @@ COPY --from=gcloud /usr/lib/google-cloud-sdk /opt/google-cloud-sdk
 ENV PATH="/opt/google-cloud-sdk/bin:${PATH}" CLOUDSDK_PYTHON=/usr/local/bin/python \
     MUJOCO_GL=osmesa PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     LP_NUM_THREADS=2 OMP_NUM_THREADS=2 HARNESS_CLAUDE_BACKEND=api
-RUN pip install --no-cache-dir dreamlabs==1.0.37 mujoco==4.0.0 numpy==2.2.6 \
+RUN pip install --no-cache-dir dreamlabs==1.0.37 dreamlabs-client==1.1.3 mujoco==4.0.0 numpy==2.2.6 \
     pillow==13.0.0 PyYAML==6.0.3 scipy==1.18.1 psutil==7.2.2
 WORKDIR /app
 COPY harness/ harness/

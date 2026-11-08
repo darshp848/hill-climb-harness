@@ -1,0 +1,112 @@
+# Darsh's operator decisions (8 Nov 2026), from docs/decisions.pdf, as the harness uses them.
+# Real-table colours: coloured golf balls (green, yellow, orange) are legal and the white ball is illegal. The sim
+# translates the colours (cloud/run.py sim_text: white ball -> black ball, coloured golf ball -> white golf ball).
+#
+# Each stage entry is matched by stage name (fnmatch globs; first match wins) and adds:
+#   technique  how the robot should do it. Added to the Dream prompt when the plan sets prompt_technique: true
+#              (base Dream-1 only: a fine-tune must get its recorded texts byte for byte), and shown to the
+#              monitor as the expected technique.
+#   watch_for  error detection: signs the attempt is going wrong. The monitor reports `failing` and picks a
+#              recovery when it sees them.
+#   points     what the stage is worth, for the retry rule below.
+
+decisions:
+  # "If a task fails more than twice, move on." -> 2 attempts on stages that may be skipped.
+  attempts: 2
+  # "Max three times if it is worth a lot of points." -> 3 attempts at or above high_value_points.
+  high_value_attempts: 3
+  high_value_points: 20
+  # Pass-bar stages (on_fail retry_in_place) keep retrying: moving on before a pass bar means touching the next
+  # stage's objects, which the rubric disqualifies.
+
+# "On the last block, turn the hole to face up, then put a cylinder in the hole."
+tower_target_last_cube: "hole facing up"
+
+stages:
+  - match: [unplug_cable, unplug_more, cable_unplug, cable_unplug_more, "cable_extra_[0-9]"]
+    points: 10
+    technique: >-
+      Keep the other arm back to watch the cables from a different angle. Come in to the plug straight on, at a
+      right angle to the cable, and grip its hard body at full grip strength. Turn the cable vertical, then pull
+      straight up. You may take two or three cables at once.
+    watch_for: >-
+      the gripper closes on the cord instead of the plug's hard body; it comes in from the side or at a slant; the
+      plug is pulled at an angle or comes only part way out; the power strip is pushed, lifted or dragged; the other
+      arm drifts into the cables.
+
+  - match: [put_cable_down, put_more_down, cable_put_down, cable_put_more_down, "cable_extra_[0-9]_down"]
+    points: 0
+    technique: >-
+      Lay the unplugged cable flat on the table next to the big black power strip, then open the gripper.
+    watch_for: >-
+      the cable is dropped near the tower blocks, the golf balls or the bin; it is laid back across the ports; the
+      gripper stays closed.
+
+  - match: ["plug_*", "plug"]
+    points: 20
+    technique: >-
+      Pick up a loose USB-C cable by its black connector body, coming straight down from above at full grip
+      strength. Bring it to the first USB-C port from the left side of the power strip, line it up straight with
+      the port, and plug it in by moving the arm straight down. When it is seated, open the gripper and lift away.
+    watch_for: >-
+      the gripper holds the cord instead of the black connector; the connector is tilted against the port or aimed
+      at the wrong port; the gripper lets go before the connector is seated; a cable that was unplugged is being
+      plugged back in.
+
+  - match: [stack_2]
+    points: 20
+    technique: >-
+      Come down on the block from directly above, gripper square to the table. Set it squarely on the block below
+      with no overhang, hole facing sideways.
+    watch_for: &cube_watch >-
+      the gripper comes in at a slant or from the side; the block overhangs the one below or sits tilted; the hole
+      faces the wrong way; the tower wobbles or leans; the arm bumps the tower.
+
+  - match: [stack_3]
+    points: 20
+    technique: >-
+      Come down on the block from directly above, gripper square to the table. Set it squarely on the block below
+      with no overhang, and turn it so its hole faces straight up, ready for a stick.
+    watch_for: *cube_watch
+
+  - match: [tower_pass]
+    points: 20
+    technique: >-
+      Keep the other arm back as a watcher. Pick the stick up from directly above, turn it so it stands vertical
+      lengthwise, and lower it straight down into the hole of the top block, at a right angle to the table, as
+      upright as possible.
+    watch_for: &stick_watch >-
+      the stick is tilted or lying down; it misses the hole or rests on the rim; the arm bumps or shakes the tower;
+      the tower leans or a block shifts.
+
+  - match: ["higher_*"]
+    points: 3
+    technique: >-
+      Pick the next stick up from directly above, stand it vertical and lower it gently onto the top of the tower.
+      Move slowly and smoothly so the tower does not shake or topple.
+    watch_for: *stick_watch
+
+  - match: ["ball_*"]
+    points: 5
+    technique: >-
+      Leave the white ball alone. Pick up one coloured golf ball that is away from the tower and drop it into the
+      bin.
+    watch_for: >-
+      the gripper goes for the white ball or a black ball; the arm passes over or bumps the tower; the ball is
+      released outside the bin or knocks another ball toward the bin.
+
+# "Push the white balls off the table. If other objects are in the way, avoid the white balls."
+insert_before:
+  ball_1:
+    - name: ball_push_white   # ball_ prefix: the black/white-ball guard covers it
+      prompt: "push the white ball off the edge of the table, away from the bin and the tower"
+      success: "Is the white ball off the table top (it has fallen off the edge)?"
+      skip_unless: "Is the white ball on the table with a clear path to the nearest table edge that does not pass the tower, the bin or any coloured golf ball?"
+      expect: "One arm comes down beside the white ball and sweeps it in a straight line to the table edge and off, without picking it up."
+      technique: "Use the side of the open gripper to push; do not pick the ball up."
+      watch_for: "the gripper closes on the white ball; the ball rolls toward the bin or the tower; the arm sweeps through other balls."
+      timeout_s: 40
+      max_attempts: 1
+      min_run_s: 4
+      on_fail: skip
+      confirm: 1

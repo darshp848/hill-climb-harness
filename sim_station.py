@@ -67,10 +67,24 @@ class HedgedPolicy:
         for s in self.sessions:
             s.set_observation(*args, **kwargs)
 
-    def get_action(self) -> Any:
+    def get_action(self, commanded: Any = None) -> Any:
         from concurrent.futures import FIRST_COMPLETED, wait
 
-        futures = {self._pool.submit(s.get_action): k for k, s in enumerate(self.sessions)}
+        # A Dream client runs one get_action at a time: a session whose losing call is still in flight sits this
+        # round out instead of raising "another get_action() is running".
+        busy = getattr(self, "_busy", {})
+        idle = [k for k in range(len(self.sessions)) if k not in busy or busy[k].done()]
+        if not idle:                  # every session still busy: wait for the first to free up
+            wait(list(busy.values()), return_when=FIRST_COMPLETED)
+            idle = [k for k in range(len(self.sessions)) if busy[k].done()]
+        futures = {}
+        for k in idle:
+            s = self.sessions[k]
+            f = self._pool.submit(s.get_action, commanded=commanded) if commanded is not None else \
+                self._pool.submit(s.get_action)
+            futures[f] = k
+            busy[k] = f
+        self._busy = busy
         first_error: BaseException | None = None
         pending = set(futures)
         while pending:
@@ -148,7 +162,7 @@ class ScriptedPolicy:
         self.observations += 1
         self.last_prompt = state.get("prompt")
 
-    def get_action(self) -> dict:
+    def get_action(self, commanded: Any = None) -> dict:
         np = self.np
         time.sleep(self.latency_s)
         rows = np.arange(self.phase, self.phase + 48)
@@ -168,6 +182,47 @@ class ScriptedPolicy:
         self.closed = True
 
 
+class PipelinedPolicy:
+    """N Dream sessions used in turn, for throughput: a Dream client runs one get_action at a time, so with a ~1 s
+    round trip one session can't ask more than ~1 Hz. Fed the same observations, sessions take requests in
+    rotation, so a new chunk can be asked for every 0.5 s with two or three in flight (sim_station._async_control
+    installs each reply at its own clock row and drops one overtaken by a newer reply). N x the Dream usage."""
+
+    def __init__(self, sessions: list[Any]):
+        self.sessions = sessions
+
+    def set_observation(self, *args: Any, **kwargs: Any) -> None:
+        for s in self.sessions:
+            s.set_observation(*args, **kwargs)
+
+    def close(self) -> None:
+        for s in self.sessions:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+class _MiniPacer:
+    """dream.pacing.Pacer's rule for an SDK without it: async while the median round trip is under sync_above_ms."""
+
+    def __init__(self, execution_horizon: int = 30, action_hz: float = 20.0, sync_above_ms: float = 700.0):
+        self.execution_horizon, self.action_hz, self.sync_above_ms = execution_horizon, action_hz, sync_above_ms
+        self._rtt: deque[float] = deque(maxlen=5)
+        self.mode = "async"
+
+    def record(self, rtt_s: float) -> None:
+        self._rtt.append(rtt_s)
+        median = sorted(self._rtt)[len(self._rtt) // 2]
+        self.mode = "sync" if median * 1e3 > self.sync_above_ms else "async"
+
+    def refill_due(self, executed: int, remaining: int) -> bool:
+        if self.mode == "sync" or not self._rtt:
+            return remaining <= 0
+        rtt = min(self._rtt)
+        return executed + rtt * self.action_hz >= self.execution_horizon or remaining / self.action_hz <= rtt + 0.1
+
+
 # ---------------------------------------------------------------------------------------------------------- station
 class SimStation:
     """The station agent's state machine and HTTP servers around one YamEnv owned by one sim thread."""
@@ -175,7 +230,16 @@ class SimStation:
     def __init__(self, *, policy: str = "scripted", checkpoint: str | None = None, api_port: int = 8091,
                  view_port: int = 8093, realtime: bool | None = None, example_dir: str | None = None,
                  actions: int = 48, host: str = "127.0.0.1", scripted_latency_s: float = 0.05,
-                 max_trips: int = 50, scene: str = "fruit", viewer: bool = False) -> None:
+                 max_trips: int = 50, scene: str = "fruit", viewer: bool = False,
+                 execution_horizon: int | None = None, sync_above_ms: float = 1900.0) -> None:
+        # execution_horizon None: Dream's example loop (play the whole chunk, physics holds during inference).
+        # An int: Dream's async pacing (dream.pacing): the next request goes out while the chunk runs and its
+        # reply takes over after `execution_horizon` rows, so the arms keep moving; 10 rows at 20 Hz = 2 Hz calls.
+        self.execution_horizon = execution_horizon
+        self.sync_above_ms = sync_above_ms
+        self.dream_pipeline = 1          # Dream sessions used in turn (PipelinedPolicy); >1 only with a horizon
+        self.dream_stats: dict[str, Any] = {"requests": 0, "replies": 0, "errors": 0, "rtt_s": [],
+                                            "request_t": [], "mode": "sync" if execution_horizon is None else "async"}
         if policy not in ("dream", "scripted"):
             raise ValueError("policy must be 'dream' or 'scripted'")
         if scene not in SCENES:
@@ -634,7 +698,10 @@ class SimStation:
     def _open(self, model: str, poses: bool) -> Any:
         if self.policy_kind == "scripted":
             return ScriptedPolicy(self.hold, self.scripted_latency_s)
-        return self.dc.open_policy(self.dc.policy_config(model, self.gateway, poses), self.key)
+        config = self.dc.policy_config(model, self.gateway, poses)
+        if self.execution_horizon:
+            config.update(execution_horizon=int(self.execution_horizon), sync_above_ms=float(self.sync_above_ms))
+        return self.dc.open_policy(config, self.key)
 
     @staticmethod
     def _retry_wait(error: Exception) -> float | None:
@@ -674,6 +741,9 @@ class SimStation:
             self.hold = self._current_targets()
             policy = self._open_with_retry(model, poses)
             dc.feed(policy, env, windows, self.prompt, model, steps, every=0, station=poses)
+            if self.execution_horizon:
+                self._live_policy = policy
+                self._async_control(policy, pool, windows, model, poses, steps)   # returns only by raising
             restarts = 0
             while True:
                 self._check_stop()
@@ -744,11 +814,175 @@ class SimStation:
             return
         self._finish_run(policy, pool, IDLE)
 
+    def _async_control(self, policy: Any, pool: ThreadPoolExecutor, windows: dict, model: str, poses: bool,
+                       steps: int) -> None:
+        """Dream's async pacing, as `dream.pacing` and `dream.smoothing` document it for a control loop:
+
+        - every 50 ms one row of the current chunk is commanded and physics steps (it never holds for inference);
+        - one session: the next get_action goes out when the SDK's Pacer says so (refill_due), on its own thread,
+          with `commanded` = the joints last commanded, so the SDK's seam join starts exactly where the arm is;
+        - N sessions (PipelinedPolicy): a request goes out every `execution_horizon` rows to an idle session, so
+          with a ~1 s round trip two or three are in flight and a new chunk still lands every 0.5 s; a reply
+          overtaken by a newer one is dropped, and each takeover is cross-faded over RAMP rows locally (the SDK's
+          seam join only knows its own session's previous chunk);
+        - each reply is installed at its clock row: the rows the loop ran while it was in flight;
+        - a chunk that runs dry (a late reply) holds its last target until the next lands.
+        execution_horizon 10 at 20 Hz = a new chunk every 0.5 s = 2 Hz calls. Returns only by raising."""
+        RAMP = 6
+        dc, env = self.dc, self.env
+        try:
+            from dream.pacing import Pacer
+        except ImportError:                     # an SDK without pacing: same rule, smallest form
+            Pacer = _MiniPacer
+        horizon = int(self.execution_horizon)
+        pacer = Pacer(execution_horizon=horizon, action_hz=20.0, sync_above_ms=float(self.sync_above_ms))
+        stats = self.dream_stats
+        sessions = policy.sessions if isinstance(policy, PipelinedPolicy) else [policy]
+        stats["sessions"] = len(sessions)
+        req_pool = ThreadPoolExecutor(max_workers=len(sessions), thread_name_prefix="dream-request")
+        inflight: list[dict[str, Any]] = []
+        seq = installed_seq = 0
+        last_request_rows: int | None = None
+        chunk = None                    # (left rows, right rows) of the plan being executed
+        blend: dict[str, Any] | None = None
+        idx = executed = rows_total = restarts = 0
+        retry_at = 0.0
+        targets = self._current_targets()
+        # Absolute 20 Hz schedule: a step that renders the cameras (~80 ms) is made up by the quicker steps after it,
+        # so simulated time keeps pace with the match clock instead of losing every render's overrun.
+        next_t = time.monotonic()
+        try:
+            while True:
+                self._check_stop()
+                tick = time.monotonic()
+                busy = {r["k"] for r in inflight}
+                idle = [k for k in range(len(sessions)) if k not in busy]
+                if idle and tick >= retry_at:
+                    if len(sessions) == 1:
+                        due = not inflight and (chunk is None or pacer.refill_due(executed, len(chunk[0]) - idx))
+                    else:
+                        due = (chunk is not None or not inflight) and (
+                            last_request_rows is None or rows_total - last_request_rows >= horizon
+                            or (chunk is not None and idx >= len(chunk[0])))
+                    if due:
+                        k = idle[0]
+                        commanded = None
+                        if chunk is not None and self.policy_kind == "dream":
+                            commanded = {"q_l_chunk": [float(v) for v in targets["left"]],
+                                         "q_r_chunk": [float(v) for v in targets["right"]]}
+                        obs = dc.observation(env, windows, self.prompt, model, poses)
+                        session = sessions[k]
+                        fut = (req_pool.submit(session.get_action, commanded=commanded) if commanded is not None
+                               else req_pool.submit(session.get_action))
+                        seq += 1
+                        inflight.append({"future": fut, "k": k, "sent_at": tick, "sent_rows": rows_total,
+                                         "obs": obs, "seq": seq})
+                        last_request_rows = rows_total
+                        stats["requests"] += 1
+                        stats["request_t"].append(round(tick - (self._run_started or tick), 3))
+                for r in [r for r in inflight if r["future"].done()]:
+                    inflight.remove(r)
+                    err = r["future"].exception()
+                    if err is not None:
+                        stats["errors"] += 1
+                        self._record_trip(windows, r["obs"], r["sent_at"], None, f"{type(err).__name__}: {err}")
+                        wait_s = self._retry_wait(err)
+                        if type(err).__name__ == "DreamSessionExpired" and restarts < 3:
+                            restarts += 1
+                        elif wait_s is not None:
+                            retry_at = time.monotonic() + wait_s
+                        elif not poses and self.policy_kind == "dream" and dc.needs_poses(err):
+                            self._close_policy(policy)
+                            poses = True
+                            policy = self._open_with_retry(model, poses)
+                            self._live_policy = policy
+                            sessions = policy.sessions if isinstance(policy, PipelinedPolicy) else [policy]
+                            dc.feed(policy, env, windows, self.prompt, model, steps, every=0, station=poses)
+                            inflight, chunk, blend, last_request_rows = [], None, None, None
+                            break
+                        else:
+                            raise err
+                        continue
+                    reply = r["future"].result()
+                    restarts = 0
+                    rtt = time.monotonic() - r["sent_at"]
+                    pacer.record(rtt)
+                    stats["replies"] += 1
+                    stats["rtt_s"].append(round(rtt, 3))
+                    stats["mode"] = getattr(pacer, "mode", stats["mode"]) if len(sessions) == 1 else "pipelined"
+                    self._record_trip(windows, r["obs"], r["sent_at"], reply, None)
+                    if r["seq"] < installed_seq:            # a newer chunk already took over
+                        stats["stale"] = stats.get("stale", 0) + 1
+                        continue
+                    adjustments: list[str] = []
+                    left, right = dc.validate_chunk(env, reply, 48, verbose=False, adjustments=adjustments)
+                    clock = 0 if chunk is None else min(rows_total - r["sent_rows"], len(left) - 1)
+                    if len(sessions) > 1 and chunk is not None:
+                        blend = {"old": chunk, "at": idx, "n": 0}
+                    chunk, idx, executed, installed_seq = (left, right), clock, 0, r["seq"]
+                    with self._lock:
+                        self.chunks += 1
+                        self.clamps += len(adjustments)
+                        if self.state == STARTING:
+                            self.state = RUNNING
+                if chunk is not None and idx < len(chunk[0]):
+                    left_row, right_row = chunk[0][idx].copy(), chunk[1][idx].copy()
+                    if blend is not None:
+                        old, at = blend["old"], min(blend["at"], len(blend["old"][0]) - 1)
+                        w = (blend["n"] + 1) / RAMP
+                        left_row = (1 - w) * old[0][at] + w * left_row
+                        right_row = (1 - w) * old[1][at] + w * right_row
+                        blend["at"] += 1
+                        blend["n"] += 1
+                        if blend["n"] >= RAMP - 1:
+                            blend = None
+                    targets = {"left": left_row, "right": right_row}
+                    idx += 1
+                    executed += 1
+                elif chunk is not None:
+                    stats["dry_rows"] = stats.get("dry_rows", 0) + 1   # reply late: hold the last target
+                env.step(targets["left"], targets["right"])
+                if steps % dc.FRAME_EVERY_STEPS == 0:
+                    dc.capture(env, windows, keep=True)
+                    self._last_render = time.monotonic()
+                    dc.feed(policy, env, windows, self.prompt, model, steps, station=poses)
+                elif time.monotonic() - self._last_render > 1.0:
+                    self._render()
+                steps += 1
+                rows_total += 1
+                self.hold = targets
+                next_t += 0.05
+                if self.realtime:
+                    lag = next_t - time.monotonic()
+                    if lag > 0:
+                        time.sleep(lag)
+                    elif lag < -1.0:        # over a second behind: the machine can't keep up; don't burst to catch up
+                        stats["resyncs"] = stats.get("resyncs", 0) + 1
+                        next_t = time.monotonic()
+        finally:
+            req_pool.shutdown(wait=False, cancel_futures=True)
+
+    def dream_summary(self) -> dict[str, Any]:
+        """Call rate and round trips for match.json: requests per second of run, median/p90 round trip."""
+        s = self.dream_stats
+        rtt = sorted(s["rtt_s"])
+        t = s["request_t"]
+        span = (t[-1] - t[0]) if len(t) > 1 else 0.0
+        return {"mode": s["mode"], "execution_horizon": self.execution_horizon, "requests": s["requests"],
+                "replies": s["replies"], "errors": s["errors"], "dry_rows": s.get("dry_rows", 0),
+                "call_hz": round((len(t) - 1) / span, 3) if span > 0 else None,
+                "rtt_p50_s": rtt[len(rtt) // 2] if rtt else None,
+                "rtt_p90_s": rtt[int(0.9 * (len(rtt) - 1))] if rtt else None}
+
     def _first_reply_pending(self) -> bool:
         with self._lock:
             return self.state == STARTING
 
     def _open_with_retry(self, model: str, poses: bool) -> Any:
+        pipe = max(1, int(getattr(self, "dream_pipeline", 1)))
+        if pipe > 1 and self.execution_horizon:
+            with ThreadPoolExecutor(max_workers=pipe) as ex:
+                return PipelinedPolicy(list(ex.map(lambda _: self._open_one(model, poses), range(pipe))))
         n = max(1, int(getattr(self, "hedge", 1)))
         if n == 1 or self.policy_kind != "dream":
             return self._open_one(model, poses)
@@ -775,8 +1009,9 @@ class SimStation:
             self._render()
         except Exception:
             pass
-        if policy is not None:
-            threading.Thread(target=self._close_policy, args=(policy,), daemon=True).start()
+        live, self._live_policy = getattr(self, "_live_policy", None), None
+        for p in {id(x): x for x in (policy, live) if x is not None}.values():
+            threading.Thread(target=self._close_policy, args=(p,), daemon=True).start()
         with self._lock:
             self._stop_req = False
             self.state = final
