@@ -242,6 +242,7 @@ class TableDetector:
 
     def __init__(self, cfg: DetectConfig) -> None:
         self.cfg = cfg
+        self.cable_ends = None   # harness.cable_end.CableEndClassifier: USB-C / USB-A end boxes (--cable-ends)
 
     @classmethod
     def from_file(cls, path: str | Path) -> TableDetector:
@@ -273,13 +274,17 @@ class TableDetector:
     def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
         if not self.cfg.annotate:
             return frames
-        return {role: annotate(j, detect(j, self.cfg, overhead=self._overhead(role))) for role, j in frames.items()}
+        out = {role: annotate(j, detect(j, self.cfg, overhead=self._overhead(role))) for role, j in frames.items()}
+        if self.cable_ends is not None:
+            out = {role: self.cable_ends.annotate(j) for role, j in out.items()}
+        return out
 
     def legend(self) -> str:
         avoid = [f"{c.label or c.name} {k}" for c in self.cfg.classes for k, r in c.kinds.items() if r == "avoid"]
         return ("Boxes on the images come from a local colour detector and can miss or mislabel objects: "
                 f"RED boxes = {', '.join(avoid) or 'objects to avoid'} (never pick these); green = targets; "
-                "blue = other objects (blocks: colour, cylinders: upright or lying).")
+                "blue = other objects (blocks: colour, cylinders: upright or lying)."
+                + (" " + self.cable_ends.legend() if self.cable_ends is not None else ""))
 
 
 def main(argv: list[str] | None = None) -> int:

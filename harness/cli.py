@@ -38,6 +38,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--detect", default=None, metavar="COLORS.yaml",
                    help="local ball/block detector (e.g. plans/table_colors.yaml): fast black-ball guard + boxes on "
                         "the monitor's frames")
+    p.add_argument("--cable-ends", default=None, metavar="MODEL.onnx",
+                   help="with --detect: label USB-C / USB-A cable ends on the monitor's frames (e.g. models/cable_end.onnx)")
     p.add_argument("--live-guard", action="store_true",
                    help="with --detect: run the guard on live GET /frame/<wrist>.jpg images (station add-on) in its own "
                         "thread, which sends /stop itself; replaces the per-poll guard on debug-view trips")
@@ -119,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.detect:
             from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
             det = TableDetector.from_file(args.detect)
+            if args.cable_ends:
+                from .cable_end import CableEndClassifier  # noqa: PLC0415
+                det.cable_ends = CableEndClassifier(args.cable_ends)
+                log.event("cable_ends", model=str(args.cable_ends))
             runner.fast_guard = det.guard
             for v in verifiers.values():
                 for m in (v, getattr(v, "second", None)):
