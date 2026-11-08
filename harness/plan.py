@@ -345,9 +345,9 @@ def parse_plan(data: Any) -> Plan:
 def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
     if raw is None:
         return {}
-    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) and "<piece>" in v
+    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str)
                                             for k, v in raw.items()):
-        raise ValueError("plan.tower_prompts: must map a shape word to a prompt containing <piece>")
+        raise ValueError("plan.tower_prompts: must map a shape word to a prompt")
     if not target:
         raise ValueError("plan.tower_prompts: needs tower_target")
     for piece in target:
