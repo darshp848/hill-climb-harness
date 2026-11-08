@@ -43,8 +43,8 @@ prompt_engine:
   forbid: ["white ball", "white golf ball", "black ball", "8-ball", "eight ball"]
   vocab:
     plug: ["a plug standing upright in a port on top of the black power strip", "the rightmost plug standing in a port on top of the black power strip", "the plug standing in the power strip nearest the right arm"]
-    piece: ["the pink cube", "the other blue cube", "the blue cube", "the yellow square stick", "the pink round stick"]
-    top: ["the blue cube in front of the robot", "the pink cube", "the blue cube", "the top of the tower"]
+    piece: ["one blue cube", "the pink cube", "the other blue cube", "the blue cube", "the yellow square stick", "the pink round stick"]
+    top: ["the other blue cube", "the stacked blue cubes", "the blue cube in front of the robot", "the pink cube", "the blue cube", "the top of the tower"]
     base: ["a blue cube", "the blue cube nearest the robot", "the pink cube"]
     ball: ["the orange golf ball", "the yellow golf ball", "the green golf ball"]
     where: ["on the right side of the table", "at the front right of the table", "on the left side of the table", "at the front left of the table", "next to the white basket"]
@@ -183,11 +183,11 @@ stages:
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). No arm named, no writer. ----
   - &stack
     name: stack_2
-    prompt: "put the pink cube on top of the blue cube in front of the robot"
+    prompt: "put one blue cube on top of the other blue cube"
     write_prompt: false
     template: stack
     variants: [stack_all]
-    slots: {piece: "the pink cube", top: "the blue cube in front of the robot"}
+    slots: {piece: "one blue cube", top: "the other blue cube"}
     success: "Is one cube resting on top of another cube, standing on its own, with no gripper touching either?"
     expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
     camera_notes:
@@ -206,8 +206,8 @@ stages:
 
   - <<: *stack
     name: tower_pass
-    prompt: "put the other blue cube on top of the pink cube"
-    slots: {piece: "the other blue cube", top: "the pink cube"}
+    prompt: "put the pink cube on top of the stacked blue cubes"
+    slots: {piece: "the pink cube", top: "the stacked blue cubes"}
     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
     expect: "The arm adds pieces to the stack until it is over 4 inches tall, then lifts clear; the tower stays standing."
     confirm_check: "In the NOW images, is there a tower of stacked pieces more than 4 inches (10 cm) tall (a cube is about 2 inches), standing on its own, with no gripper holding or touching it?"

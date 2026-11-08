@@ -160,11 +160,11 @@ stages:
     # 8 Nov prompt comparison (docs/prompt_comparison_2026-11-08): S2 "put the pink cube on top of a blue cube" had the
     # most decisive grasps and a stack; S8 "stack the blocks and sticks as high as possible" stacked in 2 of 3 runs;
     # "put a cube on top of the other cube" (S9) made 0 grips. Goals, not motions: no "lift it high ... then open".
-    # Name both cubes and WHICH blue one (8 Nov live: with "a blue cube" and two blue cubes it stacked on the far one,
+    # Blue on blue first: 'the pink cube' made Dream grab the pink round stick (8 Nov live). Name WHICH cube (8 Nov live: with "a blue cube" and two blue cubes it stacked on the far one,
     # then "as high as possible" put the near blue cube on that far stack and tipped it over).
-    prompt: "put the pink cube on top of the blue cube in front of the robot"
+    prompt: "put one blue cube on top of the other blue cube"
     retry_prompt: "stack the blocks and sticks as high as possible"
-    lock_prompt: "put the other blue cube on top of the pink cube"   # flow straight into the 3rd cube (no arms-up reset)
+    lock_prompt: "put the pink cube on top of the stacked blue cubes"   # flow straight into the 3rd cube (no arms-up reset)
     write_prompt: false
     success: "Is one cube resting on top of another cube, standing on its own, with no gripper touching either?"
     expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
@@ -184,9 +184,10 @@ stages:
 
   - <<: *stack
     name: tower_pass
-    prompt: "put the other blue cube on top of the pink cube"
+    prompt: "put the pink cube on top of the stacked blue cubes"
     retry_prompt: "stack the blocks and sticks as high as possible"
     resume_on_no: false    # never re-send a stacking prompt onto a standing tower (8 Nov live: Dream knocked it over)
+    lock_prompt: "open both grippers and move the arms up"   # tower done: lift clear (not stack_2's flow-on prompt)
     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
     expect: "The arm adds pieces to the stack until it is over 4 inches tall, then lifts clear; the tower stays standing."
     confirm_check: "In the NOW images, is there a tower of stacked pieces more than 4 inches (10 cm) tall (a cube is about 2 inches), standing on its own, with no gripper holding or touching it?"
