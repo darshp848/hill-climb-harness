@@ -158,6 +158,7 @@ class Runner:
         self._tower: list[str] | None = None   # the tower the monitor last reported, bottom to top
         self._guard_answer_t: float | None = None   # last time the guard got a yes/no answer
         self._auto_resets = 0
+        self._done_in_recovery: str | None = None
         self.operator: Any = None   # harness.operator.Operator: the operator's typed words, turned into actions
         self._skip: set[str] = set()   # later stages the operator asked to skip
         self._stage_name = ""
@@ -402,24 +403,22 @@ class Runner:
         """Grip by feel from /arms: commanded closed and stopped partway -> holding; closed fully -> empty."""
         getter = getattr(self.station, "grippers", None)
         arms = getter() if getter else {}
-        # The station leaves commanded_gripper null until a run commands it; a gripper shut to <= 0.06 holds nothing
-        # either way (one holding a plug or block stops partway).
-        self._empty_sides = {side for side, g in (arms or {}).items()
-                             if g.get("gripper") is not None and g["gripper"] <= 0.06
-                             and (g.get("commanded_gripper") is None or g["commanded_gripper"] <= 0.15)}
+        # Readings on this station (8 Nov run): right shut on nothing 0.03-0.06, right on a USB plug 0.07-0.09 (a
+        # plug is thin), left idle and shut 0.09-0.14. So only <= 0.06 means empty for sure; up to 0.15 it is a thin
+        # object or nothing, and the wrist image decides. commanded_gripper is null until a run commands it.
         notes = []
         for side, g in sorted((arms or {}).items()):
             cmd, got = g.get("commanded_gripper"), g.get("gripper")
             if got is None:
                 continue
-            if cmd is None:
-                notes.append(f"{side} gripper closed fully on nothing ({got:.2f}): it is NOT holding anything"
-                             if got <= 0.06 else f"{side} gripper opening {got:.2f}")
-                continue
-            if cmd > 0.15:
-                notes.append(f"{side} gripper open ({got:.2f})")
+            if cmd is not None and cmd > 0.15:
+                notes.append(f"{side} gripper commanded open ({got:.2f})")
             elif got <= 0.06:
-                notes.append(f"{side} gripper closed fully on nothing ({got:.2f}): it is NOT holding anything")
+                notes.append(f"{side} gripper shut on nothing ({got:.2f}): it is NOT holding anything")
+            elif got <= 0.15:
+                notes.append(f"{side} gripper nearly shut ({got:.2f}): a thin plug or nothing, judge from its wrist image")
+            elif cmd is None:
+                notes.append(f"{side} gripper opening {got:.2f}")
             else:
                 notes.append(f"{side} gripper commanded closed but stopped at {got:.2f}: it is holding something")
         return "; ".join(notes)
@@ -433,13 +432,6 @@ class Runner:
             verdict = fn(stage, frames, elapsed)
         except Exception as exc:
             return Verdict(None, 0.0, f"verifier raised {type(exc).__name__}: {exc}")
-        held = getattr(verdict, "holding", None)
-        if isinstance(held, dict):
-            # The sensor wins over the images: on 7 Nov the monitor said "holding the cable" at a gripper reading 0.03.
-            for side in getattr(self, "_empty_sides", ()):
-                key = next((k for k in held if side in k.lower() or k.lower() in side), None)
-                if key is not None and held[key].strip().lower() not in ("", "nothing", "none", "empty"):
-                    held[key] = f"nothing (gripper sensor: closed fully; the monitor said {held[key]!r})"
         return verdict
 
     def _note_progress(self, stage: Stage, verdict: Verdict, st: dict[str, Any]) -> None:
@@ -547,7 +539,8 @@ class Runner:
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
                 nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts else None
-                if (nxt and monitor and verdict.done is not True and last_done_t is None and rewrites < REWRITE_MAX
+                if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
+                        and last_done_t is None and rewrites < REWRITE_MAX
                         and elapsed - last_prompt_t >= REWRITE_COOLDOWN_S and nxt != self._prompt):
                     # The monitor's diagnosis as the robot's next instruction. Its verdict was on the old prompt,
                     # so the counters and the stall clock start over, after the stage's settle time.
@@ -668,6 +661,8 @@ class Runner:
                 frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 self._note_progress(stage, verdict, st)
+                if verdict.done is True and verdict.confidence >= SKIP_MIN_CONFIDENCE:
+                    self._done_in_recovery = verdict.reason   # 8 Nov: the plug was out here and nobody looked
                 ok = getattr(verdict, "scene_ok", None)
                 if ok is not None:
                     scene = ok
@@ -747,6 +742,15 @@ class Runner:
         self.log.event("precondition", stage=stage.name, question=stage.skip_unless, done=verdict.done,
                        confidence=verdict.confidence, reason=verdict.reason, run=bool(ok))
         return bool(ok)
+
+    def _confirm_done(self, stage: Stage, verifier: Verifier) -> bool:
+        """A second, synchronous look after a recovery's scene check saw the stage done (the two-look rule)."""
+        frames = self._frames_for_check(stage)
+        verdict = self._ask(verifier, stage, frames, 0.0, sync=True)
+        ok = verdict.done is True and bool(frames) and verdict.confidence >= SKIP_MIN_CONFIDENCE
+        self.log.event("recovery_done_check", stage=stage.name, done=verdict.done, confidence=verdict.confidence,
+                       reason=verdict.reason, passed=ok)
+        return ok
 
     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
         """skip_if_done: one synchronous look before the prompt is sent."""
@@ -828,7 +832,11 @@ class Runner:
                     break
                 uses[idx] = uses.get(idx, 0) + 1
                 last_rec = idx
+                self._done_in_recovery = None
                 scene_ok, rreason = self._recover(stage, verifier, attempts, idx)
+                if self._done_in_recovery and self._confirm_done(stage, verifier):
+                    return StageResult(stage.name, True, attempts, self._clock() - t0,
+                                       f"done during recovery: {self._done_in_recovery}")
                 if scene_ok:
                     break
                 attempts += 1

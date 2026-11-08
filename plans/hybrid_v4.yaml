@@ -14,7 +14,8 @@
 # events.jsonl), or switch to hill_climb_v4.yaml and turn rewrite_prompts and tower_prompts off.
 #
 # Cable section: the stages named cable_*. In a match they are required (touching a block before a cable is out is a
-# DQ). For stack + balls practice drop them:  --skip cable_
+# DQ), but cables 3 and 4 don't fit in 295 s: match with --skip cable_extra. For stack + balls practice: --skip cable_
+# For all four cables with time to spare in practice: --budget 600
 #
 # Operator: while it runs you can type plain words ("skip the next step", "why did it grab that block?", "lower the
 # block more slowly next time"); see harness/operator.py. Testing only: in a match any human input is a DQ, so run
@@ -31,7 +32,7 @@ verifier: monitor
 confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"
 vars: {stack_cam: wrist_r, ball: orange ball}
-claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4}   # 4 not 6: a faster answer each check
 reset_first: true
 rewrite_prompts: true
 prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
@@ -68,6 +69,9 @@ system_prompt: |-
   - The USB ports are on the strip's top face; plugs stand vertical and come out by pulling straight up. Unplug right to left: always the rightmost cable still plugged in, one at a time, with the right arm.
   - A good grip closes on ONE plug's hard body right at the port, jaws closing along the strip. A grip on the soft cord above the plug slips; a grip across two plugs fails. Dream often closes on the cord or on air: say so and name the plug again.
   - Count plugs in their ports. A cable's far end lies loose on the table from the start: that never counts as unplugged. An unplugged cable may not be plugged back in.
+  - Once a plug is out, it often lies loose right next to the strip. That one is DONE: the robot must not grab it again. If it goes for a loose plug, name the next plug still seated in the strip.
+  - An unplug ends with the robot holding the plug up; the next stage puts it down. Holding it there is correct, not a stall.
+  - The left arm is not used for cables. Its gripper reads about 0.10 when shut on nothing.
 
   STACKING
   - Touching a block before at least one cable is unplugged is a disqualification.
@@ -84,8 +88,8 @@ system_prompt: |-
 stages:
   # ---- Stage 1 (pass bar: one cable out). Drop with --skip cable_ for practice. ----
   - name: cable_unplug
-    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip and pull it straight up out of its port."
-    success: "Compared with the stage-start images, is at least one plug that was in a port of the power strip at the start now fully out of its port (held in a gripper or lying on the table)? Loose far ends of cables do not count."
+    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
+    success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port, jaws along the strip, and pulls it straight up until it is clear."
     camera_notes:
       wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
@@ -103,15 +107,14 @@ stages:
 
   - name: cable_put_down
     prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
-    success: "Are both grippers empty, with the unplugged cable lying on the table away from the power strip?"
+    success: "Is the right gripper open and empty, with the unplugged cable lying on the table away from the power strip? (The left arm is not used; ignore its gripper.)"
     timeout_s: 20
     min_run_s: 3
     confirm: 1
-    skip_if_done: true
     on_fail: skip
 
   - name: cable_unplug_more
-    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip and pull it straight up out of its port."
+    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
     success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
     camera_notes:
       wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
@@ -121,20 +124,56 @@ stages:
 
   - name: cable_put_more_down
     prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
-    success: "Are both grippers empty, with no cable held?"
-    timeout_s: 12
+    success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
+    timeout_s: 15
     min_run_s: 3
     confirm: 1
-    skip_if_done: true
+    on_fail: skip
+
+  # Cable 3 of 4 (+5). A 295 s match has no time for it: drop with --skip cable_extra.
+  - name: cable_extra_3
+    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
+    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
+    camera_notes:
+      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
+    timeout_s: 45
+    min_run_s: 3
+    stall_s: 25
+    on_fail: skip
+
+  - name: cable_extra_3_down
+    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
+    success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
+    timeout_s: 15
+    min_run_s: 3
+    confirm: 1
+    on_fail: skip
+
+  # Cable 4 of 4 (+5). A 295 s match has no time for it: drop with --skip cable_extra.
+  - name: cable_extra_4
+    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
+    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
+    camera_notes:
+      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
+    timeout_s: 45
+    min_run_s: 3
+    stall_s: 25
+    on_fail: skip
+
+  - name: cable_extra_4_down
+    prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
+    success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
+    timeout_s: 15
+    min_run_s: 3
+    confirm: 1
     on_fail: skip
 
   - name: arms_clear
     prompt: "open both grippers and move the arms up"
-    success: "Are both grippers empty and raised, clear of the power strip, the cables and the blocks?"
+    success: "Are both grippers open and raised, clear of the power strip, the cables and the blocks?"
     timeout_s: 10
     min_run_s: 2
     confirm: 1
-    skip_if_done: true
     on_fail: skip
 
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release) ----

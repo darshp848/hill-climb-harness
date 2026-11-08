@@ -20,7 +20,7 @@ def test_hybrid_plan_loads_and_cable_section_is_optional():
     plan = load_plan(ROOT / "plans/hybrid_v4.yaml")
     names = [s.name for s in plan.stages]
     assert plan.reset_first and plan.rewrite_prompts and plan.system_prompt and plan.time_budget_s == 295
-    assert names[0] == "cable_unplug" and "stack_2" in names and names[-1].startswith("ball_")
+    assert names[0] == "cable_unplug" and "cable_extra_4_down" in names and "stack_2" in names and names[-1].startswith("ball_")
     assert all(s.prompt.startswith(plan.prompt_prefix) for s in plan.stages if s.name.startswith("cable_"))
     assert not any(n.startswith("cable_") for n in names[names.index("arms_clear"):])
     assert all(s.stall_s and s.stall_s >= 30 for s in plan.stages if s.name.startswith(("stack", "tower")))
@@ -43,8 +43,9 @@ def test_monitor_rewrites_the_prompt_with_prefix_cooldown_and_cap(fake, write_pl
     pre = "No power here."
     path = write_plan([stage("a", prompt=f"{pre} pull the plug", timeout_s=3.0, max_attempts=1, on_fail="skip")],
                       rewrite_prompts=True, prompt_prefix=pre)
-    sv = Script([mv(None, next_prompt="grip the rightmost plug"), mv(None, next_prompt="grip the second plug"),
-                 mv(None, next_prompt="grip the third plug"), mv(None, next_prompt="grip a fourth plug"),
+    sv = Script([mv(None, "ok", next_prompt="ignored: status ok"), mv(None, "stalled", next_prompt="grip the rightmost plug"),
+                 mv(None, "stalled", next_prompt="grip the second plug"),
+                 mv(None, "failing", next_prompt="grip the third plug"), mv(None, "stalled", next_prompt="grip a fourth plug"),
                  mv(True, progress=1.0)], repeat=True)
     r = build(fake, path, tmp_path, sv)
     r.run()
@@ -76,16 +77,24 @@ def test_reset_first_then_auto_reset_after_svd(fake, write_plan, tmp_path):
     assert rs.count("/reset") == 1 + AUTO_RESET_MAX
 
 
-def test_gripper_sensor_overrules_holding(fake, write_plan, tmp_path):
-    path = write_plan([stage("a")])
-    r = build(fake, path, tmp_path, Script([mv(None)]))
-    r.station.grippers = lambda: {"right": {"gripper": 0.03, "commanded_gripper": 0.0},
-                                  "left": {"gripper": 0.4, "commanded_gripper": 0.0}}
-    monitor = Script([mv(None, holding={"left": "block", "right": "the cable"})])
-    monitor.grip_note = ""
-    v = r._ask(monitor, r.plan.stages[0], {}, 1.0)
-    assert "closed fully on nothing" in monitor.grip_note
-    assert v.holding["right"].startswith("nothing") and v.holding["left"] == "block"
+def test_gripper_note_reads_this_stations_sensors(fake, write_plan, tmp_path):
+    r = build(fake, write_plan([stage("a")]), tmp_path, Script([mv(None)]))
+    r.station.grippers = lambda: {"right": {"gripper": 0.03, "commanded_gripper": None},
+                                  "left": {"gripper": 0.11, "commanded_gripper": 0.0}}
+    note = r._grip_note()
+    assert "right gripper shut on nothing" in note and "left gripper nearly shut (0.11): a thin plug or nothing" in note
+
+
+def test_done_seen_during_recovery_passes_after_a_second_look(fake, write_plan, tmp_path):
+    rec = [{"name": "lift", "kind": "reset", "prompt": "open and lift", "settle_s": 0.05}]
+    path = write_plan([stage("a", timeout_s=0.3, max_attempts=3, recovery=rec)])
+    sv = Script([mv(None, "ok")])
+    r = build(fake, path, tmp_path, sv)
+    r._reset_scene = lambda st, rc, v: (setattr(r, "_done_in_recovery", "plug out"), (True, "scene ok"))[1]
+    sv.check_now = lambda st, frames, e: mv(True, progress=1.0)
+    res = r.run()
+    assert res.stages[0].ok and res.stages[0].reason == "done during recovery: plug out"
+    assert events(r.log, "recovery_done_check")[0]["passed"]
 
 
 def test_tower_prompt_names_the_piece_below(fake, write_plan, tmp_path):

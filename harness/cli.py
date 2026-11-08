@@ -44,6 +44,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="override every stage's verifier")
     p.add_argument("--skip", action="append", default=[], metavar="PREFIX",
                    help="drop the stages whose names start with PREFIX, e.g. --skip cable_ (repeatable; practice)")
+    p.add_argument("--budget", type=float, default=None, metavar="S",
+                   help="override the plan's time_budget_s (practice; a match is 295 s)")
     p.add_argument("--lessons", default="lessons/operator.md", metavar="FILE",
                    help="operator lessons: read into the monitor's system prompt, and new ones appended")
     p.add_argument("--no-operator", action="store_true",
@@ -72,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         if not plan.stages:
             print("plan error: --skip removed every stage", file=sys.stderr)
             return 2
+    if args.budget:
+        plan.time_budget_s = args.budget
     lessons_path = None if args.no_operator else Path(args.lessons)
     lessons = load_lessons(lessons_path)
     if lessons:

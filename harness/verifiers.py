@@ -190,10 +190,12 @@ GUARD_SCHEMA = MONITOR_SCHEMA[:-1] + ', "guard": bool}'
 # plan.rewrite_prompts: the monitor's diagnosis becomes the robot's next instruction. Base Dream-1 follows a change of
 # object or step well and ignores fine adjustments ("1 cm higher"), so it is asked for a whole short instruction.
 NEXT_PROMPT_RULE = (
-    'next_prompt: only when the robot is on the wrong object or wrong step, plainly stuck, or about to fail (e.g. its '
-    'arm is about to hit the tower), write ONE short instruction for the robot that replaces the last prompt: max 200 '
-    'characters, plain words, one action, naming objects by colour and position, e.g. "pick up the yellow block and '
-    'place it gently on top of the pink block". Follow the system rules and any operator feedback. Otherwise null.')
+    'next_prompt: only with status "stalled" or "failing", when the robot is on the wrong object or wrong step, '
+    'plainly stuck, or about to fail (e.g. its arm is about to hit the tower), write ONE short instruction for the '
+    'robot that replaces the last prompt: max 200 characters, plain words, one action, naming objects by colour and '
+    'position, e.g. "pick up the yellow block and place it gently on top of the pink block". It must ask for something '
+    'different from the last prompt (another object, another step), never the same request reworded: every new prompt '
+    'makes the robot start its motion over. Follow the system rules and any operator feedback. Otherwise null.')
 NEXT_PROMPT_MAX_CHARS = 300
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
