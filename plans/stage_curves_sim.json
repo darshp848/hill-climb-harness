@@ -1,0 +1,44 @@
+{
+ "plug_loose_cable": {
+  "p_max": 0.02,
+  "tau_c": 292.84,
+  "t_min": 0.0,
+  "episodes": 5,
+  "successes": 0
+ },
+ "put_cable_down": {
+  "p_max": 0.02,
+  "tau_c": 292.84,
+  "t_min": 0.0,
+  "episodes": 19,
+  "successes": 0
+ },
+ "release_before_stack": {
+  "p_max": 0.02,
+  "tau_c": 292.84,
+  "t_min": 0.0,
+  "episodes": 9,
+  "successes": 0
+ },
+ "stack_two": {
+  "p_max": 0.02,
+  "tau_c": 292.84,
+  "t_min": 0.0,
+  "episodes": 8,
+  "successes": 0
+ },
+ "unplug_cable": {
+  "p_max": 0.64,
+  "tau_c": 105.6,
+  "t_min": 22.84,
+  "episodes": 35,
+  "successes": 19
+ },
+ "watcher_into_place": {
+  "p_max": 1.0,
+  "tau_c": 2.81,
+  "t_min": 5.71,
+  "episodes": 5,
+  "successes": 5
+ }
+}

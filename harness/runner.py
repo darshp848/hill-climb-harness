@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from typing import Any
 from .frames import FrameSource
 from .log import RunLog
 from .plan import TOWER_STAGES, Plan, Recovery, Stage
+from .start_pose import StartPoses, joints_from_arms, joints_from_observation
 from .station_client import StationClient, StationError
 from .verifiers import MonitorVerdict, Verdict, Verifier
 
@@ -28,6 +30,7 @@ SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-
 MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prompt change
 MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-service faults
 REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
+HOME_RESERVE_S = 30.0      # /home can't be cancelled (the station refuses /stop while homing): need this much left
 CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
 
 
@@ -150,6 +153,19 @@ class Runner:
         self._refusals: dict[str, int] = {}
         self._tower: list[str] | None = None   # the tower the monitor last reported, bottom to top
         self._guard_answer_t: float | None = None   # last time the guard got a yes/no answer
+        # harness.live_guard.LiveGuard: the plan guard on live /frame images in its own thread (sends /stop itself)
+        self.live_guard: Any = None
+        # harness.start_pose.StartPoses for plan.start_pose; None = no start-pose checks
+        self.start_poses: StartPoses | None = None
+        self._homes: dict[str, int] = {}
+        self._fast_sig: dict[str, str] = {}   # per camera: the image the per-poll local guard judged last
+        # harness.decide.Shadow: the decision equations run next to the rules below and log what they would do
+        self.shadow: Any = None
+        try:
+            from .decide import Shadow  # noqa: PLC0415
+            self.shadow = Shadow.from_plan(plan.decide)
+        except Exception as exc:  # noqa: BLE001 (the shadow must never stop a run)
+            log.event("warning", message=f"decide shadow off: {exc}")
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -193,6 +209,8 @@ class Runner:
         except TimeoutError as exc:
             ok, reason = False, str(exc)
             self._safe_stop(reason)
+        if self.live_guard is not None:
+            self.live_guard.disarm()
         result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason,
                            guard_tripped=tripped)
         self.log.update_manifest(end_time=datetime.now(timezone.utc).isoformat(), ok=ok, reason=reason)
@@ -227,6 +245,9 @@ class Runner:
     def _check_global(self) -> None:
         if self._stop_event.is_set():
             raise _Stop()
+        lg = self.live_guard
+        if lg is not None and lg.tripped is not None:
+            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
         if self._clock() - self._t0 > self.plan.time_budget_s:
             raise _Fail(f"time budget of {self.plan.time_budget_s:g} s exceeded")
 
@@ -250,6 +271,20 @@ class Runner:
             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
         return st
 
+    def _motion(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Sends a command that can move an arm, never after an operator stop, the deadline or a guard trip. A live
+        guard trip found right after the command may have been overtaken by it: stop again and end the match."""
+        self._check_global()
+        lg = self.live_guard
+        if lg is not None and fn == self.station.home and lg.armed:
+            # /home can't be stopped once begun: never while the guard could fire (a trip racing this /home)
+            raise _Fail("refusing /home while the live guard is armed")
+        reply = fn(*args)
+        if lg is not None and lg.tripped is not None:
+            self._safe_stop(f"guard tripped while sending a command: {lg.tripped}")
+            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
+        return reply
+
     def _safe_stop(self, why: str) -> None:
         self.log.event("stop", why=why)
         try:
@@ -258,10 +293,21 @@ class Runner:
             self.log.event("stop_failed", error=str(exc))
 
     def _wait(self, states: set[str], timeout_s: float, what: str) -> dict[str, Any]:
-        try:
-            st = self.station.wait_for_state(states | {"error"}, timeout_s)
-        except TimeoutError as exc:
-            raise _Fail(f"timed out waiting for {what}: {exc}") from None
+        # In 1 s slices, so a live-guard trip (its /stop means `states` may never come) ends the wait at once.
+        deadline = time.monotonic() + timeout_s
+        while True:
+            lg = self.live_guard
+            if lg is not None and lg.tripped is not None:
+                raise _Guard(f"guard tripped (live frames) while waiting for {what}: {lg.tripped}")
+            if self._stop_event.is_set():
+                raise _Stop()
+            left = deadline - time.monotonic()
+            try:
+                st = self.station.wait_for_state(states | {"error"}, max(0.0, min(1.0, left)))
+                break
+            except TimeoutError as exc:
+                if left <= 1.0:
+                    raise _Fail(f"timed out waiting for {what}: {exc}") from None
         if st.get("state") == "error" and "error" not in states:
             raise _Fail(f"station error: {_err(st.get('last_error'))}")
         return st
@@ -285,7 +331,7 @@ class Runner:
         while True:
             self._check_global()
             self.log.event("start", prompt=prompt, checkpoint=self.plan.checkpoint)
-            self.station.start(prompt, self.plan.checkpoint)
+            self._motion(self.station.start, prompt, self.plan.checkpoint)
             left = self.plan.time_budget_s - (self._clock() - self._t0)
             st = self._wait({"running", "error"}, max(5.0, min(START_TIMEOUT_S, left)), "running")
             if st.get("state") != "error":
@@ -304,7 +350,8 @@ class Runner:
         if force_start or st.get("state") != "running":
             reply, how = self._start_run(prompt), "start"
         else:
-            reply, how = self.station.set_prompt(prompt), "set_prompt"
+            self._check_global()
+            reply, how = self._motion(self.station.set_prompt, prompt), "set_prompt"
             self.log.event("set_prompt", prompt=prompt)
         self._prompt = prompt
         chunks = reply.get("chunks") if isinstance(reply, dict) else None
@@ -406,15 +453,28 @@ class Runner:
         rise_ref = last_rise = None
         hint: int | None = None
         consec_unwatched, watch_fixes = 0, 0
+        if self.shadow is not None:
+            self.shadow.start(stage.timeout_s, stage.stall_s, confirm)
         while True:
             self._nap(self.plan.check_every_s)
             st = self._poll_health()
             elapsed = self._clock() - t0
             if st.get("state") == "idle":
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
-            if guard is not None and self.fast_guard is not None:
+            if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
+                self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
+            fast_frames = self.frames.latest() if guard is not None and self.fast_guard is not None else {}
+            new_frames = {}
+            for role, jpeg in fast_frames.items():    # kept with a live guard too, as a fallback
+                sig = hashlib.sha1(jpeg).hexdigest()
+                if self._fast_sig.get(role) != sig:
+                    self._fast_sig[role] = sig
+                    new_frames[role] = jpeg
+            if new_frames:
                 # Local detector on every poll, from the stage's first second: no API latency, works offline.
-                local, why = self.fast_guard(self.frames.latest())
+                # Only camera images not judged before count: the debug view repeats a trip's frames until the next
+                # one, and a frozen wrist view must neither confirm a yes nor keep max_blind_s satisfied.
+                local, why = self.fast_guard(new_frames)
                 if isinstance(local, bool):
                     self._guard_answer_t = self._clock()
                 if local is True:
@@ -485,6 +545,9 @@ class Runner:
                             rise_ref = last_rise = None
                             continue
                 sig = getattr(verdict, "frames_sig", None)
+                self._shadow_look(stage, attempt, elapsed, verdict, failing, monitor, consec_stalled, last_rise,
+                                  same=verdict.done is True and sig is not None and sig == last_done_sig
+                                  and not verdict.immediate)
                 if verdict.done is True and sig is not None and sig == last_done_sig and not verdict.immediate:
                     # the same camera images judged twice are one look, not two: a frozen view must not confirm
                     self.log.event("same_frames", stage=stage.name, attempt=attempt,
@@ -530,6 +593,20 @@ class Runner:
                     t0 += EXTEND_S                 # the gripper is on the target and pulling: let it finish
                     continue
                 return _Attempt(False, f"timeout after {stage.timeout_s:g} s", max_p, hint)
+
+    def _shadow_look(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, failing: bool, monitor: bool,
+                     consec_stalled: int, last_rise: float | None, *, same: bool) -> None:
+        """Logs what harness.decide would decide on this look (event `decide`). Never acts, never raises."""
+        if self.shadow is None:
+            return
+        try:
+            out = self.shadow.look(elapsed, verdict.done, failing, same_frames=same, monitor=monitor,
+                                   consec_stalled=consec_stalled,
+                                   since_rise_s=None if last_rise is None else elapsed - last_rise)
+            self.log.event("decide", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 2), **out)
+        except Exception as exc:  # noqa: BLE001
+            self.log.event("warning", message=f"decide shadow failed, off for this run: {exc}")
+            self.shadow = None
 
     def _on_target(self, stage: Stage) -> bool:
         """The last monitor verdict says a gripper holds the stage's object and progress is at least half."""
@@ -671,6 +748,59 @@ class Runner:
                        order_ok=tower_matches(self._tower, plan.tower_target))
         return prompt
 
+    def _joint_state(self, st: dict[str, Any]) -> tuple[dict[str, list[float]] | None, str | None]:
+        """Joint angles from GET /arms (add-on, any state), else from the newest trip (only while running: an
+        idle station's last trip predates any /home)."""
+        getter = getattr(self.station, "grippers", None)
+        q = joints_from_arms(getter() if getter else {})
+        if q:
+            return q, "arms"
+        obs = getattr(self.frames, "latest_observation", None)
+        if st.get("state") == "running" and obs is not None:
+            q = joints_from_observation(obs())
+            if q:
+                return q, "trip"
+        return None, None
+
+    def _start_pose_gate(self, stage: Stage, prompt: str, why: str) -> bool:
+        """Logs how far the arms are from the training starts for `prompt`. On a home_before stage with a far start,
+        stops (if running) and homes the arms. Returns True if it homed, so the caller must /start afresh."""
+        cfg = self.plan.start_pose
+        if cfg is None or self.start_poses is None:
+            return False
+        st = self.station.status()
+        joints, source = self._joint_state(st)
+        chk = self.start_poses.check(prompt, joints, cfg.tolerance_rad, source)
+        self.log.event("start_pose", stage=stage.name, why=why, prompt=prompt, tolerance_rad=cfg.tolerance_rad,
+                       **chk.as_event())
+        if chk.status != "far" or not cfg.homes(stage.name):
+            return False
+        if self._homes.get(stage.name, 0) >= cfg.max_homes:
+            self.log.event("start_pose_home", stage=stage.name, done=False, reason=f"max_homes {cfg.max_homes} used")
+            return False
+        home = self.start_poses.check(prompt, cfg.home_pose, cfg.tolerance_rad, "home_pose")
+        if home.status != "ok":
+            self.log.event("start_pose_home", stage=stage.name, done=False,
+                           reason="the home pose is not a training start for this prompt either", **home.as_event())
+            return False
+        left = self.plan.time_budget_s - (self._clock() - self._t0)
+        if left < HOME_RESERVE_S:
+            self.log.event("start_pose_home", stage=stage.name, done=False,
+                           reason=f"only {left:.0f} s left; /home can't be cancelled once started")
+            return False
+        self._check_global()
+        self._homes[stage.name] = self._homes.get(stage.name, 0) + 1
+        self.log.event("start_pose_home", stage=stage.name, done=True, why=why)
+        if st.get("state") != "idle":
+            self.station.stop()
+            self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
+        self._check_global()   # an operator stop, the deadline or a guard trip during the stop: hold, don't home
+        if self.plan.time_budget_s - (self._clock() - self._t0) < HOME_RESERVE_S:
+            raise _Fail("not enough match time left to home safely after the stop")
+        self._motion(self.station.home)
+        self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
+        return True
+
     def _run_stage(self, stage: Stage, first: bool) -> StageResult:
         t0 = self._clock()
         verifier = self.verifiers.get(stage.verifier)
@@ -679,13 +809,21 @@ class Runner:
         self._check_global()
         self._last_progress = None
         self.log.event("stage_start", stage=stage.name, prompt=stage.prompt)
+        lg = self.live_guard
+        if lg is not None:
+            if self.plan.guard is not None and self.plan.guard.covers(stage.name):
+                lg.arm(stage.name)
+            else:
+                lg.disarm()
         if stage.skip_unless and not self._precondition(stage, verifier):
             self.log.event("stage_skipped", stage=stage.name, reason=f"precondition not met: {stage.skip_unless}")
             return StageResult(stage.name, False, 0, self._clock() - t0, "precondition not met")
         if stage.skip_if_done and self._entry_check(stage, verifier):
             self.log.event("stage_already_done", stage=stage.name)
             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
-        refused = self._try_issue(self._stage_prompt(stage, verifier), "stage", force_start=first)
+        prompt = self._stage_prompt(stage, verifier)
+        homed = self._start_pose_gate(stage, prompt, "stage start")
+        refused = self._try_issue(prompt, "stage", force_start=first or homed)
         attempts = 0
         uses: dict[int, int] = {}
         last_rec: int | None = None
@@ -723,9 +861,14 @@ class Runner:
                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="home_and_retry")
                 self.station.stop()
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
-                self.station.home()
+                if self.plan.time_budget_s - (self._clock() - self._t0) < HOME_RESERVE_S:
+                    raise _Fail("not enough match time left to home safely after the stop")
+                self._motion(self.station.home)   # checks operator stop, deadline and guard first
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
                 refused = self._try_issue(self._stage_prompt(stage, verifier), "retry", force_start=True)
             else:
-                refused = self._try_issue(self._stage_prompt(stage, verifier), "retry")
-                self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="retry_in_place")
+                prompt = self._stage_prompt(stage, verifier)
+                homed = self._start_pose_gate(stage, prompt, "retry")
+                refused = self._try_issue(prompt, "retry", force_start=homed)
+                self.log.event("retry", stage=stage.name, attempt=attempts + 1,
+                               mode="home_then_retry" if homed else "retry_in_place")

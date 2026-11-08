@@ -84,7 +84,7 @@ def test_retry_in_place_without_recovery_resends_prompt(fake, write_plan, tmp_pa
 
 
 def test_home_and_retry(fake, write_plan, tmp_path):
-    path = write_plan([stage("a", on_fail="home_and_retry")])
+    path = write_plan([stage("a", on_fail="home_and_retry")], time_budget_s=300)   # /home needs 30 s left
     result = build(fake, path, tmp_path, FakeVerifier({"a": [False, True, True, True]})).run()
     assert result.ok, result.reason
     assert result.stages[0].attempts == 2
@@ -250,3 +250,10 @@ def test_hardware_fault_still_ends_the_run(fake, write_plan, tmp_path):
     result = runner.run()
     assert not result.ok and "over-current" in result.reason
     assert '"station_restart"' not in (runner.log.path / "events.jsonl").read_text()
+
+
+def test_home_and_retry_holds_without_time_for_home(fake, write_plan, tmp_path):
+    path = write_plan([stage("a", on_fail="home_and_retry")], time_budget_s=20)
+    result = build(fake, path, tmp_path, FakeVerifier({"a": [False, True]})).run()
+    assert not result.ok and "home safely" in result.reason
+    assert "/home" not in routes(fake)
