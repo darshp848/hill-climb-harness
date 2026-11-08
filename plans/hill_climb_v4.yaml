@@ -14,17 +14,18 @@
 #   and the pass-bar stages (unplug_cable, stack_2, stack_3, tower_pass) are never skipped.
 # - No human input after "go": verifier `monitor` only. Never manual / monitor+manual / time in a match.
 # - The tower must stand 3 s after release: confirm 2 at check_every_s 3 gives two "done" verdicts >= 3 s apart.
-# - An unplugged cable may not be plugged back in: T2 puts it down far from the loose cables, and plug_* asks about
-#   a cable that was lying loose.
+# - An unplugged cable may not be plugged back in: T2 puts it down away from the hub.
 # - on_fail skip ends a stage after its first failed attempt (no recovery), so skip stages are time-boxed by
 #   timeout_s alone.
 #
-# Order: unplug -> put it down -> one extra unplug -> one plug-in try -> stack to the pass bar -> more height -> second plug-in -> balls.
+# Order: unplug -> put it down -> one extra unplug -> stack to the pass bar -> more height -> balls.
+# No plug-in (decided 7 Nov 17:50): base Dream-1 never seated a plug, no teleop demo completed one, and every failed
+# try cost up to 40 s of the match. The +20 per cable is not reachable this weekend; the clock goes to the tower and balls.
 # Before the match: measure the blocks. tower_pass keeps stacking until the tower is over 4 in, and is skipped at
 # once if stack_3 already got there.
 task: >-
-  Hill Climb relay. Stage 1: unplug one USB cable that starts in the hub and put it down away from the hub; then plug
-  loose USB cables (ones that started lying on the table) into free hub ports. Never plug an unplugged cable back in.
+  Hill Climb relay. Stage 1: unplug a USB cable that starts in the hub and put it down away from the hub (then one
+  more the same way). Never plug a cable into the hub.
   Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Do not touch the blocks before a
   cable is unplugged. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
   Do not touch the golf balls before the tower passes.
@@ -34,9 +35,9 @@ check_every_s: 3.0
 verifier: monitor
 confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"
-# Camera roles of the arms you recorded T3 (plug-in) and T4 (stacking) with, for the monitor's notes only.
+# Camera role of the arm that stacks (the right arm), for the monitor's notes only.
 # The prompts never name an arm, so changing these does not change what the model is asked.
-vars: {plug_cam: wrist_r, stack_cam: wrist_r}
+vars: {stack_cam: wrist_r}
 claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
 # Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
 # the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
@@ -90,18 +91,6 @@ stages:
     min_run_s: 3
     skip_if_done: true        # nothing held (unplug_more failed or dropped it): skip at once
     on_fail: skip
-
-  - name: plug_1
-    prompt: "plug the loose USB cable on the table into a free port on the hub"
-    success: "Is a cable that was lying loose on the table now plugged fully into a free hub port, with its plug seated and no gripper holding it?"
-    expect: "One gripper picks the loose cable up by its plug, lines the plug up with a free port, pushes it in until seated, opens and lifts away."
-    history_cameras: ["{plug_cam}"]
-    camera_notes:
-      "scene": "top view: which port, and left-right alignment; poor at depth and at seeing whether the plug is pushed in"
-      "{plug_cam}": "close view from the gripper doing the plugging: use it for the plug's distance to the port and whether it is seated"
-    timeout_s: 40
-    min_run_s: 4
-    on_fail: skip             # +20 if it works; time-boxed so it cannot eat the stack's time
 
   - name: arms_clear
     prompt: "open both grippers and move the arms up"
@@ -161,7 +150,7 @@ stages:
          when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
     on_fail: retry_in_place   # never skip: the balls are off limits until the tower passes
 
-  # ---- After the pass bar: +3 per full inch, then the second plug-in, then balls ----
+  # ---- After the pass bar: +3 per full inch, then balls ----
   - &higher
     name: higher_1
     prompt: "put a block on top of the stack"
@@ -174,18 +163,6 @@ stages:
     on_fail: skip             # a failed extra block costs only its 30 s; a fallen tower loses its height points
   - <<: *higher
     name: higher_2
-
-  - name: plug_2
-    prompt: "plug the loose USB cable on the table into a free port on the hub"
-    success: "Is one more loose cable plugged fully into a free hub port than in the first image of this stage, with no gripper holding it and the tower still standing?"
-    expect: "One gripper plugs another loose cable into a free port without going near the tower, then opens and lifts away."
-    history_cameras: ["{plug_cam}"]
-    camera_notes:
-      "scene": "top view: which port, and left-right alignment; poor at depth and at seeing whether the plug is pushed in"
-      "{plug_cam}": "close view from the gripper doing the plugging: use it for the plug's distance to the port and whether it is seated"
-    timeout_s: 35
-    min_run_s: 4
-    on_fail: skip
 
   # ---- Stage 3: no pass bar. The guard above stops the run if a black ball is held. ----
   - &ball
