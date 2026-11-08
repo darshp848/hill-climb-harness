@@ -56,7 +56,7 @@ stages:
     on_fail: abandon
 
   - name: stack_two
-    prompt: "put a block on top of another block"
+    prompt: "drop any cable you are holding, then put a block on top of another block"
     success: "Is one block resting on top of another block, with no gripper holding it?"
     expect: "An arm picks up a block and sets it squarely on another block, then opens."
     timeout_s: 50
