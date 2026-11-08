@@ -31,24 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def sim_text(value):
-    """Adapt real-table colour instructions while retaining plan structure and timings."""
-    if isinstance(value, str):
-        for old, new in [("white or black ball", "black ball"),
-                         ("white ball or a black", "black"),
-                         ("white ball, any black ball", "black ball"),
-                         ("white ball, a black ball", "black ball"),
-                         ("white ball", "black ball"),
-                         ("coloured golf ball", "white golf ball"),
-                         ("orange ball", "white golf ball")]:
-            value = value.replace(old, new)
-        return value
-    if dataclasses.is_dataclass(value):
-        for field in dataclasses.fields(value):
-            setattr(value, field.name, sim_text(getattr(value, field.name)))
-    elif isinstance(value, list):
-        return [sim_text(x) for x in value]
-    elif isinstance(value, dict):
-        return {k: sim_text(v) for k, v in value.items()}
+    """The sim's balls have the real table's colours (sim_scenes.hill_climb_table: green, yellow and orange golf
+    balls legal; a white golf ball and a black 8-ball illegal), so plan texts apply as written: no translation."""
     return value
 
 
@@ -113,9 +97,9 @@ def prepare_plan(path, skip=(), *, notes=True, technique=None, level=None):
     lesson = ROOT / "lessons/operator.md"
     if lesson.exists():
         plan.system_prompt += "\n" + sim_text(lesson.read_text(encoding="utf-8"))
-    plan.system_prompt += ("\nSIM SCENE: the robot is a pair of YAM arms. Six WHITE golf balls are legal; "
-                           "two BLACK 8-balls are illegal. The hub is silver. The bin is white. "
-                           "Judge the rendered scene, not the physical station photographs.")
+    plan.system_prompt += ("\nSIM SCENE: the robot is a pair of YAM arms. The green, yellow and orange golf balls are "
+                           "legal; the white golf ball and the black 8-ball are illegal. The hub is silver. The bin is "
+                           "white. Judge the rendered scene, not the physical station photographs.")
     return plan
 
 

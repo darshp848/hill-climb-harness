@@ -42,7 +42,7 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 #   --var put_down="put the held cable down on the table away from the hub"
 vars:
   stack_cam: wrist_r
-  ball: orange ball
+  ball: coloured golf ball   # green, yellow or orange (Darsh's decisions); the white ball and black balls are illegal
   unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port and hold it up above the strip."
   put_down: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
 # history_frames 4 not 6, one stitched grid image per check, two calls in flight: a verdict every ~5 s, not ~10
@@ -93,7 +93,7 @@ system_prompt: |-
   - Dream knocked the tower over by reaching across it for the next block. Good instructions carry the block high above the tower and lower it straight down, slowly. If the arm is moving low next to the tower, say so in next_prompt.
 
   BALLS
-  - Only orange balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
+  - Only coloured golf balls (green, yellow, orange) go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
 
   WRITING ROBOT INSTRUCTIONS (next_prompt)
   - One short action in plain words, naming objects by colour and position: "pick up the yellow block and place it gently on top of the pink block", "grip the plug body of the rightmost cable still in the strip and pull it straight up".

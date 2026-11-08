@@ -75,6 +75,9 @@ def run(args) -> None:
         name = f"hc-{args.job}-{i}"
         lines.append(f"docker run -d --name {name} --cpus 2 --memory 2g --env-file ~/.hill-climb/keys.env "
                      f"--user $(id -u):$(id -g) -e HOME=/tmp "
+                     # The node's Intel GPU through EGL: ~20 ms per capture instead of ~320 ms in software.
+                     f"--device /dev/dri --group-add $(getent group render | cut -d: -f3) "
+                     f"--group-add $(getent group video | cut -d: -f3) -e MUJOCO_GL=egl -e PYOPENGL_PLATFORM=egl "
                      f"-e OUTPUT_PREFIX=/results/{args.job} -e RUN_ID={args.job} -v {BASE}/results:/results "
                      f"--label hill-climb-job={args.job} hill-climb-sim:{args.tag} "
                      f"--config {args.config} --seed-start {start} --matches {n} --out /tmp/out {extra}")

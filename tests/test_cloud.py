@@ -136,11 +136,12 @@ def test_sim_plan_retains_match_safeguards_and_correct_colours():
         plan = prepare_plan(ROOT / "plans" / (path + ".yaml"), skip)
         assert plan.guard and plan.confirm == 2 and plan.claude_user["parallel"] == 2
         assert all(s.verifier == "monitor" for s in plan.stages)
-        assert "white ball" not in plan.guard.question
+        # The sim now has the real table's colours: the white ball is illegal there too, so no translation.
+        assert "white ball" in plan.guard.question and "black" in plan.guard.question
         if path == "hybrid_v4":
             assert all(not s.name.startswith("cable_extra") for s in plan.stages)
-            assert "white golf ball" in next(s.prompt for s in plan.stages if s.name == "ball_1")
-        assert all("white or black" not in s.success for s in plan.stages)
+            assert "coloured golf ball" in next(s.prompt for s in plan.stages if s.name == "ball_1")
+        assert "green, yellow and orange golf balls are legal" in plan.system_prompt
 
 
 def test_oracle_uses_monitor_parallel_scheduler_and_drops_stale(monkeypatch):

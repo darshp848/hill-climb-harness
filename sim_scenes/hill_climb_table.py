@@ -6,7 +6,7 @@ added, keeping Dream's calibrated arms, cameras, lights and table. Sizes are fro
 
   Stage 1  a 4-port USB hub (ports on top) with 2 cables plugged in and 2 loose cables on the table
   Stage 2  10 foam blocks: 6 cubes of 6 cm and 4 cylinders of 2.5 cm x 10 cm (one alone is under 4 in)
-  Stage 3  6 white golf balls, 2 black pool 8-balls and a wire bin by the right arm
+  Stage 3  6 legal golf balls (green, yellow, orange), 2 illegal balls (a white golf ball, a black 8-ball), a bin
 
 World frame: table top at z = 0.76, arm bases at x = +-0.305 (left arm at +x), y = 0.24; objects sit in front
 of the arms at y < 0.2. The hub and cables are in front of the RIGHT arm and the bin by the left one, because
@@ -44,7 +44,13 @@ BIN_POS = (0.27, 0.08)
 BIN_HALF = (0.11, 0.075, 0.04)          # inner x, y half sizes and wall half height
 GOLF_R, EIGHT_R = 0.02135, 0.028575
 GOLF = ((0.12, 0.1), (0.18, -0.06), (0.3, -0.1), (0.22, -0.16), (0.1, -0.2), (0.35, -0.02))
-EIGHT = ((0.24, -0.06), (0.16, -0.24))
+EIGHT = ((0.30, -0.15), (0.16, -0.24))    # eight_0 (white) clear of the white bin's rim, or the two blobs merge
+# Colours as on the real table (Darsh's photo IMG_2698 and decisions, 8 Nov): the legal golf balls are green, yellow
+# and orange; the illegal ones are a WHITE golf ball and a black 8-ball. The referee scores by name: golf_* in the bin
+# +5 each, any eight_* in the bin loses the match.
+GOLF_RGBA = (".15 .7 .3 1", ".9 .9 .15 1", "1 .45 .05 1")       # green, yellow, orange
+ILLEGAL = ((GOLF_R, "0.0459", ".97 .97 .95 1"),                   # eight_0: the white golf ball
+           (EIGHT_R, "0.16", ".03 .03 .03 1"))                    # eight_1: a black pool 8-ball
 
 REMOVED = ("apple", "banana", "orange", "water_bottle", "bowl", "plate")
 GRIPPER_BODIES = tuple(f"{side}_{part}" for side in ("left", "right")
@@ -119,11 +125,13 @@ def add_objects(world: ET.Element) -> None:
     for i, (x, y) in enumerate(GOLF):
         body = ET.SubElement(world, "body", name=f"golf_{i}", pos=_n(x, y, TABLE_Z + GOLF_R + 0.0005))
         ET.SubElement(body, "freejoint")
-        ET.SubElement(body, "geom", type="sphere", size=str(GOLF_R), mass="0.0459", rgba=".97 .97 .95 1")
+        ET.SubElement(body, "geom", type="sphere", size=str(GOLF_R), mass="0.0459",
+                      rgba=GOLF_RGBA[i % len(GOLF_RGBA)])
     for i, (x, y) in enumerate(EIGHT):
-        body = ET.SubElement(world, "body", name=f"eight_{i}", pos=_n(x, y, TABLE_Z + EIGHT_R + 0.0005))
+        radius, mass, rgba = ILLEGAL[i % len(ILLEGAL)]
+        body = ET.SubElement(world, "body", name=f"eight_{i}", pos=_n(x, y, TABLE_Z + radius + 0.0005))
         ET.SubElement(body, "freejoint")
-        ET.SubElement(body, "geom", type="sphere", size=str(EIGHT_R), mass="0.16", rgba=".03 .03 .03 1")
+        ET.SubElement(body, "geom", type="sphere", size=str(radius), mass=mass, rgba=rgba)
 
 
 def build_xml(original_xml: str) -> str:

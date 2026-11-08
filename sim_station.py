@@ -183,6 +183,23 @@ class ScriptedPolicy:
         self.closed = True
 
 
+def apply_render_quality(env: Any) -> str:
+    """Keep the sim real-time. With software rendering (MUJOCO_GL=osmesa: cloud VMs, a container without a GPU) the
+    example's 4096-px shadow maps and 4x anti-aliasing cost ~320 ms per 3-camera capture (one per 200 ms of control),
+    so physics ran at ~0.55x the match clock (tools/render_bench.py, 8 Nov). 'fast' drops shadows and anti-aliasing:
+    ~50 ms. SIM_RENDER=full|fast|auto (auto = fast under osmesa, full with a GPU: egl/glfw/wgl)."""
+    mode = os.environ.get("SIM_RENDER", "auto").strip().lower()
+    if mode == "auto":
+        mode = "fast" if os.environ.get("MUJOCO_GL", "").lower() == "osmesa" else "full"
+    if mode == "fast":
+        env.model.light_castshadow[:] = 0
+        env.model.vis.quality.offsamples = 0
+        if getattr(env, "renderer", None) is not None:         # rebuilt on the next render with the new quality
+            env.renderer.close()
+            env.renderer = None
+    return mode
+
+
 class PipelinedPolicy:
     """N Dream sessions used in turn, for throughput: a Dream client runs one get_action at a time, so with a ~1 s
     round trip one session can't ask more than ~1 Hz. Fed the same observations, sessions take requests in
@@ -444,6 +461,7 @@ class SimStation:
     def _sim_main(self, ready: threading.Event) -> None:
         try:
             self.env = self.yam_env.YamEnv()
+            self.render_quality = apply_render_quality(self.env)
             self._track_poses(self.env)
             self.hold = self._current_targets()
             self._render()
