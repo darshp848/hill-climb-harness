@@ -19,7 +19,7 @@ _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier"
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -59,6 +59,7 @@ class Stage:
     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     watch: Watch | None = None
+    requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -245,6 +246,9 @@ def parse_plan(data: Any) -> Plan:
         label = f"stage {name!r}"
         if name in seen:
             raise ValueError(f"{label}.name: duplicate stage name")
+        prerequisite = raw.get("requires_stage")
+        if prerequisite is not None and (not isinstance(prerequisite, str) or prerequisite not in seen):
+            raise ValueError(f"{label}.requires_stage: must name an earlier stage")
         seen.add(name)
         unknown = set(raw) - _STAGE_KEYS
         if unknown:
@@ -301,6 +305,7 @@ def parse_plan(data: Any) -> Plan:
                 camera_notes={k: v.strip() for k, v in notes.items()},
                 history_cameras=hist,
                 watch=watch,
+                requires_stage=prerequisite,
             )
         )
 

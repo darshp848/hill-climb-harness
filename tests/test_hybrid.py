@@ -193,3 +193,12 @@ def test_stitched_history_and_two_calls_in_flight(write_plan):
     assert len(images) == 3 and texts[0].startswith("Earlier frames in ONE image")   # grid + newest scene + wrist
     v = m.check(st, {"video.scene": _jpeg("red")}, 6.0)
     assert v.latency_s is not None
+
+
+def test_put_down_skipped_when_its_unplug_failed(fake, write_plan, tmp_path):
+    path = write_plan([stage("up", timeout_s=0.3, max_attempts=1, on_fail="skip"),
+                       stage("down", requires_stage="up"), stage("next", timeout_s=0.3)])
+    sv = Script([lambda st, f, e: mv(True, progress=1.0) if st.name == "next" else mv(None)])
+    res = build(fake, path, tmp_path, sv).run()
+    by = {s.name: s for s in res.stages}
+    assert by["down"].reason == "up did not pass" and not any(c[0] == "down" for c in sv.calls)

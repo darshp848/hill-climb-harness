@@ -107,6 +107,7 @@ stages:
     on_fail: retry_in_place
 
   - name: cable_put_down
+    requires_stage: cable_unplug
     prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
     success: "Is the right gripper open and empty, with the unplugged cable lying on the table away from the power strip? (The left arm is not used; ignore its gripper.)"
     timeout_s: 20
@@ -124,6 +125,7 @@ stages:
     on_fail: skip
 
   - name: cable_put_more_down
+    requires_stage: cable_unplug_more
     prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
     success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
     timeout_s: 15
@@ -143,6 +145,7 @@ stages:
     on_fail: skip
 
   - name: cable_extra_3_down
+    requires_stage: cable_extra_3
     prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
     success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
     timeout_s: 15
@@ -162,6 +165,7 @@ stages:
     on_fail: skip
 
   - name: cable_extra_4_down
+    requires_stage: cable_extra_4
     prompt: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
     success: "Is the right gripper open and empty, with no cable held? (The left arm is not used; ignore its gripper.)"
     timeout_s: 15

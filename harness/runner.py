@@ -184,6 +184,11 @@ class Runner:
                 self._reset_and_wait("before the first stage: both grippers open")
             for stage in self.plan.stages:
                 self._apply_operator()
+                if stage.requires_stage and not any(r.name == stage.requires_stage and r.ok for r in results):
+                    reason = f"{stage.requires_stage} did not pass"   # e.g. no cable came out: nothing to put down
+                    self.log.event("stage_skipped", stage=stage.name, reason=reason)
+                    results.append(StageResult(stage.name, False, 0, 0.0, reason))
+                    continue
                 if stage.name in self._skip:
                     self.log.event("stage_skipped", stage=stage.name, reason="operator asked to skip it")
                     results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
