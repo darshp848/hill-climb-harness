@@ -595,6 +595,8 @@ class Runner:
                     with self.operator._lock:
                         self.operator._actions.prompts[:0] = prompts
                 return _Attempt(False, "operator ended the stage", max_p, hint, operator=True)
+            if prompts:
+                gs["done"] = True   # the operator is steering: no grip assist on this attempt (8 Nov live: it re-gripped cubes)
             for prompt in prompts:
                 self._issue(prompt, "operator")
                 rewrites = self.plan.rewrite_max   # the operator's prompt stands: no monitor rewrite undoes it (run 3)
