@@ -221,6 +221,7 @@ class Runner:
                     results.append(StageResult(stage.name, False, 0, 0.0, reason))
                     continue
                 if stage.name in self._skip:
+                    self._mark_done(f"{stage.name}: skipped by the operator, the run has moved on from it")
                     self.log.event("stage_skipped", stage=stage.name, reason="operator asked to skip it")
                     results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
                     continue
@@ -1270,6 +1271,9 @@ class Runner:
             if out.ok:
                 return StageResult(stage.name, True, attempts, self._clock() - t0, out.reason)
             if out.operator:
+                # tell the monitor: 8 Nov live, after a skipped tower it judged every ball look "failing: build the
+                # tower first"
+                self._mark_done(f"{stage.name}: skipped by the operator, the run has moved on from it")
                 self.log.event("stage_skipped", stage=stage.name, reason=out.reason)
                 return StageResult(stage.name, False, attempts, self._clock() - t0, out.reason)
             reason, hint = out.reason, out.recovery_hint

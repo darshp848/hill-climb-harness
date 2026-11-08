@@ -218,7 +218,7 @@ def test_bot_v1_plan():
     assert all(s.write_prompt and "nearest" in s.prompt and "white basket" in s.prompt and s.writer_notes
                and "left arm" in s.writer_notes and "SKIP" in s.writer_notes and s.confirm_check for s in balls)
     assert plan.stop_on_pass and plan.claude_user["hedge"] == 2
-    assert all(s.confirm == 1 and s.confirm_check for s in stacks)
+    assert all(s.confirm == 2 and s.confirm_check for s in stacks)
     assert all(plan.guard.covers(s.name) for s in balls) and not plan.guard.covers("cable_unplug")
 
 
