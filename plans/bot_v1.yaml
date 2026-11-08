@@ -99,7 +99,7 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - &unplug
     name: cable_unplug
-    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and drop the cable into the white basket."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
     write_prompt: false
     grip_assist:
       regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
@@ -109,11 +109,11 @@ stages:
       seat_dz: 0.0         # no seat: two fewer moves (each 3-6 s)
       repull: 0            # slipped: lower back and let Dream re-approach (a re-pull kept Dream stopped ~19 s, 8 Nov live)
       hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty); a pull from 0.27 lost it
-      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
+      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and drop the cable into the white basket."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
-      loop_until_s: 150    # unplug in a loop: next plug straight away, until 150 s into the match
+      loop_until_s: 120    # Kaushik, 8 Nov: 2 min for cables, 1 min tower, 2 min balls
     success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
     camera_notes:
@@ -143,14 +143,14 @@ stages:
     expect: "The arms pick up the cubes one at a time and stack them into a single tower of three, then lift clear; the tower stays standing."
     camera_notes:
       scene: "top view of the table: the cubes and the tower"
-    timeout_s: 120
-    max_attempts: 99       # pass bar: balls are off limits until the tower stands
+    timeout_s: 60          # Kaushik, 8 Nov: 1 min for stacking, then the balls
+    max_attempts: 1        # RUBRIC RISK: balls before the tower passes can be a DQ (Kaushik's call, 8 Nov)
     min_run_s: 4
     stall_s: 45
     confirm: 2             # two fast looks in a row before the lock, then Sonnet decides
     confirm_check: "In the NOW images, are three cubes stacked on top of each other in a single tower, standing on its own, with no gripper holding or touching it?"
     resume_on_no: true     # one-stage tower: a lock on a half-built tower must let Dream finish it
-    on_fail: retry_in_place
+    on_fail: skip
 
   # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. One named ball per call. ----
   - &ball

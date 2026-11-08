@@ -203,11 +203,11 @@ def test_bot_v1_plan():
     assert plan.claude_user["confirm_model"] == plan.claude_user["writer_model"] == "claude-sonnet-5-5"
     unplugs = [s for s in plan.stages if s.name.startswith("cable_unplug")]
     assert len(unplugs) == 1 and all(s.grip_assist and s.confirm_check and not s.write_prompt for s in unplugs)
-    assert unplugs[0].grip_assist.loop_until_s == 150
+    assert unplugs[0].grip_assist.loop_until_s == 120
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.10], 4.0, 0, (0.062, 0.20))
     assert ga.put_down_prompt and unplugs[0].prompt.endswith(ga.put_down_prompt)   # one prompt: unplug + place
-    assert "5 inches to the right" in ga.put_down_prompt
+    assert "white basket" in ga.put_down_prompt
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert [x.name for x in stacks] == ["tower"]
