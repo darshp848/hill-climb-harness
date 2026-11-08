@@ -266,6 +266,14 @@ class Runner:
         if self.live_guard is not None:
             self.live_guard.disarm()
             tripped = tripped or self.live_guard.tripped is not None
+        if self.plan.reset_last and not tripped and getattr(self.station, "reset", None) is not None:
+            try:   # back to the start pose for the next run (never after a guard trip: it holds an illegal ball)
+                self.station.stop()
+                self.station.wait_for_state({"idle", "error"}, IDLE_TIMEOUT_S)
+                self.log.event("reset", why="end of run: back to the start pose")
+                self.station.reset()
+            except (StationError, OSError, TimeoutError) as exc:
+                self.log.event("reset_failed", why="end of run", error=str(exc))
         result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason,
                            guard_tripped=tripped)
         self.log.update_manifest(end_time=datetime.now(timezone.utc).isoformat(), ok=ok, reason=reason)
