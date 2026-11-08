@@ -310,7 +310,7 @@ function filter() {
   const f = $("fFolder").value, t = $("fTask").value, m = $("fMark").value, s = $("fShort").checked;
   shown = ROWS.filter(r => (!f || r.folder === f) && (!t || r.task === t) && (!s || r.seconds < 3) &&
     (!m || (m === "none" ? !marks[id(r)] : marks[id(r)] === m)));
-  const all = Object.values(marks);
+  const all = ROWS.map(r => marks[id(r)]).filter(Boolean);   // marks for folders not on this page don't count
   $("counts").textContent = `${shown.length} shown of ${ROWS.length} · ${all.filter(x => x === "keep").length} keep · ` +
     `${all.filter(x => x === "drop").length} drop · ${ROWS.length - all.length} unmarked`;
   $("list").innerHTML = shown.map((r, i) => {
