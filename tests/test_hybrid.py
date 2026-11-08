@@ -157,3 +157,39 @@ def test_trace_report_shows_rewrites_and_operator(tmp_path):
     trace_report.render(run)
     page = (run / "trace.html").read_text()
     assert "monitor rewrote prompt" in page and "class='was'" in page and "operator said" in page
+
+
+def _jpeg(color):
+    import io
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGB", (640, 360), color).save(out, "JPEG")
+    return out.getvalue()
+
+
+def test_stitched_history_and_two_calls_in_flight(write_plan):
+    import threading
+    plan = load_plan(write_plan([stage("a", verifier="monitor")], claude={"stitch": True, "parallel": 2,
+                                                                        "history_frames": 4}))
+    gate, started = threading.Event(), []
+
+    def slow(payload):
+        started.append(payload)
+        gate.wait(5)
+        return {"content": [{"type": "text", "text": reply_text(progress=len(started) / 10)}]}
+
+    m = MonitorVerifier(plan, transport=slow)
+    st = plan.stages[0]
+    for t in range(4):
+        m.check(st, {"video.scene": _jpeg((t * 40, 0, 0)), "video.wrist_r": _jpeg("blue")}, float(t))
+    assert len(started) == 2                       # at most two in flight
+    gate.set()
+    m.wait_idle(3)
+    m.check(st, {"video.scene": _jpeg("red"), "video.wrist_r": _jpeg("blue")}, 5.0)
+    m.wait_idle(3)
+    last = started[-1]["messages"][0]["content"]
+    images = [c for c in last if c["type"] == "image"]
+    texts = [c["text"] for c in last if c["type"] == "text"]
+    assert len(images) == 3 and texts[0].startswith("Earlier frames in ONE image")   # grid + newest scene + wrist
+    v = m.check(st, {"video.scene": _jpeg("red")}, 6.0)
+    assert v.latency_s is not None

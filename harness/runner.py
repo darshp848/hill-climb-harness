@@ -452,7 +452,7 @@ class Runner:
     def _log_verdict(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, saved: list[str],
                      st: dict[str, Any]) -> None:
         extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding", "guard",
-                                                   "tower")
+                                                   "tower", "next_prompt", "latency_s")
                  if getattr(verdict, k, None) is not None}
         tower = getattr(verdict, "tower", None)
         if tower is not None:

@@ -32,7 +32,8 @@ verifier: monitor
 confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"
 vars: {stack_cam: wrist_r, ball: orange ball}
-claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4}   # 4 not 6: a faster answer each check
+# history_frames 4 not 6, one stitched grid image per check, two calls in flight: a verdict every ~5 s, not ~10
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
 reset_first: true
 rewrite_prompts: true
 prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
