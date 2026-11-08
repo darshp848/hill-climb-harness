@@ -128,7 +128,7 @@ def validate_translation(payload: dict, body: dict) -> int:
         expected.append({"role": message["role"], "content": content})
     if body["messages"] != expected or body["max_tokens"] != payload["max_tokens"] or images == 0:
         raise ValueError("monitor request translation mismatch")
-    if set(body) != {"model", "messages", "max_tokens"}:
+    if set(body) - {"reasoning"} != {"model", "messages", "max_tokens"}:
         raise ValueError("unexpected wire fields")
     json.dumps(body, allow_nan=False)
     return images

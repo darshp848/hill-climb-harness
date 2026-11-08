@@ -337,10 +337,31 @@ def to_openai_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+REASONING_LEVELS = ("none", "low", "medium", "high")
+
+
+def openrouter_reasoning(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenRouter's unified `reasoning` field. $HARNESS_OPENROUTER_REASONING (none|low|medium|high) wins; otherwise
+    the effort the harness asks Claude for (output_config.effort, `low` in the monitor) is passed on, so every model
+    reasons at the same requested level. Measured 8 Nov: with no field, Gemini Flash-Lite does not reason at all,
+    Haiku 5.5 reasons a little and GPT-5 nano a lot; GPT-5 nano refuses `none`."""
+    level = (os.environ.get("HARNESS_OPENROUTER_REASONING") or
+             str((payload.get("output_config") or {}).get("effort") or "")).strip().lower()
+    if not level:
+        return None
+    if level not in REASONING_LEVELS:
+        raise ValueError(f"reasoning level must be one of {REASONING_LEVELS}, not {level!r}")
+    return {"enabled": False} if level == "none" else {"effort": level}
+
+
 def openrouter_request_body(model: str, payload: dict[str, Any]) -> dict[str, Any]:
     """The credential-free wire body, shared with offline request validation."""
-    return {"model": model, "messages": to_openai_messages(payload),
+    body = {"model": model, "messages": to_openai_messages(payload),
             "max_tokens": int(payload.get("max_tokens", 1024))}
+    reasoning = openrouter_reasoning(payload)
+    if reasoning is not None:
+        body["reasoning"] = reasoning
+    return body
 
 
 def openrouter_transport(models: list[str] | None = None, api_key: str | None = None,
@@ -449,10 +470,27 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
         return MonitorVerdict(None, 0.0, f"monitor error: {why}")
 
     start, end = text.rfind("<json>"), text.rfind("</json>")
-    if start < 0 or end < start:
-        return bad(f"no <json> block in reply: {text[-100:]!r}")
+    if start >= 0 and end > start:
+        raw = text[start + len("<json>"):end]
+    else:
+        # Other models often answer with a ```json fenced block or bare JSON instead of the <json> tags: take the
+        # last JSON object in the reply (format quirks are not wrong answers).
+        fence = text.rfind("```json")
+        if fence >= 0:
+            close = text.find("```", fence + 7)
+            raw = text[fence + 7:close if close > 0 else None]
+        else:
+            close, depth, begin = text.rfind("}"), 0, -1
+            for i in range(close, -1, -1):
+                depth += {"}": 1, "{": -1}.get(text[i], 0)
+                if depth == 0:
+                    begin = i
+                    break
+            if close < 0 or begin < 0:
+                return bad(f"no <json> block in reply: {text[-100:]!r}")
+            raw = text[begin:close + 1]
     try:
-        obj = json.loads(text[start + len("<json>"):end])
+        obj = json.loads(raw)
     except ValueError:
         return bad("unparseable JSON")
     guard = obj.get("guard") if isinstance(obj, dict) and isinstance(obj.get("guard"), bool) else None
