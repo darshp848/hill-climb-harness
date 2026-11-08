@@ -173,7 +173,8 @@ def run_match(args):
                         mon.oracle.start[fields["stage"]] = dict(sim._poses["referee"])
             log.listeners.append(stage_baseline)
         from harness.joint_telemetry import JointTelemetry
-        runner.joints = JointTelemetry(sim.api_url, log=log.event).start()   # live joint torques -> monitor, log
+        runner.joints = JointTelemetry(sim.api_url, log=log.event,                # live joint torques -> monitor, log
+                                       record_to=str(Path(args.out) / "joints.jsonl")).start()   # observer training data
         live = LiveFrames(sim.api_url)
         if set(live.probe()) != {"wrist_l", "wrist_r"}:
             raise RuntimeError("live guard wrist-camera probe failed")

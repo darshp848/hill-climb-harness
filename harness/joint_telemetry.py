@@ -40,6 +40,7 @@ class JointTelemetry:
     thresholds: Thresholds = field(default_factory=Thresholds)
     log: Callable[..., Any] | None = None      # RunLog.event, for joint_alert events
     fetch: Callable[[], dict] | None = None    # tests: replace the HTTP read
+    record_to: str | None = None               # append every reading as one JSON line (q, q_cmd, dq, tau, tau_cmd)
 
     def __post_init__(self):
         self.latest: dict = {}
@@ -64,6 +65,15 @@ class JointTelemetry:
             self.ok = False
             return
         self.ok = bool(snap.get("arms"))
+        if self.record_to and self.ok:     # joint traces: training data for a learned look-ahead observer
+            row = {"t": snap.get("t"), "arms": {
+                arm: {name: [j.get(k) for k in ("q_deg", "q_cmd_deg", "dq_deg_s", "tau_nm", "tau_cmd_nm")]
+                      for name, j in joints.items()} for arm, joints in snap["arms"].items()}}
+            try:
+                with open(self.record_to, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+            except OSError:
+                pass
         raised = self._signals(snap)
         with self._lock:
             self.latest = snap
