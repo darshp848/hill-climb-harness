@@ -14,12 +14,37 @@ from pathlib import Path
 from cloud.control import tasks
 
 
+UPLOAD_FAILED = 75  # control.py marks this exit code FAIL_TASK, so Batch never re-runs a paid match for it
+
+
 def redact(text):
     for name in ("DREAM_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
         value = os.environ.get(name)
         if value:
             text = text.replace(value, "[REDACTED]")
     return text
+
+
+def gcloud(*args):
+    # Batch's runtime can hand the container a CLOUDSDK_PYTHON that does not exist (/usr/bin/python3), so pin
+    # gcloud to this interpreter.
+    env = {**os.environ, "CLOUDSDK_PYTHON": sys.executable}
+    result = subprocess.run(["gcloud", *args, "--quiet"], capture_output=True, env=env)
+    if result.returncode:
+        print(redact(result.stderr.decode("utf-8", "replace"))[-800:], flush=True)
+    return result.returncode == 0
+
+
+def preflight(prefix, attempt, out):
+    """Prove this VM can upload before spending a Dream match."""
+    probe = out / f"preflight-{attempt}.json"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(json.dumps({"attempt": attempt, "inherited_cloudsdk_python": os.environ.get("CLOUDSDK_PYTHON"),
+                                 "python": sys.executable}), encoding="utf-8")
+    if not gcloud("storage", "cp", str(probe), f"{prefix.rstrip('/')}/_preflight/{attempt}.json"):
+        print("USER ACTION NEEDED: upload preflight failed before any match ran; check bucket IAM and network.",
+              flush=True)
+        raise SystemExit(UPLOAD_FAILED)
 
 
 def main():
@@ -37,6 +62,7 @@ def main():
     p.add_argument("--seed-start", type=int, default=0)
     p.add_argument("--matches", type=int, default=1)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--preflight-only", action="store_true", help="check uploads from this VM, run no match")
     args = p.parse_args()
     if min(args.matches_per_task, args.matches) < 1:
         p.error("match counts must be positive")
@@ -68,6 +94,10 @@ def main():
         raise SystemExit("USER ACTION NEEDED: upload anthropic-api-key and submit with --judge api.")
     if args.judge == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
         raise SystemExit("USER ACTION NEEDED: upload openrouter-api-key and submit with --judge openrouter.")
+    preflight(prefix, attempt, args.out)
+    if args.preflight_only:
+        print("Preflight upload OK; no match run.", flush=True)
+        return
     failed = False
     for entry in entries:
         key = f"{entry['name']}-{entry['seed']}"
@@ -89,11 +119,10 @@ def main():
             if path.suffix in (".json", ".jsonl", ".txt", ".log"):
                 path.write_text(redact(path.read_text(encoding="utf-8")), encoding="utf-8")
         destination = f"{prefix.rstrip('/')}/{attempt}/{key}"
-        upload = subprocess.run(["gcloud", "storage", "cp", "--recursive", str(folder),
-                                 f"{prefix.rstrip('/')}/{attempt}/", "--quiet"], capture_output=True)
-        if upload.returncode:
-            print(redact(upload.stderr.decode("utf-8", "replace"))[-800:], flush=True)
-            raise SystemExit("USER ACTION NEEDED: output upload failed; check bucket IAM and network. Local logs remain in /out.")
+        if not gcloud("storage", "cp", "--recursive", str(folder), f"{prefix.rstrip('/')}/{attempt}/"):
+            print("USER ACTION NEEDED: output upload failed; check bucket IAM and network. Local logs remain in /out.",
+                  flush=True)
+            raise SystemExit(UPLOAD_FAILED)
         result_file = folder / "match.json"
         complete = result_file.exists() and json.loads(result_file.read_text(encoding="utf-8")).get("complete", False)
         if code or not complete:
@@ -103,10 +132,10 @@ def main():
         marker = folder / "complete.json"
         marker.write_text(json.dumps({"match": key, "run_id": os.environ.get("RUN_ID", "manual"),
                                       "attempt": attempt}), encoding="utf-8")
-        uploaded = subprocess.run(["gcloud", "storage", "cp", str(marker), destination + "/complete.json",
-                                   "--quiet"], capture_output=True)
-        if uploaded.returncode:
-            raise SystemExit("USER ACTION NEEDED: completion upload failed; rerun collection after checking bucket IAM.")
+        if not gcloud("storage", "cp", str(marker), destination + "/complete.json"):
+            print("USER ACTION NEEDED: completion upload failed; rerun collection after checking bucket IAM.",
+                  flush=True)
+            raise SystemExit(UPLOAD_FAILED)
     if failed:
         raise SystemExit(1)
 

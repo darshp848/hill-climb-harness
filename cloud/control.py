@@ -194,6 +194,9 @@ def job_config(args, entries):
                                                 "secretVariables": secret},
                                 "computeResource": {"cpuMilli": 2000, "memoryMib": 1280},
                                 "maxRetryCount": 2,
+                                # Retry Spot preemptions, but never re-run a paid match because uploads fail.
+                                "lifecyclePolicies": [{"action": "FAIL_TASK",
+                                                       "actionCondition": {"exitCodes": [75]}}],
                                 "maxRunDuration": str(900 * args.matches_per_task) + "s"}}],
             "allocationPolicy": policy,
             "logsPolicy": {"destination": "CLOUD_LOGGING"}, "labels": {"manifest": identity}}

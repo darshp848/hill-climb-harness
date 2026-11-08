@@ -49,6 +49,36 @@ def test_batch_limits_and_runtime_secret_references():
     assert control.job_config(grouped, entries)["taskGroups"][0]["taskCount"] == 4
 
 
+def test_upload_failure_is_never_retried():
+    job = control.job_config(job_args(), control.tasks(ROOT / "cloud/matrix.yaml", True))
+    spec = job["taskGroups"][0]["taskSpec"]
+    assert spec["lifecyclePolicies"] == [{"action": "FAIL_TASK", "actionCondition": {"exitCodes": [75]}}]
+
+
+def test_preflight_failure_runs_no_match_and_pins_gcloud_python(monkeypatch, tmp_path):
+    from cloud import entrypoint
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append((cmd, kw.get("env", {}).get("CLOUDSDK_PYTHON")))
+        return argparse.Namespace(returncode=1, stderr=b"denied")
+
+    monkeypatch.setattr(entrypoint.subprocess, "run", fake_run)
+    monkeypatch.setattr(entrypoint.subprocess, "Popen", lambda *a, **k: pytest.fail("match started"))
+    monkeypatch.setenv("OUTPUT_PREFIX", "gs://example/runs/x")
+    monkeypatch.setenv("DREAM_API_KEY", "k")
+    monkeypatch.setenv("CLOUDSDK_PYTHON", "/usr/bin/python3")
+    monkeypatch.delenv("MATRIX_SHA256", raising=False)
+    monkeypatch.setattr("sys.argv", ["entrypoint", "--matrix", str(ROOT / "cloud/matrix.yaml"), "--limit", "1",
+                                     "--out", str(tmp_path)])
+    with pytest.raises(SystemExit) as stop:
+        entrypoint.main()
+    assert stop.value.code == entrypoint.UPLOAD_FAILED
+    assert seen and seen[0][0][:3] == ["gcloud", "storage", "cp"]
+    import sys
+    assert seen[0][1] == sys.executable
+
+
 def test_openrouter_judge_and_private_network():
     entries = control.tasks(ROOT / "cloud/matrix.yaml", True)
     a = job_args("openrouter")
