@@ -161,7 +161,8 @@ def job_config(args, entries):
     identity = hashlib.sha256(json.dumps({"tasks": entries, "judge": args.judge, "image": args.image,
                                          "group": args.matches_per_task, "judge_models": args.judge_models,
                                          "judge_mode": args.judge_mode, "judge_hedge": args.judge_hedge,
-                                         "dream_hedge": args.dream_hedge, "machine": args.machine_type},
+                                         "dream_hedge": args.dream_hedge, "machine": args.machine_type,
+                                         "reasoning": getattr(args, "judge_reasoning", "low")},
                                         sort_keys=True).encode()).hexdigest()[:32]
     count = (len(entries) + args.matches_per_task - 1) // args.matches_per_task
     secret = {"DREAM_API_KEY": f"projects/{args.project}/secrets/dream-api-key/versions/latest"}
@@ -190,7 +191,9 @@ def job_config(args, entries):
                                 "environment": {"variables": {"OUTPUT_PREFIX": f"gs://{args.bucket}/runs/{args.job}",
                                                                 "RUN_ID": args.job,
                                                                 "MATRIX_SHA256": hashlib.sha256((ROOT / "cloud/matrix.yaml").read_bytes()).hexdigest(),
-                                                                "LP_NUM_THREADS": "2", "OMP_NUM_THREADS": "2"},
+                                                                "LP_NUM_THREADS": "2", "OMP_NUM_THREADS": "2",
+                                                                "HARNESS_OPENROUTER_REASONING":
+                                                                    getattr(args, "judge_reasoning", "low")},
                                                 "secretVariables": secret},
                                 "computeResource": {"cpuMilli": 2000, "memoryMib": 1280},
                                 "maxRetryCount": 2,
@@ -272,6 +275,8 @@ def main():
     p.add_argument("--judge-models", default="google/gemini-3.1-flash-lite")
     p.add_argument("--judge-mode", choices=["race", "alternate"], default="race")
     p.add_argument("--judge-hedge", type=int, default=1)
+    p.add_argument("--judge-reasoning", choices=["none", "low", "medium", "high"], default="low",
+                   help="OpenRouter reasoning level for every judge model in the job")
     p.add_argument("--dream-hedge", type=int, default=1)
     p.add_argument("--private", action="store_true", help="no external IPs (needs Cloud NAT; lifts the IP quota)")
     p.add_argument("--parallelism", type=int, default=8)

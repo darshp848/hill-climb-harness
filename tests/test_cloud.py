@@ -90,6 +90,11 @@ def test_openrouter_judge_and_private_network():
     assert cmd[cmd.index("--judge-models") + 1] == "m1,m2" and cmd[cmd.index("--judge-mode") + 1] == "alternate"
     assert job["allocationPolicy"]["network"]["networkInterfaces"][0]["noExternalIpAddress"] is True
     assert job["labels"] != control.job_config(job_args("openrouter"), entries)["labels"]
+    assert env["variables"]["HARNESS_OPENROUTER_REASONING"] == "low"
+    a.judge_reasoning = "none"
+    fast = control.job_config(a, entries)
+    assert fast["taskGroups"][0]["taskSpec"]["environment"]["variables"]["HARNESS_OPENROUTER_REASONING"] == "none"
+    assert fast["labels"] != job["labels"]
 
 
 def test_dry_run_never_calls_gcloud_or_reads_keys(monkeypatch, capsys, tmp_path):
