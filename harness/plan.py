@@ -26,7 +26,7 @@ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_ru
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 _GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
               "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s",
-              "empty_below", "pull_count_dz"}
+              "empty_below", "pull_count_dz", "drop_at"}
 MAX_MOVE_M = 0.12   # the station's /move takes at most 12 cm per call
 
 
@@ -89,6 +89,10 @@ class GripAssist:
     # A pull that raised the hand at least this much (m) and still holds something counts as a cable out even if the
     # confirm look says no (8 Nov live: a real held pull, z 0.067 -> 0.170, was rejected by the camera check).
     pull_count_dz: float | None = 0.08
+    # After a held pull, the harness carries the cable to this absolute point (m, the right arm's base frame, from
+    # GET /pose) in /move-sized steps and opens there; no Dream restart. 8 Nov: the basket is where the right hand
+    # opened in both successful ball drops, about [0.51, 0.36, 0.14]. None = Dream finishes (put_down_prompt).
+    drop_at: list[float] | None = None
 
 
 @dataclass
@@ -553,7 +557,8 @@ def _grip_assist(raw: Any, where: str) -> GripAssist | None:
                       drop_dxyz=_drop(raw.get("drop_dxyz"), where),
                       loop_until_s=None if raw.get("loop_until_s") is None else float(_num(raw["loop_until_s"], f"{where}.loop_until_s")),
                       empty_below=float(_num(raw.get("empty_below", d.empty_below), f"{where}.empty_below")),
-                      pull_count_dz=None if raw.get("pull_count_dz", d.pull_count_dz) is None else float(_num(raw.get("pull_count_dz", d.pull_count_dz), f"{where}.pull_count_dz")))
+                      pull_count_dz=None if raw.get("pull_count_dz", d.pull_count_dz) is None else float(_num(raw.get("pull_count_dz", d.pull_count_dz), f"{where}.pull_count_dz")),
+                      drop_at=_drop(raw.get("drop_at"), where.replace("drop_dxyz", "drop_at")))
 
 
 def _drop(raw: Any, where: str) -> list[float] | None:

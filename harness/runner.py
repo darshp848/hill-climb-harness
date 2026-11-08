@@ -873,7 +873,9 @@ class Runner:
             self._dream_again(stage, gs, f"pull {outcome}: Dream approaches again")
             return
         gs["done"] = gs["idle_ok"] = gs["pulled"] = True
-        if ga.drop_dxyz is not None:
+        if ga.drop_at is not None:
+            self._drop_at(stage, ga, attempt)
+        elif ga.drop_dxyz is not None:
             self._drop(stage, ga, attempt)
         elif ga.put_down_prompt:
             self._put_down(stage, ga, attempt)
@@ -929,6 +931,29 @@ class Runner:
             self._motion(self.station.move, ga.arm, [x / n for x in d], 0.0, 1.5)
         self._motion(self.station.move, ga.arm, [0.0, 0.0, 0.0], 0.8, 0.6)   # open: the cable drops here
         self.log.event("grip_drop", stage=stage.name, attempt=attempt, dxyz=d, grip=self._grip_reading(ga.arm))
+
+    def _drop_at(self, stage: Stage, ga: GripAssist, attempt: int) -> None:
+        """Carry the held cable to ga.drop_at (absolute, from /pose) in <= 12 cm moves, grip shut, and open there."""
+        here = ((self.station.pose() or {}).get(ga.arm) or {}).get("xyz")
+        if not (isinstance(here, list) and len(here) == 3):
+            self.log.event("grip_drop", stage=stage.name, attempt=attempt, skipped="no /pose: Dream puts it down")
+            if ga.put_down_prompt:
+                self._put_down(stage, ga, attempt)
+            return
+        d = [t - h for t, h in zip(ga.drop_at, here)]
+        dist = sum(x * x for x in d) ** 0.5
+        if dist > 0.40:   # never fly further than this on our own: something is off with the pose
+            self.log.event("grip_drop", stage=stage.name, attempt=attempt, skipped=f"target {dist:.2f} m away")
+            if ga.put_down_prompt:
+                self._put_down(stage, ga, attempt)
+            return
+        n = max(1, int(dist / MAX_MOVE_M - 1e-9) + 1)
+        for _ in range(n):
+            self._check_global()
+            self._motion(self.station.move, ga.arm, [x / n for x in d], 0.0, 1.2)
+        self._motion(self.station.move, ga.arm, [0.0, 0.0, 0.0], 0.8, 0.5)   # open over the basket
+        self.log.event("grip_drop", stage=stage.name, attempt=attempt, at=ga.drop_at, moves=n,
+                       dist=round(dist, 3), grip=self._grip_reading(ga.arm))
 
     def _dream_again(self, stage: Stage, gs: dict[str, Any], why: str) -> None:
         gs["seen"] = []   # wait for Dream to open the gripper again before judging a grip
