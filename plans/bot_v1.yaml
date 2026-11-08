@@ -111,7 +111,7 @@ stages:
       hold: [0.045, 0.20]  # a held plug reads 0.05-0.15; <= 0.045 is shut on nothing; a pull from 0.27 lost it
       put_down_prompt: "Put the held cable down on the table to the right, away from the power strip, and open the gripper."
       put_down_s: 15
-      min_z: 0.05          # a plug in the strip is gripped at ~0.08 m; a cable on the table at ~0.02 m: never pull that
+      min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
     success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
