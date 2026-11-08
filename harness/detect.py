@@ -61,6 +61,8 @@ class Box:
     frac: float
     orientation: str | None = None
     role: str = "info"
+    hole_axis: str | None = None   # cubes: vertical | horizontal-x | horizontal-y | horizontal | unknown
+    confidence: float = 0.0        # of hole_axis
 
     @property
     def cx(self) -> float:
@@ -71,7 +73,14 @@ class Box:
         return (self.y0 + self.y1) / 2
 
     def text(self) -> str:
-        return self.cls + (f" {self.orientation}" if self.orientation else "")
+        hole = f" hole {self.hole_axis}" if self.hole_axis not in (None, "unknown") and self.confidence >= HOLE_SURE else ""
+        return self.cls + (f" {self.orientation}" if self.orientation else "") + hole
+
+    def info(self) -> dict[str, Any]:
+        """One object: {shape, colour, hole_axis, orientation, confidence}."""
+        colour, _, shape = self.cls.partition(" ")
+        return {"shape": shape, "colour": colour, "hole_axis": self.hole_axis, "orientation": self.orientation,
+                "confidence": round(self.confidence, 2)}
 
 
 @dataclass
@@ -169,6 +178,76 @@ def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
     return None, None
 
 
+HOLE_SURE = 0.6     # at or above this a hole was really seen on the overhead view; only then is it shown or used
+_HOLE_DARK = 0.62   # a hole is at least this much darker than the cube's median brightness
+
+
+def _hole_axis(raw: np.ndarray, blob: np.ndarray, value: np.ndarray) -> tuple[str, float]:
+    """Which way a cube's round hole runs, from one view that sees the cube's top: (axis, confidence).
+
+    The hole is a roughly round patch inside the blob that is not the cube's colour, or is much darker than it.
+    vertical = hole on the top face (near the blob's centre or upper half). horizontal-y = on the face toward the
+    camera (lower half). horizontal-x = on a side face (off to one side and narrow). horizontal = no hole seen, so it
+    runs sideways through a face this view can't see. Foam shadow and small cubes make this a guess: use the
+    confidence, and don't gate a stage on it without checking it on the station's cameras."""
+    if _ndi is None:
+        return "unknown", 0.0
+    ys, xs = np.nonzero(blob)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    b, r, v = blob[y0:y1, x0:x1], raw[y0:y1, x0:x1], value[y0:y1, x0:x1]
+    body = b & r
+    if body.sum() < 40:
+        return "unknown", 0.0
+    H, W = b.shape
+    cand = _ndi.binary_erosion(b, iterations=1) & (~r | (v < _HOLE_DARK * float(np.median(v[body]))))
+    lab, n = _ndi.label(cand)
+    best, area = None, 0
+    for i in range(1, n + 1):
+        comp = lab == i
+        size = int(comp.sum())
+        if size > area and not (_ndi.binary_dilation(comp, iterations=1) & ~b).any():
+            best, area = comp, size
+    frac = area / float(b.sum())
+    if best is None or frac < 0.02:
+        return "horizontal", 0.5
+    hy, hx = np.nonzero(best)
+    w, h = int(hx.max() - hx.min() + 1), int(hy.max() - hy.min() + 1)
+    fill = area / (np.pi / 4 * w * h)
+    if frac > 0.40 or min(w, h) < 3 or not 0.55 <= fill <= 1.25:
+        return "unknown", 0.3
+    dx, dy = (hx.mean() - (W - 1) / 2) / W, (hy.mean() - (H - 1) / 2) / H
+    conf = 0.85 if frac >= 0.05 and 0.7 <= fill <= 1.1 else 0.6
+    if abs(dx) > 0.15 and w < 0.85 * h:
+        return "horizontal-x", conf
+    return ("horizontal-y", conf) if dy > 0.1 else ("vertical", conf)
+
+
+def _mark_upright(boxes: list[Box], ratio: float) -> None:
+    """A tall thin stick standing on a cube in the image is upright. A stick lying toward the camera can look the
+    same, so this only applies on top of a cube. `ratio` is the frame's height / width."""
+    cubes = [b for b in boxes if b.cls.endswith(" cube")]
+    for s in boxes:
+        if not (s.cls.endswith(" stick") and s.orientation == "lying"):
+            continue
+        tall = (s.y1 - s.y0) * ratio > 1.6 * (s.x1 - s.x0)
+        if tall and any(abs(c.y0 - s.y1) < 0.03 and c.x0 <= s.cx <= c.x1 for c in cubes):
+            s.orientation = "upright"
+
+
+def _top_cube(boxes: list[Box]) -> Box | None:
+    """The highest cube in the image that sits on another cube; else the highest cube."""
+    cubes = sorted((b for b in boxes if b.cls.endswith(" cube")), key=lambda b: b.y0)
+    stacked = [c for c in cubes if any(o is not c and abs(o.y0 - c.y1) < 0.04 and o.x0 <= c.cx <= o.x1 for o in cubes)]
+    return (stacked or cubes or [None])[0]
+
+
+def top_cube_hole(boxes: list[Box]) -> tuple[str | None, float]:
+    """(hole axis, confidence) of the top cube, for the note 'last cube hole vertical before inserting the cylinder'.
+    Trust "vertical" only at confidence >= HOLE_SURE from the overhead camera. It informs; it does not gate anything."""
+    c = _top_cube(boxes)
+    return (None, 0.0) if c is None else (c.hole_axis, c.confidence)
+
+
 def detect(jpeg: bytes, cfg: DetectConfig, *, overhead: bool = False) -> list[Box]:
     im = _load(jpeg, WORK_W)
     return [] if im is None else detect_image(im, cfg, overhead=overhead)
@@ -182,7 +261,7 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
     total = float(H * W)
     out: list[Box] = []
     for spec in cfg.classes if classes is None else classes:
-        mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
+        raw = mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
         if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
             mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
         lab, n = _label(mask)
@@ -203,8 +282,11 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
                 continue
             role = spec.kinds.get(kind, "info")
             label = f"{spec.label or spec.name} {kind}"
+            axis, conf = _hole_axis(raw, lab == i, hsv[..., 2]) if kind == "cube" else (None, 0.0)
+            conf = conf if overhead else min(conf, 0.4)   # away from overhead, a centred hole can be on any face
             out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
-                           orient, role))
+                           orient, role, axis, conf))
+    _mark_upright(out, H / W)
     if overhead and cfg.table_roi:
         x0, y0, x1, y1 = cfg.table_roi
         out = [b for b in out if x0 <= b.cx <= x1 and y0 <= b.cy <= y1]
@@ -283,7 +365,7 @@ class TableDetector:
         avoid = [f"{c.label or c.name} {k}" for c in self.cfg.classes for k, r in c.kinds.items() if r == "avoid"]
         return ("Boxes on the images come from a local colour detector and can miss or mislabel objects: "
                 f"RED boxes = {', '.join(avoid) or 'objects to avoid'} (never pick these); green = targets; "
-                "blue = other objects (blocks: colour, cylinders: upright or lying)."
+                "blue = other objects (blocks: colour and which way the hole runs, a guess; cylinders: upright or lying)."
                 + (" " + self.cable_ends.legend() if self.cable_ends is not None else ""))
 
 

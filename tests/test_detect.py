@@ -36,7 +36,7 @@ def test_real_table_balls_and_blocks():
     assert ("white ball", "avoid") in found                    # the illegal ball
     for c in ("green", "yellow", "orange"):
         assert (f"{c} ball", "target") in found
-    assert ("pink cube", "info") in found and ("blue cube", "info") in found
+    assert any(t.startswith("pink cube") for t, _ in found) and any(t.startswith("blue cube") for t, _ in found)
     assert ("pink stick lying", "info") in found and ("yellow stick lying", "info") in found
     assert not any(t.startswith("black") for t, _ in found)    # the black gripper fingers are not balls
 
