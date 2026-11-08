@@ -17,6 +17,7 @@ import argparse
 import json
 import math
 import sys
+import threading
 import time
 import urllib.request
 from dataclasses import asdict
@@ -40,6 +41,50 @@ OPEN = 0.6              # gripper opening (0-1) that counts as open
 def get(base: str, route: str) -> dict:
     with urllib.request.urlopen(base + route, timeout=5) as resp:
         return json.loads(resp.read())
+
+
+class SimClock:
+    """The harness clock on simulated time (/objects "t"), so a 295 s match is 295 s of robot motion however slowly
+    the sim runs (8 Nov: the Inspiron sim ran at ~0.28x real time, 80 s of motion per wall-clock match).
+    Monotonic across a sim /reset (time restarting at 0 continues from where it was). sleep(s) waits until the sim
+    has advanced s seconds, with a wall-clock cap so a stalled sim can't hang the harness."""
+
+    POLL_S = 0.1
+
+    def __init__(self, station_url: str, wall_cap: float = 30.0) -> None:
+        self.url, self.wall_cap = station_url, wall_cap
+        self._last = self._offset = 0.0
+        self._lock = threading.Lock()
+        self._read()
+        self._stop = threading.Event()
+        threading.Thread(target=self._poll, daemon=True).start()
+        self.wall0 = time.monotonic()
+
+    def _read(self) -> None:
+        try:
+            t = float(get(self.url, "/objects")["t"])
+        except (OSError, ValueError, KeyError):
+            return
+        with self._lock:
+            if t < self._last:          # the sim was reset: carry on from the old time
+                self._offset += self._last - t
+            self._last = t
+
+    def _poll(self) -> None:
+        while not self._stop.wait(self.POLL_S):
+            self._read()
+
+    def __call__(self) -> float:
+        with self._lock:
+            return self._offset + self._last
+
+    def sleep(self, seconds: float) -> None:
+        end, wall_end = self() + seconds, time.monotonic() + self.wall_cap * max(seconds, 0.05)
+        while self() < end and time.monotonic() < wall_end:
+            time.sleep(min(self.POLL_S, max(seconds, 0.01)))
+
+    def close(self) -> None:
+        self._stop.set()
 
 
 class OracleVerifier:
@@ -236,9 +281,15 @@ def run_match(args: argparse.Namespace, n: int, out: Path) -> dict[str, Any]:
     filler = None
     if plan.prompts is not None:
         filler = {"oracle": OracleFiller(args.station), "default": DefaultFiller()}.get(args.filler)
-    result = Runner(plan, station, FrameSource(args.view), {"monitor": oracle}, log, filler=filler).run()
+    clock = SimClock(args.station) if args.clock == "sim" else None
+    timing = {"clock": clock, "sleep": clock.sleep} if clock else {}
+    try:
+        result = Runner(plan, station, FrameSource(args.view), {"monitor": oracle}, log, filler=filler, **timing).run()
+    finally:
+        if clock:
+            clock.close()
     referee = get(args.station, "/objects")["referee"]
-    summary = {"match": n, "wall_s": round(time.time() - t0, 1), "log": str(log.path),
+    summary = {"match": n, "clock": args.clock, "wall_s": round(time.time() - t0, 1), "log": str(log.path),
                "harness": {k: v for k, v in asdict(result).items() if k != "stages"},
                "stages": [asdict(s) for s in result.stages], "referee": referee}
     (log.path / "referee.json").write_text(json.dumps(summary, indent=2))
@@ -252,6 +303,8 @@ def main() -> None:
     ap.add_argument("--plan", default=str(Path(__file__).resolve().parents[1] / "plans" / "hill_climb_v4.yaml"))
     ap.add_argument("--var", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--matches", type=int, default=1)
+    ap.add_argument("--clock", choices=["sim", "wall"], default="sim",
+                    help="harness time: sim (robot time, default) or wall (what a slow sim gives the robot less of)")
     ap.add_argument("--filler", choices=["oracle", "default", "plan"], default="oracle",
                     help="prompt_engine plans: slot filler (plan = the plan's own, e.g. claude on the monitor)")
     ap.add_argument("--out", default="runs_sim_match")
