@@ -182,7 +182,7 @@
    "episode": 28,
    "start_s": 0.0,
    "end_s": 22.5,
-   "task": "stand the cylinder upright in the hole of the top block"
+   "task": "put a cylinder upright on top of the stack"
   },
   {
    "episode": 29,
@@ -203,5 +203,5 @@
    "task": "put a golf ball in the bin"
   }
  ],
- "note": "leader-split-v4-frozen with episode 8 (unplug + put-down in one take) cut at 4.1 s (frame 123), the end of the pull. Source state: episodes 6 and 8 relabelled on the station (6 -> plug-in, 8 -> unplug) before this split."
+ "note": "leader-split-v4-frozen with episode 8 (unplug + put-down in one take) cut at 4.1 s (frame 123), the end of the pull. Source state: episodes 6 and 8 relabelled on the station (6 -> plug-in, 8 -> unplug) before this split. Output episode 29 relabelled to 'put a cylinder upright on top of the stack' (a cylinder stacked on the tower, not into a block's hole)."
 }
