@@ -38,7 +38,7 @@ prompt_engine:
   filler: claude
   filler_model: claude-sonnet-5-5   # once per stage, on the Anthropic API (HARNESS_ANTHROPIC_MODELS)
   prefetch_ttl_s: 20
-  max_words: 45
+  max_words: 60
   prefix: "{safe}"
   forbid: ["white ball", "white golf ball", "black ball", "8-ball", "eight ball"]
   vocab:
@@ -51,12 +51,12 @@ prompt_engine:
     arm: ["With the right arm,", "With the left arm,"]
   templates:
     unplug:
-      text: "With the right gripper half open, move down onto <plug>, then close the gripper on that plug and pull it straight up."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+      text: "With the right gripper half open, move down onto <plug>, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
       prefix: true
       slots: {plug: plug}
       note: "approach + grip; the harness fixes the grip and pulls (grip_assist). 2/2 plugs held on 8 Nov"
     put_down:
-      text: "Put the held cable down flat on the table about 5 inches to the right of the power strip and open the gripper."
+      text: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."
       prefix: true
       note: "after an unplug; the shorter wording set the cable back on the strip"
     base:
@@ -69,6 +69,10 @@ prompt_engine:
       arm: none
       slots: {piece: piece, top: top}
       note: "name both pieces by colour and WHICH one when there are two of a colour; no arm named (Dream picks the near arm). 8 Nov: 'a blue cube' with two blue cubes stacked on the far one and the next piece tipped it"
+    tower:
+      text: "stack the three foam cubes on top of each other to make a tower"
+      arm: none
+      note: "one stage, one goal (Kaushik, 8 Nov)"
     stack_all:
       text: "stack the blocks and sticks as high as possible"
       arm: none
@@ -122,19 +126,19 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - &unplug
     name: cable_unplug
-    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug and pull it straight up."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
     write_prompt: false
     template: unplug
     slots: {plug: "a plug standing upright in a port on top of the black power strip"}
     grip_assist:
       regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
       regrip_dz: -0.025      # 8 Nov live: 0 of 6 re-grips held at -1.5 cm
-      pull_up_m: [0.06, 0.04]
-      pull_s: 3            # seconds per lift step: slower slips less
-      seat_dz: 0.01        # open a little and lower 1 cm before the squeeze, so the jaws bite the plug body
-      repull: 2            # slipped on the way up: straight back down, re-grip, pull again
+      pull_up_m: [0.10]     # one move: each /move costs 3-6 s on the station (arm re-sync), 8 Nov live
+      pull_s: 4            # seconds for the 10 cm lift: slow enough not to slip
+      seat_dz: 0.0         # no seat: two fewer moves (each 3-6 s)
+      repull: 1            # slipped on the way up: one re-grip and pull (each costs 3 moves)
       hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty)
-      put_down_prompt: "Put the held cable down flat on the table about 5 inches to the right of the power strip and open the gripper."   # 8 Nov live: the shorter wording set it back on the strip
+      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
@@ -158,60 +162,24 @@ stages:
     on_fail: retry_in_place
 
   # Only when Dream unplugged without the assist and still holds the cable: the assist puts it down itself.
-  - &put_down
-    name: cable_put_down
-    requires_stage: cable_unplug
-    prompt: "{safe} Put the held cable down flat on the table about 5 inches to the right of the power strip and open the gripper."
+  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One stage, one goal prompt, no arm named. ----
+  # Kaushik, 8 Nov: one well-defined stage instead of "stack a cube" + "tower > 4 in": every stage boundary (lock, arms
+  # up, camera check, new prompt) cost time and the re-prompt knocked finished towers over. Goal, not motion.
+  - name: tower
+    prompt: "stack the three foam cubes on top of each other to make a tower"
     write_prompt: false
-    template: put_down
-    skip_if_done: true
-    success: "Is the right gripper open and empty, holding no cable? (The left arm is not used; ignore its gripper.)"
-    timeout_s: 20
-    min_run_s: 3
-    confirm: 1
-    on_fail: skip
-
-  - name: arms_clear
-    prompt: "open both grippers and move the arms up"
-    write_prompt: false
-    success: "Are both grippers open and raised, clear of the power strip, the cables and the blocks?"
-    timeout_s: 10
-    min_run_s: 2
-    confirm: 1
-    on_fail: skip
-
-  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). No arm named, no writer. ----
-  - &stack
-    name: stack_2
-    prompt: "put one blue cube on top of the other blue cube"
-    write_prompt: false
-    template: stack
-    variants: [stack_all]
-    slots: {piece: "one blue cube", top: "the other blue cube"}
-    success: "Is one cube resting on top of another cube, standing on its own, with no gripper touching either?"
-    expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
+    template: tower
+    success: "Are three cubes stacked on top of each other in one tower, standing on its own, with no gripper holding or touching it?"
+    expect: "The arms pick up the cubes one at a time and stack them into a single tower of three, then lift clear; the tower stays standing."
     camera_notes:
-      scene: "top view of the table: the cubes and any stack"
-    timeout_s: 90          # Dream needs 30-60 s to stack; hands_off lets it work
-    max_attempts: 99
+      scene: "top view of the table: the cubes and the tower"
+    timeout_s: 120
+    max_attempts: 99       # pass bar: balls are off limits until the tower stands
     min_run_s: 4
-    stall_s: 35
-    confirm: 2             # two fast looks in a row before the lock (8 Nov live: single 'done' looks flip-flopped)
-    confirm_check: "In the NOW images, is at least one cube resting on top of another cube, standing on its own, with no gripper holding or touching either cube?"
-    recovery:
-      - {name: keep_going, kind: retry, when: "a cube is held, or the stack is standing and the arm is near it", max_uses: 3}
-      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
-         when: "the gripper is stuck on a cube or pressing on the stack", settle_s: 5, max_uses: 2}
+    stall_s: 45
+    confirm: 2             # two fast looks in a row before the lock, then Sonnet decides
+    confirm_check: "In the NOW images, are three cubes stacked on top of each other in a single tower, standing on its own, with no gripper holding or touching it?"
     on_fail: retry_in_place
-
-  - <<: *stack
-    name: tower_pass
-    prompt: "put the pink cube on top of the stacked blue cubes"
-    slots: {piece: "the pink cube", top: "the stacked blue cubes"}
-    success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
-    expect: "The arm adds pieces to the stack until it is over 4 inches tall, then lifts clear; the tower stays standing."
-    confirm_check: "In the NOW images, is there a tower of stacked pieces more than 4 inches (10 cm) tall (a cube is about 2 inches), standing on its own, with no gripper holding or touching it?"
-    skip_if_done: true
 
   # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. One named ball per call. ----
   - &ball
