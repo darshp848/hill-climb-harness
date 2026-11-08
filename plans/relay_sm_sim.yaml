@@ -1,0 +1,305 @@
+# Relay state machine in Darsh's order (docs/decisions.pdf, docs/STATE_MACHINE.md), sim copy on the prompt engine:
+#   UNPLUG all -> PLUG_IN the loose cables -> TOWER to the pass bar, then higher -> BALLS.
+# Rubric v4 points: first cable out +10 (pass bar), each further +5, each LOOSE cable seated in a free port +20
+# (up to 4), tower > 4 in +20 (pass bar) and +3 per full inch, each golf ball in the bin +5.
+#
+# Tries per stage (decisions.pdf "if a task fails more than twice, move on; three times if worth a lot"):
+#   pass bars (unplug_cable, stack_2, stack_3, tower_pass) retry until the clock runs out (moving on = DQ);
+#   optional stages use on_fail retry_then_skip: 2 tries, 3 for plug-ins (+20 each).
+# Each try of a stage gets the next template in [template] + variants, with its slots filled again from the scene
+# as it is now (OracleFiller in the sim): the prompt follows the state, never free text. Variants name the goal, not
+# the motion (docs/prompt_comparison_2026-11-08 on origin/docs/prompt-comparison-2026-11-08: chained motion scripts
+# finished nothing on the bot); a ball's second try is the same template on the ball nearest now.
+# Cutoffs (not_after_s, match clock): the extra unplug is not started or retried after 110 s, plug-ins after 150 s,
+# extra tower height after 230 s, so the tower and the balls keep their time. Starting values: tune them in the sim.
+# Sim colours (sim_scenes/hill_climb_table.py): cubes pink/blue, sticks purple/yellow, golf balls white, 8-balls black.
+# Sim limits: 2 plugged + 2 loose cables; the referee scores a loose cable only in a port that was free at the start.
+task: >-
+  Hill Climb relay. Stage 1: unplug every USB cable that starts in the power strip and put each down away from it.
+  Then plug the loose cables that started on the table into free ports; an unplugged cable never goes back in.
+  Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Do not touch the blocks before a
+  cable is unplugged. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
+  Do not touch the golf balls before the tower passes.
+checkpoint: "{model}"
+time_budget_s: 295          # 5-minute match, a little margin for the start
+check_every_s: 3.0
+verifier: monitor
+confirm: 2
+done_message: "ALL STAGES DONE: CALL STOP NOW"
+# Camera role of the arm that stacks (the right arm), for the monitor's notes only.
+# The prompts never name an arm, so changing these does not change what the model is asked.
+vars: {stack_cam: wrist_r, model: dreamlabs/dream-1-beta}
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
+# Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
+# the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
+# confirm 1, because a ball goes from gripper to bin in a few seconds; a false yes only costs the balls still to come.
+guard:
+  # The white ball is the illegal one on our table (Darsh, 8 Nov); the rubric's black 8-balls stay in the question.
+  question: "Is either gripper holding the white ball or a black 8-ball (balls that must never go in the bin), or closed or closing around one?"
+  stages: [ball_]
+  confirm: 1
+  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
+  # No guard answer for this long on a ball stage (Claude API down, bad frames) also stops the run: balls are +5
+  # each, a black ball in the bin loses the match, and nobody would be looking for one.
+  max_blind_s: 20
+
+# The tower to build, bottom to top. Colour order doesn't matter (Darsh, 8 Nov): only the shapes are compared, cubes first, then sticks. The monitor gets it as the expected
+# result on stack_* / tower_* / higher_* stages and reports the tower it sees; events.jsonl logs `tower` and
+# `tower_order_ok` on every check. It does NOT gate a stage: the stack prompt is one recorded text, so Dream can't be
+# told which piece comes next, and a wrong piece must not cost the +20 for height. The order comes from demos.
+tower_target:
+  - "cube, hole facing sideways"
+  - "cube, hole facing sideways"
+  - "cube, hole facing sideways"
+  - "stick, standing upright"
+  - "stick, standing upright"
+
+rewrite_prompts: true
+rewrite_max: 1
+rewrite_cooldown_s: 30
+prompt_engine:
+  mode: compose
+  filler: default          # experiments/sim_match.py --filler oracle|default|claude overrides it
+  filler_model: claude-haiku-5-5
+  prefetch_ttl_s: 20
+  max_words: 32
+  prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
+  forbid: ["black ball", "8-ball", "eight ball"]
+  vocab:
+    plug: ["the first cable on the right", "the cable still plugged in", "the second cable from the right"]
+    cable: ["the loose orange cable", "the nearer loose orange cable"]
+    port: ["the second port from the left", "the port at the right end", "the port at the left end",
+           "the second port from the right"]
+    piece: ["the pink cube", "the blue cube", "the purple stick", "the yellow stick"]
+    where: ["", "next to the power strip", "next to the white basket", "next to the tower"]
+    top: ["a blue cube", "a pink cube", "the tower"]
+    ball: ["the white golf ball"]
+    arm: ["With the right arm,", "With the left arm,"]
+  templates:
+    unplug:
+      text: "Remove <plug> from the power strip by pulling its plug straight up, then place it on the right side of the table."
+      prefix: true
+      slots: {plug: plug}
+      note: "best Dream-only unplug wording on the bot, 8 Nov (1 of 3)"
+    unplug_grip:
+      text: "With the right gripper half open, move down onto the plug of <plug>, then close the gripper on the plug and pull it straight up."
+      prefix: true
+      slots: {plug: plug}
+      note: "the bot's 2/2 wording (8 Nov, with the harness regrip and pull; Dream alone here)"
+    put_down:
+      text: "Put the held cable down on the table to the right, away from the power strip, and open the gripper."
+      prefix: true
+      note: "after an unplug"
+    plug:
+      text: "Pick up <cable> by its black plug and push it straight down into <port> of the power strip."
+      prefix: true
+      slots: {cable: cable, port: port}
+      note: "untested on the bot; Darsh's notes: black part, from above, straight down"
+    plug_goal:
+      text: "Plug <cable> into <port> of the power strip."
+      prefix: true
+      slots: {cable: cable, port: port}
+      note: "second try: the goal, not the motion (docs/prompt-comparison 8 Nov: motion scripts never finished)"
+    stack:
+      text: "put <piece> <piece_where> on top of <top>"
+      arm: none
+      slots: {piece: piece, piece_where: where, top: top}
+      note: "no arm named: Dream picks the near arm (8 Nov: naming the right arm sent it to the balls)"
+    stack_goal:
+      text: "stack the blocks and sticks as high as possible"
+      arm: none
+      note: "the rubric's wording: 2 of 3 runs stacked on the bot (prompt comparison S8). 'lift it high ... lower it gently' (S1): 0 of 10"
+    ball:
+      text: "<arm> pick up <ball> <ball_where> and drop it into the white basket."
+      slots: {arm: arm, ball: ball, ball_where: where}
+      note: "one ball per prompt, the arm nearest the ball"
+
+stages:
+  # ===== UNPLUG: every cable that starts in the strip (pass bar on the first) =====
+  - name: unplug_cable
+    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+    template: unplug
+    variants: [unplug_grip]
+    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
+    expect: "The right gripper closes fully on the plug at the end of the hub nearest it and pulls it straight out along the port until the plug is clear."
+    timeout_s: 60
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+    min_run_s: 4
+    settle_s: 4
+    stall_s: 20
+    recovery:
+      - {name: keep_pulling, kind: retry, when: "the gripper is on a plug or right next to the hub", max_uses: 4}
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck, holds the wire instead of the plug, or has pushed the hub", settle_s: 5, max_uses: 3}
+    on_fail: retry_in_place
+
+  - &put_down
+    name: put_cable_down
+    prompt: "put the held cable down on the table away from the hub"
+    template: put_down
+    requires_stage: unplug_cable
+    success: "Are both grippers empty, with the unplugged cable lying on the table away from the hub?"
+    timeout_s: 20
+    min_run_s: 3
+    confirm: 1
+    on_fail: skip
+
+  - name: unplug_more
+    prompt: "unplug the next USB cable still in the hub"
+    template: unplug
+    variants: [unplug_grip]
+    slots: {plug: "the cable still plugged in"}
+    success: "Compared with the stage-start overhead image, is one more cable now fully out of the hub than at the start of this stage?"
+    expect: "The right gripper closes on the next plug along the hub and pulls it straight out."
+    timeout_s: 30
+    max_attempts: 2      # +5: "fails more than twice, move on"
+    min_run_s: 3
+    on_fail: retry_then_skip
+    not_after_s: 110
+
+  - <<: *put_down
+    name: put_more_down
+    requires_stage: unplug_more
+    success: "Are both grippers empty, with no cable held?"
+    timeout_s: 12
+
+  - &clear
+    name: arms_clear
+    prompt: "open both grippers and move the arms up"
+    success: "Are both grippers empty and raised, clear of the hub, the cables and the blocks?"
+    timeout_s: 10
+    min_run_s: 2
+    confirm: 1
+    on_fail: skip
+
+  # ===== PLUG_IN: only cables loose at the start, into ports free at the start =====
+  - &plug
+    name: plug_1
+    prompt: "plug a loose USB cable from the table into a free port on the power strip"
+    template: plug
+    variants: [plug_goal]
+    success: "Is one more loose cable seated in a port of the power strip than at the start of this stage, with the gripper open?"
+    expect: "The right gripper picks a loose cable up by its black plug, holds it upright over a free port, pushes it straight down and lets go; the plug stays seated."
+    timeout_s: 40
+    max_attempts: 3      # +20: "three times if it is worth a lot of points"
+    min_run_s: 4
+    stall_s: 25
+    on_fail: retry_then_skip
+    not_after_s: 150
+  - <<: *plug
+    name: plug_2
+    requires_stage: plug_1   # a plug-in that failed three times won't do better on the next cable
+
+  - <<: *clear
+    name: arms_clear_2
+
+  # ===== TOWER: pass bar at > 4 in, then higher =====
+  - name: stack_2
+    prompt: "put a block on top of the stack"
+    template: stack
+    variants: [stack_goal]
+    success: "Is one block resting on top of another block, standing on its own, with no gripper touching either?"
+    expect: "An arm picks up a block, sets it squarely on another block, opens and lifts clear."
+    camera_notes:
+      "{stack_cam}": "view from the gripper doing the stacking"
+    timeout_s: 40
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+    min_run_s: 4
+    stall_s: 20
+    recovery:
+      - {name: keep_going, kind: retry, when: "a block is held, or the tower is standing and the arm is near it", max_uses: 3}
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
+    on_fail: retry_in_place
+
+  - name: stack_3
+    prompt: "put a block on top of the stack"
+    template: stack
+    variants: [stack_goal]
+    slots: {piece: "the blue cube", top: "the tower"}
+    success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
+    expect: "An arm picks up a third block and places it on the two-block tower without knocking it, opens and lifts clear."
+    camera_notes:
+      "{stack_cam}": "view from the gripper doing the stacking"
+    timeout_s: 40
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+    min_run_s: 4
+    stall_s: 20
+    recovery:
+      - {name: keep_going, kind: retry, when: "the tower is standing and a block is held or near its top", max_uses: 3}
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
+    on_fail: retry_in_place
+
+  - name: tower_pass
+    prompt: "put a block on top of the stack"
+    template: stack
+    variants: [stack_goal]
+    slots: {piece: "the blue cube", top: "the tower"}
+    success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
+    expect: "The arm adds blocks to the tower until it is over 4 inches tall, then lifts clear; the tower stays standing."
+    camera_notes:
+      "{stack_cam}": "view from the gripper doing the stacking"
+    timeout_s: 40
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
+    min_run_s: 4
+    stall_s: 20
+    recovery:
+      - {name: keep_going, kind: retry, when: "the tower is standing and shorter than 4 inches", max_uses: 4}
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck on a block or pressing on the tower", settle_s: 5, max_uses: 2}
+    on_fail: retry_in_place   # never skip: the balls are off limits until the tower passes
+
+  # ---- After the pass bar: +3 per full inch, then balls ----
+  - &higher
+    name: higher_1
+    prompt: "put a block on top of the stack"
+    template: stack
+    variants: [stack_goal]
+    slots: {piece: "the blue cube", top: "the tower"}
+    success: "Does the tower have one more block on top than in the first image of this stage, standing on its own with no gripper touching it?"
+    expect: "The arm adds one block to the top without knocking the tower, opens and lifts clear."
+    camera_notes:
+      "{stack_cam}": "view from the gripper doing the stacking"
+    timeout_s: 30
+    min_run_s: 4
+    confirm: 1                # a false "done" only renames the stage
+    max_attempts: 2
+    on_fail: retry_then_skip  # +3 per inch: two tries, then the balls
+    not_after_s: 230
+  - <<: *higher
+    name: higher_2
+
+  # ---- Stage 3: no pass bar. The guard above stops the run if a black ball is held. ----
+  - &ball
+    name: ball_1
+    prompt: "put a golf ball in the bin"
+    template: ball
+    success: "Is at least 1 golf ball resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+    expect: "An arm picks up one coloured golf ball, avoiding the white ball, any black ball and the tower, and releases it into the bin."
+    timeout_s: 25
+    min_run_s: 3
+    confirm: 1                # a false "done" only renames the stage
+    max_attempts: 2
+    on_fail: retry_then_skip
+  - <<: *ball
+    name: ball_2
+    success: "Are at least 2 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+  - <<: *ball
+    name: ball_3
+    success: "Are at least 3 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+  - <<: *ball
+    name: ball_4
+    success: "Are at least 4 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+  - <<: *ball
+    name: ball_5
+    success: "Are at least 5 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+  - <<: *ball
+    name: ball_6
+    success: "Are at least 6 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+  - <<: *ball
+    name: ball_7
+    success: "Are at least 7 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+  - <<: *ball
+    name: ball_8
+    success: "Are at least 8 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
