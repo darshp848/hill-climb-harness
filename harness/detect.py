@@ -35,6 +35,11 @@ except ImportError:   # pragma: no cover
 SMALL_BALL_FRAC = 0.004  # a golf ball in the overhead view is ~0.05-0.1% of the image
 WORK_W = 640           # frames are shrunk to this width before detection
 COLORS = {"avoid": (230, 20, 20), "target": (20, 200, 60), "info": (30, 120, 230)}
+# Where a held ball sits in a wrist view, measured on the station's right wrist camera (plans/table_colors.yaml says
+# how): its centre between the fingertips, and at least this share of the view. A ball lying past the fingertips is
+# smaller and higher in the image, so it does not trip the guard.
+GRIP_ROI = (0.33, 0.6, 0.67, 1.0)
+GRIP_MIN_FRAC = 0.015
 
 
 @dataclass
@@ -49,6 +54,9 @@ class ClassSpec:
     # Empty = every kind, role info. Black lists only ball, so the black gripper fingers are never reported.
     kinds: dict[str, str] = field(default_factory=dict)
     small_ball: bool = False       # this colour only comes as balls: read a small compact blob as a ball
+    # classes whose objects this colour also shows up on: a blob of this colour centred inside one of their boxes is
+    # that object's highlight or rim, not an object of its own (white: the pale face of a blue cube)
+    not_inside: tuple[str, ...] = ()
 
 
 @dataclass
@@ -63,6 +71,7 @@ class Box:
     role: str = "info"
     hole_axis: str | None = None   # cubes: vertical | horizontal-x | horizontal-y | horizontal | unknown
     confidence: float = 0.0        # of hole_axis
+    spec: str = ""                 # the colour class (ClassSpec.name) it came from
 
     @property
     def cx(self) -> float:
@@ -88,8 +97,8 @@ class DetectConfig:
     classes: list[ClassSpec]
     guard_class: str = "black_ball"
     wrist_roles: list[str] = field(default_factory=lambda: ["wrist"])
-    grip_roi: tuple[float, float, float, float] = (0.25, 0.35, 0.75, 1.0)   # x0 y0 x1 y1 between the fingers
-    grip_min_frac: float = 0.01   # a ball this big in the wrist view is in or at the fingers
+    grip_roi: tuple[float, float, float, float] = GRIP_ROI   # x0 y0 x1 y1: where a held ball's centre sits
+    grip_min_frac: float = GRIP_MIN_FRAC   # a ball this big in the wrist view is in or at the fingers
     table_roi: tuple[float, float, float, float] | None = None   # overhead view: ignore blobs outside (people, chairs)
     annotate: bool = True
 
@@ -102,12 +111,13 @@ def load_config(path: str | Path) -> DetectConfig:
         classes.append(ClassSpec(name=name, hsv_lo=tuple(lo), hsv_hi=tuple(hi),
                                  min_frac=float(c.get("min_frac", 0.0005)), max_frac=float(c.get("max_frac", 0.15)),
                                  label=c.get("label", name), kinds=dict(c.get("kinds") or {}),
-                                 small_ball=bool(c.get("small_ball", False))))
+                                 small_ball=bool(c.get("small_ball", False)),
+                                 not_inside=tuple(c.get("not_inside") or ())))
     g = raw.get("guard") or {}
     return DetectConfig(classes=classes, guard_class=g.get("class", "black_ball"),
                         wrist_roles=list(g.get("wrist_roles", ["wrist"])),
-                        grip_roi=tuple(g.get("grip_roi", (0.25, 0.35, 0.75, 1.0))),
-                        grip_min_frac=float(g.get("grip_min_frac", 0.01)), annotate=bool(raw.get("annotate", True)),
+                        grip_roi=tuple(g.get("grip_roi", GRIP_ROI)),
+                        grip_min_frac=float(g.get("grip_min_frac", GRIP_MIN_FRAC)), annotate=bool(raw.get("annotate", True)),
                         table_roi=tuple(raw["table_roi"]) if raw.get("table_roi") else None)
 
 
@@ -278,7 +288,11 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
     H, W = hsv.shape[:2]
     total = float(H * W)
     out: list[Box] = []
-    for spec in cfg.classes if classes is None else classes:
+    wanted = list(cfg.classes if classes is None else classes)
+    names = {s.name for s in wanted}
+    # classes named in a wanted class's not_inside are looked for too, only to filter by (then dropped)
+    helpers = [s for s in cfg.classes if s.name not in names and any(s.name in w.not_inside for w in wanted)]
+    for spec in wanted + helpers:
         raw = mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
         if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
             mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
@@ -303,7 +317,11 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
             axis, conf = _hole_axis(raw, lab == i, hsv[..., 2]) if kind == "cube" else (None, 0.0)
             conf = conf if overhead else min(conf, 0.4)   # away from overhead, a centred hole can be on any face
             out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
-                           orient, role, axis, conf))
+                           orient, role, axis, conf, spec.name))
+    by_name = {s.name: s for s in wanted}
+    out = [b for b in out
+           if b.spec in by_name and not any(o.spec in by_name[b.spec].not_inside and o.x0 <= b.cx <= o.x1
+                                            and o.y0 <= b.cy <= o.y1 for o in out)]
     _mark_upright(out, H / W)
     if overhead and cfg.table_roi:
         x0, y0, x1, y1 = cfg.table_roi
