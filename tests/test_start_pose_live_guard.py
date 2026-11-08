@@ -421,4 +421,6 @@ def test_a_dead_camera_does_not_slow_the_live_one():
     got = [lf.grab(wait_s=0.05) for _ in range(5)]
     took = _t.monotonic() - t0
     assert all(g == {"wrist_r": b"jpeg"} for g in got)  # the live camera every tick
-    assert took < 0.5                                  # the dead one (1 s per try) never held a tick up
+    # the dead one (1 s per try) never held a tick up: ideal 5 x 50 ms; one blocked tick would make it >= 1 s.
+    # 0.9 s, not 0.5: a macOS CI runner's timed waits overshoot ~2x (0.508 s on macos-15, 8 Nov).
+    assert took < 0.9

@@ -35,6 +35,12 @@ Windows 11 x86-64 dev laptop (Darsh's, on AC), 8 Nov, same frames, before (f7560
 | state-space step (K = 1) | 0.022 / 0.025 | 0.020 / 0.022 | same (K = 1000: 246 -> 46 us) |
 | prompt composition | 0.002 | 0.002 | same |
 
+GitHub `macos-15` runner (Apple Silicon VM, shared, has a fan), same bench in CI
+(`bench_results/mac_bench_gha_macos15.json`): guard 34.1 -> 5.7 ms p50 (6.0x, both measured in the same run),
+fast-loop tick 12.5 ms, annotate 31.9 ms, monitor request build 35.7 ms, stitch 7.7 ms. Its sustained rows managed
+only ~28 guards/s of ~50-60 at low CPU: the VM stretches short sleeps (a timing test also saw 50 ms waits take ~100 ms).
+Check `guards/s` on the Air; if it is low there too, the loops' waits need a look before the match.
+
 5 minutes of match load (live guard 10 Hz + fast loop 20 Hz on both wrists + a monitor request every 3 s), per
 30 s window: guard p50 20.6 -> 5.0 ms, fast-loop tick p95 47 -> 13.7 ms (period 50 ms), overruns 1-12 -> 0,
 process CPU 107% -> 26% of one core. Flat across the 5 minutes on this laptop (it has a fan); the Air is the test

@@ -98,7 +98,15 @@ python tools/mac_bench.py --sustained 300 --sustained-mode max --threads 4     #
 
 It prints p50/p95 per component and, in sustained mode, a row per 30 s with `pmset -g therm` (CPU_Speed_Limit below
 100 means the Air is throttling). Pass: live guard p95 well under 100 ms (its 10 Hz period), fast-loop tick p95 under
-50 ms, no growth in p95 across the 5 minutes. Results land in `bench_results/`; commit the JSON.
+50 ms, no growth in p95 across the 5 minutes, and `guards/s` near 50-60 in match mode (10 Hz + 20 Hz on two wrists).
+A much lower `guards/s` with low CPU means macOS is stretching the loops' sleeps (timer coalescing for a background
+or low-priority process): on GitHub's macos-15 runner it was ~28/s. Keep the terminal in front and re-run.
+Results land in `bench_results/`; commit the JSON.
+
+Reference, GitHub `macos-15` runner (Apple Silicon VM, has a fan, shared), 8 Nov: guard 5.7 ms p50 (the
+pre-optimisation detector: 34 ms), fast-loop tick 12.5 ms, monitor request build 36 ms
+(`bench_results/mac_bench_gha_macos15.json`). `.github/workflows/mac-bench.yml` runs the tests and the bench there on
+every push to `mac-arm64` / `final-harness` that touches the harness.
 
 ## 3. Where to run it
 
