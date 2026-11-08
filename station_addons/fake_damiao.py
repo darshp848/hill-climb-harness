@@ -77,7 +77,7 @@ class FakeMetalBus:
     """python-can's send/recv/shutdown over a simulated Metal arm."""
 
     def __init__(self, q0_deg: tuple[float, ...], *, gripper_late: float = 0.5, seed: int = 0,
-                 external_nm: tuple[float, ...] | None = None) -> None:
+                 external_nm: tuple[float, ...] | None = None, plant: Any = None) -> None:
         self.motors = {j.motor_id: FakeMotor(j.motor_id, j.model, q) for j, q in zip(metal.JOINTS, q0_deg)}
         self.pending: deque[tuple[float, int, bytes]] = deque()
         self.held: list[tuple[int, bytes]] = []  # gripper replies waiting for the next frame
@@ -88,10 +88,15 @@ class FakeMetalBus:
         self.frames_sent = 0
         self.external_nm = external_nm or (0.0,) * 7
         self.log: list[tuple[float, tuple[float, ...], tuple[float, ...]]] = []  # (t, q, q_cmd)
+        self.plant = plant  # metal_plant.MetalPlant for joints 1-6 (coupled rigid-body arm), or None
+        self.tau_log: list[tuple[float, tuple[float, ...]]] = []
 
     # physics
     def _advance(self, now: float) -> None:
         if self.t_sim + SIM_DT > now:
+            return
+        if self.plant is not None:
+            self._advance_plant(now)
             return
         q_deg = [math.degrees(m.q) for m in self.motors.values()][:6]
         g = metal.gravity_nm(tuple(q_deg))  # once per advance: gravity changes slowly over a few ms
@@ -111,6 +116,33 @@ class FakeMetalBus:
                 m.dq += acc * SIM_DT
                 m.q += m.dq * SIM_DT
             self.t_sim += SIM_DT
+
+    def _advance_plant(self, now: float) -> None:
+        import numpy as np
+
+        joints = [self.motors[i] for i in range(1, 7)]
+        grip = self.motors[7]
+        dt = self.plant.model.opt.timestep
+        while self.t_sim + dt <= now:
+            q, dq = self.plant.q, self.plant.dq
+            tau = np.zeros(6)
+            for i, m in enumerate(joints):
+                if m.enabled:
+                    kp, kd, qs, dqs, tff = m.cmd
+                    tmax = damiao.MOTOR_LIMITS[m.model][2]
+                    tau[i] = max(-tmax, min(tmax, kp * (qs - q[i]) + kd * (dqs - dq[i]) + tff))
+            if not any(m.enabled for m in joints):
+                self.plant.data.qvel[:] = 0.0  # supported until it holds
+            else:
+                self.plant.step(tau)
+            for i, m in enumerate(joints):
+                m.q, m.dq, m.tau = float(self.plant.q[i]), float(self.plant.dq[i]), float(tau[i])
+            if grip.enabled:
+                kp, kd, qs, dqs, tff = grip.cmd
+                grip.tau = max(-20.0, min(20.0, kp * (qs - grip.q) + kd * (dqs - grip.dq) + tff))
+                grip.dq += (grip.tau - FRICTION[6] * grip.dq) / INERTIA[6] * dt
+                grip.q += grip.dq * dt
+            self.t_sim += dt
 
     def _reply(self, motor: FakeMotor, data: bytes, now: float) -> None:
         rid = damiao.REPLY_OFFSET + motor.id
