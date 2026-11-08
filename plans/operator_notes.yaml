@@ -1,6 +1,6 @@
 # Darsh's operator decisions (8 Nov 2026), from docs/decisions.pdf, as the harness uses them.
-# Real-table colours: coloured golf balls (green, yellow, orange) are legal and the white ball is illegal. The sim
-# translates the colours (cloud/run.py sim_text: white ball -> black ball, coloured golf ball -> white golf ball).
+# Colours as on the real table, which the sim now matches (sim_scenes/hill_climb_table.py): coloured golf balls
+# (green, yellow, orange) are legal; the white golf ball and black 8-balls are illegal.
 #
 # Each stage entry is matched by stage name (fnmatch globs; first match wins) and adds:
 #   technique  how the robot should do it. Added to the Dream prompt when the plan sets prompt_technique: true

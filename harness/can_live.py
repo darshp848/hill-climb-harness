@@ -69,6 +69,15 @@ class ArmState:
         self.history: deque = deque(maxlen=int(history_s * 100))
         self._replies: deque = deque(maxlen=400)
         self._last_row_t = 0.0
+        try:
+            from harness.joint_observer import JointObserver
+        except ImportError:                          # lone script on the NUC: joint_observer.py next to it
+            try:
+                from joint_observer import JointObserver  # type: ignore
+            except ImportError:
+                JointObserver = None
+        self.observer = JointObserver() if JointObserver else None
+        self.alerts: dict[tuple, dict] = {}         # active look-ahead alerts, updated at the reply rate
 
     def feed(self, can_id: int, data: bytes, t: float) -> None:
         if len(data) != 8:
@@ -95,6 +104,11 @@ class ArmState:
                     j["tau_cmd_nm"] = (j["kp"] * math.radians(j["q_cmd_deg"] - j["q_deg"])
                                        + j["kd"] * math.radians(j["dq_cmd_deg_s"] - j["dq_deg_s"]) + j["tau_ff_nm"])
                 self._replies.append(t)
+                if self.observer is not None:     # at the CAN reply rate, per joint
+                    for key in [k for k in self.alerts if k[1] == name]:
+                        del self.alerts[key]
+                    for a in self.observer.observe(t, self.arm, {name: j}):
+                        self.alerts[(a["kind"], a["joint"])] = a
                 if t - self._last_row_t >= 0.01:                     # history at <= 100 Hz
                     self._last_row_t = t
                     self.history.append({"t": round(t, 4), **{
@@ -140,7 +154,8 @@ def serve(arms: dict[str, ArmState], host: str, port: int) -> ThreadingHTTPServe
             now = time.time()
             if url.path == "/joints":
                 body = {"t": now, "rate_hz": {a: s.rate_hz(now) for a, s in arms.items()},
-                        "arms": {a: s.snapshot() for a, s in arms.items()}}
+                        "arms": {a: s.snapshot() for a, s in arms.items()},
+                        "observer_alerts": [x for s in arms.values() for x in list(s.alerts.values())]}
             elif url.path == "/joints/history":
                 secs = float(parse_qs(url.query).get("s", ["2"])[0])
                 body = {"t": now, "arms": {a: [r for r in list(s.history) if now - r["t"] <= secs]

@@ -51,6 +51,9 @@ class JointTelemetry:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        from .joint_observer import JointObserver  # noqa: PLC0415
+        self.observer = JointObserver()
+        self._observed: dict[tuple, dict] = {}
 
     def _get(self) -> dict:
         if self.fetch:
@@ -75,6 +78,16 @@ class JointTelemetry:
             except OSError:
                 pass
         raised = self._signals(snap)
+        # Look-ahead observer (harness.joint_observer): the source's own (can_live on the NUC, at the CAN reply
+        # rate) if it sends one, else run here on each reading.
+        observed = snap.get("observer_alerts")
+        if observed is None:
+            t = snap.get("t") or time.time()
+            observed = [a for arm, joints in (snap.get("arms") or {}).items()
+                        for a in self.observer.observe(t, arm, joints)]
+        for a in observed:
+            raised.add((a["kind"], a["arm"], a["joint"]))
+            self._observed[(a["kind"], a["arm"], a["joint"])] = a
         with self._lock:
             self.latest = snap
             for key in raised - self._active:
@@ -116,6 +129,17 @@ class JointTelemetry:
 
     def _words(self, key: tuple) -> str:
         kind, arm, joint = key
+        if key in self._observed:
+            a = self._observed[key]
+            return {"limit_breach": f"{arm} {joint} is past its joint limit ({a.get('q_deg')} deg)",
+                    "limit_approach": f"{arm} {joint} will reach its joint limit in "
+                                      f"{a.get('eta_s') if a.get('eta_s') is not None else '?'} s",
+                    "overspeed": f"{arm} {joint} is moving too fast ({a.get('v_deg_s')} deg/s)",
+                    "torque_saturation": f"{arm} {joint} is at its torque limit ({a.get('tau_nm')} N.m)",
+                    "tracking_divergence": f"{arm} {joint} cannot follow its command (pushing into something)",
+                    "oscillation": f"{arm} {joint} is oscillating",
+                    "fault": f"{arm} {joint} motor reports a fault (status {a.get('status')})",
+                    "overheat": f"{arm} {joint} motor is hot ({a.get('temp_c')} C)"}.get(kind, f"{arm} {joint}: {kind}")
         j = (self.latest.get("arms") or {}).get(arm, {}).get(joint, {})
         tau, tmax = j.get("tau_nm"), j.get("tau_max_nm")
         load = f" ({abs(tau):.1f} of {tmax:.0f} N.m)" if tau is not None and tmax else ""

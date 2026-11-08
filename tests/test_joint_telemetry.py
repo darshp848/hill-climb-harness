@@ -59,7 +59,7 @@ def test_arm_state_pairs_command_and_reply_into_commanded_torque():
 def _snap(grip_tau=0.0, lift_tau=0.0, lag=0.0, speed=10.0, tau_cmd=None):
     return {"arms": {"right": {
         "gripper": {"q_deg": 0.02, "q_cmd_deg": 0.0, "tau_nm": grip_tau, "tau_max_nm": 20.0},
-        "shoulder_lift": {"q_deg": 10.0, "q_cmd_deg": 10.0 + lag, "dq_deg_s": speed, "tau_nm": lift_tau,
+        "shoulder_lift": {"q_deg": -30.0, "q_cmd_deg": -30.0 + lag, "dq_deg_s": speed, "tau_nm": lift_tau,
                           "tau_cmd_nm": lift_tau if tau_cmd is None else tau_cmd, "tau_max_nm": 120.0}}}}
 
 
@@ -117,3 +117,32 @@ def test_sim_serves_joints_in_can_live_shape():
         assert jt.ok
     finally:
         sim.close()
+
+
+def test_observer_warns_before_a_joint_limit_and_flags_divergence_and_faults():
+    from harness.joint_observer import JointObserver
+    obs = JointObserver()
+    alerts = []
+    for i in range(20):                       # shoulder_lift rising toward its 0 deg limit at 60 deg/s
+        t = i / 30
+        q = -40 + 60 * t
+        alerts = obs.observe(t, "right", {"shoulder_lift": {"q_deg": q, "dq_deg_s": 60.0}})
+        if alerts:
+            break
+    a = alerts[0]
+    assert a["kind"] == "limit_approach" and a["bound"] == 0.0 and q < 0 and a["eta_s"] > 0   # before the limit
+    obs2 = JointObserver()
+    for i in range(15):
+        out = obs2.observe(i / 30, "left", {"elbow_flex": {"q_deg": 40.0, "q_cmd_deg": 60.0, "dq_deg_s": 0.0,
+                                                          "status": 1}})
+    assert any(x["kind"] == "tracking_divergence" for x in out)
+    out = obs2.observe(1.0, "left", {"wrist_yaw": {"q_deg": 0.0, "status": 0xA, "temp_rotor_c": 56}})
+    assert {"fault", "overheat"} <= {x["kind"] for x in out}
+
+
+def test_telemetry_words_observer_alerts_for_the_monitor():
+    snap = {"t": 1.0, "arms": {"right": {}}, "observer_alerts": [
+        {"kind": "limit_approach", "arm": "right", "joint": "wrist_flex", "eta_s": 0.2}]}
+    jt = JointTelemetry("http://x", fetch=lambda: snap, thresholds=Thresholds(persist=1))
+    jt.poll_once()
+    assert "wrist_flex will reach its joint limit in 0.2 s" in jt.note()
