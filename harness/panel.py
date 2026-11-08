@@ -252,7 +252,7 @@ details summary{cursor:pointer;color:var(--mute);font-size:13px}pre{font:11px ui
 <script>
 const $=id=>document.getElementById(id);let model="base",run=null,next=0,t0=null,stageOrder=[],stageState={},running=false,lastWho="";
 const esc=s=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const NICE={cable_unplug:"Unplug cable 1",cable_put_down:"Put cable 1 down",cable_unplug_more:"Unplug cable 2",cable_put_more_down:"Put cable 2 down",
+const NICE={cable_unplug:"Unplug cables (loop)",cable_put_down:"Put cable down",cable_unplug_more:"Unplug cable 2",cable_put_more_down:"Put cable 2 down",
 arms_clear:"Arms clear",stack_base:"Place base cube",stack_2:"Stack a cube",tower_pass:"Tower > 4 in"};
 const nice=s=>NICE[s]||(s||"").replace(/^ball_(\d)/,"Ball $1").replace(/_/g," ");
 async function post(u,b){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});const j=await r.json();if(!j.ok)alert(j.error);return j}
@@ -289,6 +289,8 @@ function story(e){const v=e.event,S=nice(e.stage);
  case "grip_slipped":return["harness","🛠","Plug slipped on the way up: back down to re-grip",`try ${e.repull}`];
  case "grip_pull":return["harness","🛠",e.outcome==="pulled"?"Pulled straight up and still holding it":e.outcome==="lost"?"Squeezed and found nothing in the gripper":"Lost it on the way up every time",
   e.z_before!=null?`hand ${(e.z_before*100).toFixed(0)} → ${(e.z_after*100).toFixed(0)} cm`:""];
+ case "cable_out":return["good","✓",`Cable ${e.count} out: Dream goes straight for the next plug`,e.loop_s_left>0?`${Math.round(e.loop_s_left)} s left in the unplug loop`:""];
+ case "grip_drop":return["harness","🛠","Harness carried the cable aside and let go",""];
  case "grip_put_down":return["harness","🛠","Put-down finished",`${e.seconds}s`];
  case "pull_pass_check":return[e.passed?"good":"harness","👁",e.passed?"Pull confirmed: the plug is out":"Sonnet says the plug is not out yet",e.reason||""];
  case "stage_locked":return["harness","🛠","Looks done: harness froze Dream so it can't undo it, checking…",""];

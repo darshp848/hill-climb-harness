@@ -567,8 +567,22 @@ class Runner:
                     check = self._confirm_check(stage, verifier)   # None: no check configured, or it said yes
                     self.log.event("pull_pass_check", stage=stage.name, attempt=attempt, passed=check is None,
                                    reason=check)
+                    if check is None and ga.loop_until_s is not None:
+                        gs["out"] = gs.get("out", 0) + 1
+                        left = ga.loop_until_s - (self._clock() - self._t0)
+                        self.log.event("cable_out", stage=stage.name, count=gs["out"], loop_s_left=round(left, 1))
+                        if left > 0:   # straight back for the next plug: same stage, no stage change
+                            gs.update(done=False, idle_ok=False)
+                            gs["regrips"] = ga.regrip
+                            self._dream_again(stage, gs, f"cable {gs['out']} out: next plug")
+                            continue
+                        return _Attempt(True, f"{gs['out']} cable(s) out by the loop's time limit", max_p, hint)
                     if check is None:
                         return _Attempt(True, "grip assist pulled it out, confirm agrees", max_p, hint)
+                    # confirm says not out: don't leave Dream idle until the timeout, send it back to the plugs
+                    gs.update(done=False, idle_ok=False)
+                    self._dream_again(stage, gs, "confirm: no plug came out, Dream approaches again")
+                    continue
             end_now, prompts = self._apply_operator()
             if end_now:
                 if prompts and self.operator is not None:   # "skip this, do the balls": the prompt is for the next stage
@@ -730,6 +744,9 @@ class Runner:
                     and (max_p or 0) < 0.95 and elapsed - last_rise >= stage.stall_s and not self.plan.hands_off):
                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
                                 max_p, hint)
+            if ga is not None and ga.loop_until_s is not None and gs.get("out") and \
+                    (elapsed >= stage.timeout_s or self._clock() - self._t0 >= ga.loop_until_s):
+                return _Attempt(True, f"{gs['out']} cable(s) out, loop time up", max_p, hint)
             if elapsed >= stage.timeout_s:
                 if not grace and last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S:
                     grace = True           # a done is waiting for its confirming look: don't drop it at the bell
@@ -788,6 +805,7 @@ class Runner:
         """Dream shut on nothing (regrip) or holds something (pull): stop Dream, fix the grip, pull straight up,
         then hand back to Dream with the put-down prompt. /move only while no Dream run is going."""
         lo, hi = ga.hold
+        gs.setdefault("approach", self._prompt)   # the approach prompt, not the put-down one, for every re-approach
         self.log.event("grip_assist", stage=stage.name, attempt=attempt, action=action,
                        readings=[round(x, 3) for x in gs["seen"][-4:]])
         try:
@@ -825,7 +843,9 @@ class Runner:
             self._dream_again(stage, gs, f"pull {outcome}: Dream approaches again")
             return
         gs["done"] = gs["idle_ok"] = gs["pulled"] = True
-        if ga.put_down_prompt:
+        if ga.drop_dxyz is not None:
+            self._drop(stage, ga, attempt)
+        elif ga.put_down_prompt:
             self._put_down(stage, ga, attempt)
 
     def _pull(self, stage: Stage, ga: GripAssist, attempt: int) -> str:
@@ -863,9 +883,19 @@ class Runner:
                        z_before=(before.get("xyz") or [None] * 3)[2], z_after=(end.get("xyz") or [None] * 3)[2])
         return outcome
 
+    def _drop(self, stage: Stage, ga: GripAssist, attempt: int) -> None:
+        """Carry the held cable by drop_dxyz (in /move-sized steps, grip shut) and open the gripper there."""
+        d = ga.drop_dxyz or [0.0, 0.0, 0.0]
+        n = max(1, int((sum(x * x for x in d) ** 0.5) / MAX_MOVE_M - 1e-9) + 1)
+        for _ in range(n):
+            self._check_global()
+            self._motion(self.station.move, ga.arm, [x / n for x in d], 0.0, 1.5)
+        self._motion(self.station.move, ga.arm, [0.0, 0.0, 0.0], 0.8, 0.6)   # open: the cable drops here
+        self.log.event("grip_drop", stage=stage.name, attempt=attempt, dxyz=d, grip=self._grip_reading(ga.arm))
+
     def _dream_again(self, stage: Stage, gs: dict[str, Any], why: str) -> None:
         gs["seen"] = []   # wait for Dream to open the gripper again before judging a grip
-        self._issue(self._prompt or stage.prompt, why, force_start=True)
+        self._issue(gs.get("approach") or self._prompt or stage.prompt, why, force_start=True)
 
     def _put_down(self, stage: Stage, ga: GripAssist, attempt: int) -> None:
         """Dream puts the held cable down; stopped once the gripper opens (or after put_down_s). The arms then hold
