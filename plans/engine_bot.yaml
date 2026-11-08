@@ -196,7 +196,7 @@ stages:
     max_attempts: 99
     min_run_s: 4
     stall_s: 35
-    confirm: 1             # one look stops Dream (stop_on_pass); Sonnet's confirm_check decides
+    confirm: 2             # two fast looks in a row before the lock (8 Nov live: single 'done' looks flip-flopped)
     confirm_check: "In the NOW images, is at least one cube resting on top of another cube, standing on its own, with no gripper holding or touching either cube?"
     recovery:
       - {name: keep_going, kind: retry, when: "a cube is held, or the stack is standing and the arm is near it", max_uses: 3}
