@@ -99,7 +99,7 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - &unplug
     name: cable_unplug
-    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug and pull it straight up."
+    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss it onto the table to the right."
     write_prompt: false
     grip_assist:
       regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
@@ -108,7 +108,7 @@ stages:
       pull_s: 3            # seconds per lift step: slower slips less
       seat_dz: 0.01        # open a little and lower 1 cm before the squeeze, so the jaws bite the plug body
       repull: 2            # slipped on the way up: straight back down, re-grip, pull again
-      hold: [0.045, 0.20]  # a held plug reads 0.05-0.15; <= 0.045 is shut on nothing; a pull from 0.27 lost it
+      hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty); a pull from 0.27 lost it
       put_down_prompt: "Move the held cable far to the right, onto the empty table beside the power strip, lower it flat onto the table there and open the gripper."   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
@@ -155,24 +155,15 @@ stages:
     on_fail: skip
 
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). No arm named, no writer. ----
-  - name: stack_base
-    prompt: "move a blue cube to the middle of the table, close in front of the robot"
-    write_prompt: false
-    success: "Is a blue cube standing on the table in the middle, close in front of the robot, with no gripper holding it?"
-    camera_notes:
-      scene: "top view of the table: where the cubes are"
-    timeout_s: 40
-    max_attempts: 2
-    min_run_s: 4
-    stall_s: 30
-    confirm: 1
-    skip_if_done: true
-    on_fail: skip          # a base anywhere still stacks
-
   - &stack
     name: stack_2
-    prompt: "put a cube on top of the other cube"
-    retry_prompt: "stack the blocks and sticks as high as possible"   # stacked 2 cubes in 64 s on 7 Nov
+    # 8 Nov prompt comparison (docs/prompt_comparison_2026-11-08): S2 "put the pink cube on top of a blue cube" had the
+    # most decisive grasps and a stack; S8 "stack the blocks and sticks as high as possible" stacked in 2 of 3 runs;
+    # "put a cube on top of the other cube" (S9) made 0 grips. Goals, not motions: no "lift it high ... then open".
+    # Name both cubes and WHICH blue one (8 Nov live: with "a blue cube" and two blue cubes it stacked on the far one,
+    # then "as high as possible" put the near blue cube on that far stack and tipped it over).
+    prompt: "put the pink cube on top of the blue cube in front of the robot"
+    retry_prompt: "stack the blocks and sticks as high as possible"
     write_prompt: false
     success: "Is one cube resting on top of another cube, standing on its own, with no gripper touching either?"
     expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
@@ -192,7 +183,8 @@ stages:
 
   - <<: *stack
     name: tower_pass
-    prompt: "stack the blocks and sticks as high as possible"
+    prompt: "put the other blue cube on top of the pink cube"
+    retry_prompt: "stack the blocks and sticks as high as possible"
     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
     expect: "The arm adds pieces to the stack until it is over 4 inches tall, then lifts clear; the tower stays standing."
     confirm_check: "In the NOW images, is there a tower of stacked pieces more than 4 inches (10 cm) tall (a cube is about 2 inches), standing on its own, with no gripper holding or touching it?"
@@ -202,7 +194,7 @@ stages:
   - &ball
     name: ball_1
     prompt: "With the arm nearest to it, pick up one {ball} and drop it into the white basket."
-    writer_notes: "Pick the ONE legal ball (green, yellow or orange golf ball; never the white ball or a black ball) that is closest to one of the arms and reachable without passing over the tower, the blocks or the white basket. Name the arm on that ball's side of the table: \"With the right arm, ...\" for a ball on the right arm's half, \"With the left arm, ...\" for a ball on the left arm's half. Say where the ball is (e.g. \"the orange golf ball at the front right of the table\"). If no legal ball outside the basket is in easy reach of either arm, the answer is SKIP."
+    writer_notes: "Pick the ONE legal ball (green, yellow or orange golf ball; never the white ball or a black ball) that is closest to one of the arms and reachable without passing over the tower, the blocks or the white basket. Prefer a ball the RIGHT arm can reach and say \"With the right arm, ...\" (8 Nov: both balls near the right gripper went in; the left arm and mid-table balls failed). Only for a ball right next to the left gripper and far from the right one say \"With the left arm, ...\". Say where the ball is (e.g. \"the orange golf ball at the front right of the table\"). If no legal ball outside the basket is in easy reach of either arm, the answer is SKIP."
     success: "Compared with the stage-start images, is there one more {ball} resting inside the bin than at the start of this stage, with no white or black ball in the bin and the tower (if any) still standing?"
     expect: "The right arm picks up one named {ball}, staying clear of the white ball, any black ball and the tower, and releases it over the bin."
     timeout_s: 40
