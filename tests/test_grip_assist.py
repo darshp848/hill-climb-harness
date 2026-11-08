@@ -202,10 +202,11 @@ def test_bot_v1_plan():
     assert plan.checkpoint == "dreamlabs/dream-1-beta" and plan.time_budget_s == 295 and plan.rewrite_max == 1
     assert plan.claude_user["confirm_model"] == plan.claude_user["writer_model"] == "claude-sonnet-5-5"
     unplugs = [s for s in plan.stages if s.name.startswith("cable_unplug")]
-    assert len(unplugs) == 2 and all(s.grip_assist and s.confirm_check and not s.write_prompt for s in unplugs)
+    assert len(unplugs) == 1 and all(s.grip_assist and s.confirm_check and not s.write_prompt for s in unplugs)
+    assert unplugs[0].grip_assist.loop_until_s == 150
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.06, 0.04], 3.0, 2, (0.045, 0.20))
-    assert ga.put_down_prompt.startswith("Put the held cable down on the table to the right")
+    assert "to the right" in ga.put_down_prompt and "open the gripper" in ga.put_down_prompt
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert all(not s.write_prompt and "arm" not in s.prompt for s in stacks)
@@ -426,3 +427,33 @@ def test_skip_pressed_before_a_stage_skips_that_stage(fake, write_plan, tmp_path
     res = r.run()
     assert [(x.name, x.ok) for x in res.stages] == [("cable_unplug", False), ("stack_2", True)]
     assert prompts(fake) == ["do stack_2"]
+
+
+def test_drop_dxyz_puts_the_cable_down_without_dream(fake, write_plan, tmp_path):
+    fake.grip_readings = [0.9, 0.9, 0.9, 0.1]
+    r = build(fake, _cable_plan(write_plan, _assist(drop_dxyz=[0.0, -0.20, -0.05], put_down_prompt=None, seat_dz=0.0)),
+              tmp_path, Script([mv(None)]))       # passes on the pull itself (pass_on_pull, no confirm_check)
+    assert r.run().stages[0].ok
+    moves = [(m["dxyz"], m["gripper"]) for m in _moves(fake)]
+    assert moves[-3:] == [([0.0, -0.1, -0.025], 0.0), ([0.0, -0.1, -0.025], 0.0), ([0.0, 0.0, 0.0], 0.8)]
+    assert [b["prompt"] for _, rt, b in fake.posts() if rt == "/start"] == [f"{PRE} grip the plug and pull it up"]
+    assert events(r.log, "grip_drop")
+
+
+def test_unplug_loop_goes_straight_back_for_the_next_plug(fake, write_plan, tmp_path):
+    fake.grip_readings = [0.9, 0.9, 0.9, 0.1]
+    lifts = {"n": 0}
+
+    def on_move(b):   # after each drop (open 0.8) Dream opens on the way in and grips the next plug
+        if b["gripper"] == 0.8:
+            fake.grip_readings[:] = [0.9, 0.9, 0.9, 0.1]
+
+    fake.on_move = on_move
+    path = _cable_plan(write_plan, _assist(drop_dxyz=[0.0, -0.1, 0.0], put_down_prompt=None, seat_dz=0.0,
+                                           loop_until_s=2.5), timeout_s=10.0)
+    r = build(fake, path, tmp_path, Script([mv(None)]))
+    res = r.run()
+    outs = events(r.log, "cable_out")
+    assert res.stages[0].ok and len(outs) >= 2 and "cable(s) out" in res.stages[0].reason
+    starts = [b["prompt"] for _, rt, b in fake.posts() if rt == "/start"]
+    assert set(starts) == {f"{PRE} grip the plug and pull it up"}   # always the approach prompt, never a stage change

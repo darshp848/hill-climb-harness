@@ -28,7 +28,7 @@ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_ru
                "not_after_s"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 _GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
-              "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull"}
+              "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s"}
 MAX_MOVE_M = 0.12   # the station's /move takes at most 12 cm per call
 
 
@@ -77,6 +77,14 @@ class GripAssist:
     # waiting for the fast monitor (8 Nov live run: a real unplug at 40 s was never called done, and the retry went
     # for the loose cable).
     pass_on_pull: bool = True
+    # After the pull, the harness puts the cable down itself: move the hand by this much (m, arm base frame, <= 12 cm
+    # a step), then open. Instead of put_down_prompt: no Dream restart, and it lands where we say (8 Nov live: Dream set
+    # cables back on the strip). None = Dream puts it down.
+    drop_dxyz: list[float] | None = None
+    # Unplug in a loop: after each confirmed pull, count it and send Dream straight back for the next plug (same stage,
+    # no stage change) until this match-clock time (s since the run started), or the confirm says no plug is left.
+    # The stage passes with at least one cable out. None = one cable per stage.
+    loop_until_s: float | None = None
 
 
 @dataclass
@@ -574,7 +582,20 @@ def _grip_assist(raw: Any, where: str) -> GripAssist | None:
                       open_above=float(_num(raw.get("open_above", d.open_above), f"{where}.open_above")),
                       poll_s=float(_num(raw.get("poll_s", d.poll_s), f"{where}.poll_s")),
                       min_z=None if raw.get("min_z") is None else float(_num(raw["min_z"], f"{where}.min_z")),
-                      pass_on_pull=_bool(raw.get("pass_on_pull", True), f"{where}.pass_on_pull"))
+                      pass_on_pull=_bool(raw.get("pass_on_pull", True), f"{where}.pass_on_pull"),
+                      drop_dxyz=_drop(raw.get("drop_dxyz"), where),
+                      loop_until_s=None if raw.get("loop_until_s") is None else float(_num(raw["loop_until_s"], f"{where}.loop_until_s")))
+
+
+def _drop(raw: Any, where: str) -> list[float] | None:
+    if raw is None:
+        return None
+    if (not isinstance(raw, list) or len(raw) != 3
+            or not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in raw)):
+        raise ValueError(f"{where}.drop_dxyz: must be [dx, dy, dz] in metres")
+    if sum(float(x) ** 2 for x in raw) ** 0.5 > 0.36:
+        raise ValueError(f"{where}.drop_dxyz: at most 36 cm in all")
+    return [float(x) for x in raw]
 
 
 def _guard(raw: Any) -> Guard | None:
