@@ -38,20 +38,20 @@ prompt_engine:
   filler: claude
   filler_model: claude-sonnet-5-5   # once per stage, on the Anthropic API (HARNESS_ANTHROPIC_MODELS)
   prefetch_ttl_s: 20
-  max_words: 40
+  max_words: 45
   prefix: "{safe}"
   forbid: ["white ball", "white golf ball", "black ball", "8-ball", "eight ball"]
   vocab:
     plug: ["a plug standing upright in a port on top of the black power strip", "the rightmost plug standing in a port on top of the black power strip", "the plug standing in the power strip nearest the right arm"]
-    piece: ["the pink cube", "the blue cube", "the yellow cube", "the yellow square stick", "the pink round stick"]
-    top: ["a blue cube", "the blue cube", "the pink cube", "the yellow cube", "the top of the tower"]
+    piece: ["the pink cube", "the other blue cube", "the blue cube", "the yellow square stick", "the pink round stick"]
+    top: ["the blue cube in front of the robot", "the pink cube", "the blue cube", "the top of the tower"]
     base: ["a blue cube", "the blue cube nearest the robot", "the pink cube"]
     ball: ["the orange golf ball", "the yellow golf ball", "the green golf ball"]
     where: ["on the right side of the table", "at the front right of the table", "on the left side of the table", "at the front left of the table", "next to the white basket"]
     arm: ["With the right arm,", "With the left arm,"]
   templates:
     unplug:
-      text: "With the right gripper half open, move down onto <plug>, then close the gripper on that plug and pull it straight up."
+      text: "With the right gripper half open, move down onto <plug>, then close the gripper on that plug, pull it straight up and toss it onto the table to the right."
       prefix: true
       slots: {plug: plug}
       note: "approach + grip; the harness fixes the grip and pulls (grip_assist). 2/2 plugs held on 8 Nov"
@@ -68,11 +68,15 @@ prompt_engine:
       text: "put <piece> on top of <top>"
       arm: none
       slots: {piece: piece, top: top}
-      note: "name both pieces by colour; no arm named (Dream picks the near arm). 'put the pink cube on top of a blue cube' stacked first try on 8 Nov"
+      note: "name both pieces by colour and WHICH one when there are two of a colour; no arm named (Dream picks the near arm). 8 Nov: 'a blue cube' with two blue cubes stacked on the far one and the next piece tipped it"
+    stack_all:
+      text: "stack the blocks and sticks as high as possible"
+      arm: none
+      note: "the rubric's own wording: stacked in 2 of 3 runs on 8 Nov (prompt comparison S8); the second-try wording"
     ball:
       text: "<arm> pick up <ball> <ball_where> and drop it into the white basket."
       slots: {arm: arm, ball: ball, ball_where: where}
-      note: "one legal ball per prompt, the one nearest an arm, and name the arm on its side of the table"
+      note: "one legal ball per prompt; prefer a ball the right arm can reach (8 Nov: both near the right gripper went in, left arm and mid-table failed)"
 
 guard:
   question: "Is either gripper holding the white ball or a black ball (balls that must never go in the bin), or closed or closing around one?"
@@ -177,28 +181,13 @@ stages:
     on_fail: skip
 
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). No arm named, no writer. ----
-  - name: stack_base
-    prompt: "move a blue cube to the middle of the table, close in front of the robot"
-    write_prompt: false
-    template: base
-    slots: {base: "a blue cube"}
-    success: "Is a blue cube standing on the table in the middle, close in front of the robot, with no gripper holding it?"
-    camera_notes:
-      scene: "top view of the table: where the cubes are"
-    timeout_s: 40
-    max_attempts: 2
-    min_run_s: 4
-    stall_s: 30
-    confirm: 1
-    skip_if_done: true
-    on_fail: skip          # a base anywhere still stacks
-
   - &stack
     name: stack_2
-    prompt: "put the pink cube on top of a blue cube"
+    prompt: "put the pink cube on top of the blue cube in front of the robot"
     write_prompt: false
     template: stack
-    slots: {piece: "the pink cube", top: "a blue cube"}
+    variants: [stack_all]
+    slots: {piece: "the pink cube", top: "the blue cube in front of the robot"}
     success: "Is one cube resting on top of another cube, standing on its own, with no gripper touching either?"
     expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
     camera_notes:
@@ -217,8 +206,8 @@ stages:
 
   - <<: *stack
     name: tower_pass
-    prompt: "put another piece on top of the tower"
-    slots: {piece: "the yellow cube", top: "the top of the tower"}
+    prompt: "put the other blue cube on top of the pink cube"
+    slots: {piece: "the other blue cube", top: "the pink cube"}
     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
     expect: "The arm adds pieces to the stack until it is over 4 inches tall, then lifts clear; the tower stays standing."
     confirm_check: "In the NOW images, is there a tower of stacked pieces more than 4 inches (10 cm) tall (a cube is about 2 inches), standing on its own, with no gripper holding or touching it?"
