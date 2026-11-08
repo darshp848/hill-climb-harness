@@ -565,16 +565,42 @@ SCENARIOS: dict[str, Scenario] = {s.name: s for s in [
 ]}
 
 
+def _one(job: tuple[str, int]) -> dict[str, Any]:
+    name, seed = job
+    r = run_match(SCENARIOS[name], seed)
+    r.pop("posts", None)
+    return r
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-s", "--scenario", action="append", help="scenario name (repeatable); default all")
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--seed0", type=int, default=1, help="first seed (to split a sweep across machines)")
+    ap.add_argument("-j", "--jobs", type=int, default=1, help="matches in parallel (processes)")
+    ap.add_argument("--out", help="append one JSON line per match to this file")
+    ap.add_argument("--list", action="store_true", help="list the scenarios and exit")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    if args.list:
+        for n, sc in SCENARIOS.items():
+            print(f"{n:32s} {sc.note}")
+        return 0
     names = args.scenario or list(SCENARIOS)
+    jobs = [(n, s) for n in names for s in range(args.seed0, args.seed0 + args.seeds)]
+    if args.jobs > 1:
+        from multiprocessing import Pool
+        with Pool(args.jobs) as pool:
+            rows_all = pool.map(_one, jobs)
+    else:
+        rows_all = [_one(j) for j in jobs]
+    if args.out:
+        import json
+        with open(args.out, "a", encoding="utf-8") as fh:
+            for r in rows_all:
+                fh.write(json.dumps(r, default=str) + "\n")
     for name in names:
-        sc = SCENARIOS[name]
-        rows = [run_match(sc, seed) for seed in range(1, args.seeds + 1)]
+        rows = [r for r in rows_all if r["scenario"] == name]
         pts = [r["points"] for r in rows]
         lost = sum(r["lost"] for r in rows)
         rep = sum(r["replugged"] > 0 for r in rows)
