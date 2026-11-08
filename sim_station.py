@@ -49,6 +49,50 @@ class _Timeout(Exception):
     """The station did not finish in time: HTTP 504."""
 
 
+class HedgedPolicy:
+    """N Dream sessions fed the same observations; each `get_action` races them and returns the first reply.
+
+    The Dream API is input -> output: the same observation sent to N sessions gives N samples of the policy, and the
+    one that comes back first is used (harness.hedge's idea applied to the action chunks). This cuts the latency
+    tail of a round trip, not its floor, and costs N x the Dream usage. A session that errors is skipped while any
+    other is still running; only if every session fails does the error reach the control loop."""
+
+    def __init__(self, sessions: list[Any]):
+        self.sessions = sessions
+        self._pool = ThreadPoolExecutor(max_workers=len(sessions), thread_name_prefix="dream-hedge")
+        self.wins = [0] * len(sessions)
+        self.last_winner: int | None = None
+
+    def set_observation(self, *args: Any, **kwargs: Any) -> None:
+        for s in self.sessions:
+            s.set_observation(*args, **kwargs)
+
+    def get_action(self) -> Any:
+        from concurrent.futures import FIRST_COMPLETED, wait
+
+        futures = {self._pool.submit(s.get_action): k for k, s in enumerate(self.sessions)}
+        first_error: BaseException | None = None
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for f in done:
+                if f.exception() is None:
+                    k = futures[f]
+                    self.wins[k] += 1
+                    self.last_winner = k
+                    return f.result()
+                first_error = first_error or f.exception()
+        raise first_error if first_error is not None else RuntimeError("no Dream session answered")
+
+    def close(self) -> None:
+        for s in self.sessions:
+            try:
+                s.close()
+            except Exception:
+                pass
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
 class _Abort(Exception):
     """The run was told to stop (internal)."""
 
@@ -705,6 +749,14 @@ class SimStation:
             return self.state == STARTING
 
     def _open_with_retry(self, model: str, poses: bool) -> Any:
+        n = max(1, int(getattr(self, "hedge", 1)))
+        if n == 1 or self.policy_kind != "dream":
+            return self._open_one(model, poses)
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            sessions = list(ex.map(lambda _: self._open_one(model, poses), range(n)))
+        return HedgedPolicy(sessions)
+
+    def _open_one(self, model: str, poses: bool) -> Any:
         while True:
             self._check_stop()
             try:
@@ -971,6 +1023,8 @@ setInterval(tick,250);tick();
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Simulated Dream station agent (MuJoCo YAM) for the harness.")
     parser.add_argument("--policy", choices=("dream", "scripted"), default="dream")
+    parser.add_argument("--hedge", type=int, default=1,
+                        help="Dream sessions raced per action chunk (first reply wins; N x the Dream usage)")
     parser.add_argument("--checkpoint", default=None, help="default model: beta, or any model id (dream mode)")
     parser.add_argument("--api-port", type=int, default=8091)
     parser.add_argument("--view-port", type=int, default=8093)
@@ -993,7 +1047,9 @@ def main(argv: list[str] | None = None) -> None:
         os.environ["MUJOCO_GL"] = "egl" if Path("/dev/dri").exists() else "osmesa"
     sim = SimStation(policy=args.policy, checkpoint=args.checkpoint, api_port=args.api_port,
                      view_port=args.view_port, realtime=args.realtime, example_dir=args.example_dir,
-                     actions=args.actions, scene=args.scene, viewer=args.viewer).start()
+                     actions=args.actions, scene=args.scene, viewer=args.viewer)
+    sim.hedge = args.hedge
+    sim = sim.start()
     print(f"sim station ({args.policy}, {'realtime' if sim.realtime else 'fast'}): api {sim.api_url}  "
           f"view {sim.view_url}  live {sim.view_url}/live  (Ctrl+C to quit)", flush=True)
     if args.open:

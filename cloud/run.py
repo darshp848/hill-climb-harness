@@ -94,7 +94,9 @@ def run_match(args):
     summary = None
     try:
         sim = SimStation(policy=args.policy, scene="hill_climb", realtime=True,
-                         api_port=0, view_port=0, max_trips=4).start()
+                         api_port=0, view_port=0, max_trips=4)
+        sim.hedge = args.dream_hedge     # Dream sessions raced per action chunk (sim_station.HedgedPolicy)
+        sim = sim.start()
         station = StationClient(sim.api_url)
         station.reset()
         mon = (DelayedOracle(plan, sim.api_url, args.seed) if args.judge == "oracle" else
@@ -165,6 +167,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--policy", choices=["dream", "scripted"], default="dream")
     p.add_argument("--judge", choices=["oracle", "api"], default="oracle")
+    p.add_argument("--dream-hedge", type=int, default=1, help="Dream sessions raced per chunk (N x Dream usage)")
     p.add_argument("--plan", default="plans/hill_climb_v4.yaml")
     p.add_argument("--skip", action="append", default=[])
     p.add_argument("--detect", default="plans/sim_table_colors.yaml")

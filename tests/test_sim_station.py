@@ -209,3 +209,35 @@ def test_live_view_serves_page_state_and_cameras(sim):
         assert resp.headers["Content-Type"] == "image/jpeg" and resp.read()[:2] == b"\xff\xd8"
     with pytest.raises(urllib.error.HTTPError):
         urllib.request.urlopen(sim.view_url + "/live/cam/nope.jpg", timeout=10)
+
+
+def test_hedged_policy_returns_the_first_reply_and_feeds_every_session():
+    import time as _t
+
+    from sim_station import HedgedPolicy
+
+    class Fake:
+        def __init__(self, delay, fail=False):
+            self.delay, self.fail, self.obs, self.closed = delay, fail, 0, False
+
+        def set_observation(self, *a, **k):
+            self.obs += 1
+
+        def get_action(self):
+            _t.sleep(self.delay)
+            if self.fail:
+                raise RuntimeError("boom")
+            return {"from": self.delay}
+
+        def close(self):
+            self.closed = True
+
+    sessions = [Fake(0.3), Fake(0.02, fail=True), Fake(0.05)]
+    hp = HedgedPolicy(sessions)
+    hp.set_observation("frames", "state", timestamp=0.0)
+    t = _t.monotonic()
+    assert hp.get_action() == {"from": 0.05}            # the failing fast one is skipped, the next fastest wins
+    assert _t.monotonic() - t < 0.25 and hp.last_winner == 2
+    assert all(s.obs == 1 for s in sessions)
+    hp.close()
+    assert all(s.closed for s in sessions)
