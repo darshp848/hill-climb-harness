@@ -219,6 +219,15 @@ def positive_seconds(value: str) -> float:
     return number
 
 
+def mint_token(key: str, secret: str, room: str, identity: str) -> str:
+    """Subscribe-only token: the observer can watch the room but never publish into it."""
+    from livekit import api
+
+    grants = api.VideoGrants(room_join=True, room=room, can_subscribe=True, can_publish=False,
+                             can_publish_data=False)
+    return api.AccessToken(key, secret).with_identity(identity).with_grants(grants).to_jwt()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--publisher", required=True, help="LiveKit participant identity that owns the cameras")
@@ -231,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", help="optional harness YAML for an advisory verdict")
     parser.add_argument("--stage", help="stage to assess in the observer")
     parser.add_argument("--var", action="append", default=[], metavar="NAME=VALUE")
+    parser.add_argument("--room", help="room to join when minting a token from LIVEKIT_API_KEY/SECRET")
+    parser.add_argument("--identity", default="hill-climb-observer", help="our identity in a minted token")
     args = parser.parse_args(argv)
     tracks = {}
     for item in args.track:
@@ -241,13 +252,16 @@ def main(argv: list[str] | None = None) -> int:
     if bool(args.plan) != bool(args.stage):
         parser.error("--plan and --stage must be used together")
     url, token = os.getenv("LIVEKIT_URL"), os.getenv("LIVEKIT_TOKEN")
-    if not url or not token:
-        parser.error("set LIVEKIT_URL and LIVEKIT_TOKEN")
+    key, secret = os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")
+    if not url or not (token or (key and secret and args.room)):
+        parser.error("set LIVEKIT_URL and LIVEKIT_TOKEN (or LIVEKIT_API_KEY, LIVEKIT_API_SECRET and --room)")
     try:
         from livekit import rtc
         from PIL import Image
     except ImportError:
         parser.error("install livekit and pillow to use the observer")
+    if not token:
+        token = mint_token(key, secret, args.room, args.identity)
     monitor, stage = None, None
     if args.plan:
         variables = {}

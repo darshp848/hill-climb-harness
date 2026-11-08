@@ -69,3 +69,12 @@ def test_seconds_must_be_positive():
     with pytest.raises(argparse.ArgumentTypeError):
         lko.positive_seconds("0")
     assert lko.positive_seconds("2.5") == 2.5
+
+
+def test_minted_token_is_subscribe_only():
+    jwt = pytest.importorskip("jwt")
+    token = lko.mint_token("key", "secret-secret-secret-secret-1234", "station", "obs")
+    claims = jwt.decode(token, "secret-secret-secret-secret-1234", algorithms=["HS256"])
+    assert claims["sub"] == "obs"
+    assert claims["video"]["room"] == "station"
+    assert claims["video"]["canSubscribe"] and not claims["video"]["canPublish"]

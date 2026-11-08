@@ -341,7 +341,7 @@ The rubric gives +10 for showing LiveKit use to the referee before the match. Th
 camera tracks, never publishes, and isn't part of the runner: the runner still verifies its own stages from the
 station's frames.
 
-Install `livekit==1.2.1` (not in the base requirements). Set `LIVEKIT_URL` and `LIVEKIT_TOKEN` for the station's room,
+Install `livekit==1.2.1` (not in the base requirements). Set `LIVEKIT_URL` and `LIVEKIT_TOKEN` (or `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET` with `--room <room>`, which mints a subscribe-only token) for the station's room,
 with a token that has `canSubscribe` on and `canPublish` and `canPublishData` off.
 
 ```bash
