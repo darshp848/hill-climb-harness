@@ -9,6 +9,9 @@ Source: every archived station rollout today (`~/rollouts/zeroshot_20261108T*`).
 > In today's runs the fine-tune made **0 cable grips in about 10 min** (U1/U2 below). Base Dream-1 made every
 > grip, unplug, ball drop and stack listed here.
 
+**Follow-up:** [replay_1347-1428/](replay_1347-1428/README.md) reviews the last 40 minutes (13:47–14:28) and asks why
+performance is poor, prompts or something else. The replay viewer tools are in [`tools/replay/`](../../tools/replay/README.md).
+
 **Re-run** (from the repo root, with SSH access to the station):
 
     ssh <station> 'python3 - 20261108' < docs/prompt_comparison_2026-11-08/prompt_stats_remote.py \
