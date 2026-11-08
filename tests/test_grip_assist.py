@@ -457,3 +457,10 @@ def test_unplug_loop_goes_straight_back_for_the_next_plug(fake, write_plan, tmp_
     assert res.stages[0].ok and len(outs) >= 2 and "cable(s) out" in res.stages[0].reason
     starts = [b["prompt"] for _, rt, b in fake.posts() if rt == "/start"]
     assert set(starts) == {f"{PRE} grip the plug and pull it up"}   # always the approach prompt, never a stage change
+
+
+def test_engine_bot_plan_composes_every_stage_and_runs_the_grip_assist(fake, write_plan, tmp_path):
+    plan = load_plan(ROOT / "plans/engine_bot.yaml")
+    assert plan.prompts is not None and plan.prompts.mode == "compose" and not plan.write_prompts and plan.hands_off
+    assert all(s.template for s in plan.stages if s.name != "arms_clear")
+    assert plan.stages[0].grip_assist and plan.stages[0].grip_assist.loop_until_s

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-PLANS = {"base": "plans/bot_v1.yaml", "ft": "plans/bot_v1_ft.yaml"}
+PLANS = {"base": "plans/bot_v1.yaml", "ft": "plans/bot_v1_ft.yaml", "engine": "plans/engine_bot.yaml"}
 GROUPS = {"cable": ["cable_", "arms_"], "stack": ["stack", "tower"], "ball": ["ball_"]}
 
 
@@ -265,14 +265,15 @@ function controls(){const c=$("controls");
  $("p").onkeydown=e=>{if(e.key==="Enter")sp()};$("s").onkeydown=e=>{if(e.key==="Enter")ss()};return}
  c.innerHTML=`<h2>Start a run</h2><div class="start">
  <button class="choice ${model==="base"?"sel":""}" onclick="model='base';controls()"><b>Base Dream-1</b><span>our prompts, writer for balls</span></button>
- <button class="choice ${model==="ft"?"sel":""}" onclick="model='ft';controls()"><b>Fine-tune (relay-final)</b><span>only the texts it was trained on</span></button></div>
+ <button class="choice ${model==="ft"?"sel":""}" onclick="model='ft';controls()"><b>Fine-tune (relay-final)</b><span>only the texts it was trained on</span></button>
+ <button class="choice ${model==="engine"?"sel":""}" onclick="model='engine';controls()"><b>Prompt engine (Darsh)</b><span>base Dream-1, templates + slots picked from the cameras</span></button></div>
  <div class="toggles"><label><input type="checkbox" class="g" value="cable" checked> Cables</label><label><input type="checkbox" class="g" value="stack" checked> Stack</label>
  <label><input type="checkbox" class="g" value="ball" checked> Balls</label><label title="no typing allowed during the run"><input type="checkbox" id="m"> Match mode</label></div>
  <button class="big go" onclick="go()">▶ Start (someone at the e-stop)</button>`}
 function sp(){const t=$("p").value.trim();if(t)post("/api/prompt",{text:t}).then(j=>j.ok&&($("p").value=""))}
 function ss(){const t=$("s").value.trim();if(t)post("/api/say",{text:t}).then(j=>j.ok&&($("s").value=""))}
 function go(){const st=[...document.querySelectorAll(".g:checked")].map(x=>x.value);if(!st.length)return alert("pick at least one stage");
- if(!confirm(`LIVE run: ${model==="ft"?"fine-tune":"base Dream-1"}, ${st.join(" + ")}. Someone at the e-stop?`))return;
+ if(!confirm(`LIVE run: ${{ft:"fine-tune",engine:"prompt engine",base:"base Dream-1"}[model]}, ${st.join(" + ")}. Someone at the e-stop?`))return;
  run=null;next=0;$("tl").innerHTML="";post("/api/start",{model,stages:st,match:$("m").checked})}
 function steps(){$("steps").innerHTML=stageOrder.map(s=>`<span class="step ${stageState[s]||""}">${esc(nice(s))}</span>`).join("")}
 function story(e){const v=e.event,S=nice(e.stage);
@@ -299,6 +300,7 @@ function story(e){const v=e.event,S=nice(e.stage);
  case "stage_skipped":stageState[e.stage]="no";steps();return["harness","⏭",`${S} skipped`,e.reason];
  case "recovery":return["harness","🛠",`Recovery: ${e.name}`,e.prompt||"same prompt again"];
  case "retry":return e.mode==="hands_off_keep_running"?["look","…","Timeout passed, Dream keeps going with the same prompt",""]:null;
+ case "prompt_composed":return["harness","✍",`Prompt engine filled the "${e.template}" template (${e.source})`,Object.entries(e.slots||{}).map(([k,v])=>`${k}: ${v}`).join(" · ")];
  case "prompt_written":return["harness","✍",e.prompt?"Wrote a prompt for this stage from the cameras":"Prompt writer: "+e.why,""];
  case "prompt_rewrite":return["harness","✍","Monitor rewrote Dream's prompt",e.reason];
  case "verdict":if(!$("looks").checked)return null;return["look","👁",`${e.done?"DONE":e.status} · progress ${e.progress??"?"}`,e.reason];
