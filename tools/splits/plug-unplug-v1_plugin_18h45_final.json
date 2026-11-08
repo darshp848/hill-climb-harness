@@ -1,0 +1,84 @@
+{
+  "source": "~/hackathon_data/plug-unplug-v1",
+  "out": "~/hackathon_data/plugin-split-v1-final",
+  "segments": [
+    {
+      "episode": 26,
+      "start_s": 6.567,
+      "end_s": 25.7,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in, insertion only (starts holding the cable up)"
+    },
+    {
+      "episode": 26,
+      "start_s": 124.1,
+      "end_s": 136.533,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in, insertion only (starts holding the cable up)"
+    },
+    {
+      "episode": 26,
+      "start_s": 145.3,
+      "end_s": 159.567,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in, insertion only (starts holding the cable up)"
+    },
+    {
+      "episode": 26,
+      "start_s": 200.067,
+      "end_s": 214.833,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in, insertion only (starts holding the cable up)"
+    },
+    {
+      "episode": 26,
+      "start_s": 230.033,
+      "end_s": 247.7,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in from a loose cable (checked seated)"
+    },
+    {
+      "episode": 26,
+      "start_s": 311.4,
+      "end_s": 329.767,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in from a loose cable (checked seated)"
+    },
+    {
+      "episode": 26,
+      "start_s": 343.933,
+      "end_s": 358.267,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in from a loose cable (checked seated)"
+    },
+    {
+      "episode": 26,
+      "start_s": 366.9,
+      "end_s": 385.2,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in from a loose cable (checked seated)"
+    },
+    {
+      "episode": 26,
+      "start_s": 385.2,
+      "end_s": 400.5,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in from a loose cable (checked seated)"
+    },
+    {
+      "episode": 26,
+      "start_s": 408.067,
+      "end_s": 416.1,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in, insertion only (starts holding the cable up)"
+    },
+    {
+      "episode": 25,
+      "start_s": 102.9,
+      "end_s": 124.1,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in from a loose cable (checked seated)"
+    }
+  ],
+  "note": "plug-ins in leader takes 25-26 (18:45-18:52): every release checked, cable stays in the USB port. 6 pick a loose cable from the table and insert it; 6 others (ep26 4, 92, 121, 144, 198, 406 s) pull the plug out and re-insert it in one grasp, so only the insertion half (from the top of the lift) is kept. Freeze left_wrist after splitting.; final: David's review page marks (~21:45, ~/hackathon_review/review_marks.json) drop [1]"
+}

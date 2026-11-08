@@ -1,0 +1,235 @@
+{
+  "source": "~/hackathon_data/plug-unplug-v1",
+  "out": "~/hackathon_data/leader-split-v4-final",
+  "hub_xy": [
+    0.36,
+    0.17
+  ],
+  "segments": [
+    {
+      "episode": 26,
+      "start_s": 0.0,
+      "end_s": 6.433,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 41.833,
+      "end_s": 56.133,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 56.133,
+      "end_s": 73.767,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in (David's relabel)",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 81.733,
+      "end_s": 85.467,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug (David's split)",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 85.467,
+      "end_s": 87.933,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down (David's split)",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 87.933,
+      "end_s": 94.8,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 117.133,
+      "end_s": 123.233,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 139.633,
+      "end_s": 145.3,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 159.567,
+      "end_s": 166.2,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 166.2,
+      "end_s": 172.8,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 194.4,
+      "end_s": 200.067,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 214.833,
+      "end_s": 223.4,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 223.4,
+      "end_s": 226.0,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 255.833,
+      "end_s": 260.633,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 260.633,
+      "end_s": 269.533,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 333.533,
+      "end_s": 340.067,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 340.067,
+      "end_s": 342.933,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 358.267,
+      "end_s": 364.767,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 364.767,
+      "end_s": 366.9,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 400.467,
+      "end_s": 407.7,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 26,
+      "start_s": 422.467,
+      "end_s": 426.533,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 27,
+      "start_s": 1.3,
+      "end_s": 44.3,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "right"
+    },
+    {
+      "episode": 28,
+      "start_s": 26.367,
+      "end_s": 41.767,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "right"
+    },
+    {
+      "episode": 28,
+      "start_s": 174.667,
+      "end_s": 197.567,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "right"
+    },
+    {
+      "episode": 28,
+      "start_s": 233.633,
+      "end_s": 256.133,
+      "task": "put a cylinder upright on top of the stack",
+      "kind": "cylinder on top of the tower (David's relabel)",
+      "arm": "right"
+    },
+    {
+      "episode": 30,
+      "start_s": 21.567,
+      "end_s": 48.267,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "right"
+    },
+    {
+      "episode": 32,
+      "start_s": 12.7,
+      "end_s": 38.7,
+      "task": "stand the cylinder upright in the hole of the top block",
+      "kind": "cylinder upright in a block's hole (checked)",
+      "arm": "right"
+    },
+    {
+      "episode": 35,
+      "start_s": 2.6,
+      "end_s": 16.233,
+      "task": "put a golf ball in the bin",
+      "kind": "golf ball into the bin (checked); ends 0.2 s after the release (the operator closed the empty gripper again)",
+      "arm": "right"
+    }
+  ],
+  "note": "leader-left takes 3, 9, 25-35 (17:15-19:46): every segment checked on the wrist frames (unplug: plug gripped, jaw 4-6%; put-down: cable on the table; plug-in: cable stays in the port; cylinder: stands in the block's hole; ball: in the bin). Freeze left_wrist after splitting.; final: David's fix (leader-split-v4-frozen_fix-ep8.json) and David's review page marks (~21:45, ~/hackathon_review/review_marks.json) drops [0,1,2,3,7] applied to the re-cut v4"
+}

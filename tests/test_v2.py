@@ -709,6 +709,14 @@ def test_report_tables_and_false_success(tmp_path, capsys):
     assert "runs: 1" in out and "false-success leads" in out
     assert report.main([str(root)]) == 0
     assert "a/fix" in capsys.readouterr().out
+    # --by-checkpoint: one table per model, read from each run's `start` event
+    for name, ck in (("20260101T000000Z", "dreamlabs/dream-1-beta"), ("20260102T000000Z", "dream-1-ft:x-relay")):
+        with (root / name / "events.jsonl").open("a") as f:
+            f.write("\n" + json.dumps({"t": 0.0, "event": "start", "checkpoint": ck}) + "\n")
+    assert report.checkpoint_of(root / "20260102T000000Z") == "dream-1-ft:x-relay"
+    assert report.main([str(root), "--by-checkpoint"]) == 0
+    out = capsys.readouterr().out
+    assert "== dream-1-ft:x-relay ==" in out and "== dreamlabs/dream-1-beta ==" in out and out.count("runs: 1") == 2
 
 
 def test_report_empty_dir(tmp_path, capsys):

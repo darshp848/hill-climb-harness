@@ -122,33 +122,129 @@ separate folders, so `--episodes all` is right. Dream's checks pass on a frozen 
 (30, 15, 46 and 96 s). Long multi-task takes stay in `plug-unplug-v1` and never go up as they are: only their
 reviewed splits do.
 
-## Queue the fine-tune (when recording stops, arms not needed)
+## Queue the fine-tune: `~/hackathon_data/ft-final` (ready 22:30, check passed)
 
-What goes in: the four reviewed folders above, and whatever is recorded from now on (leader takes: split or
-recorded short with the exact text, then left wrist frozen). Each as its `-eef` copy:
+Built 22:30 from every take (42 episodes, 13:20-21:07), the unplugs re-cut to the top of the pull, and David's
+review applied (his drops and his relabels from `~/hackathon_review/review_marks.json` and
+`leader-split-v4-frozen_fix-ep8.json`). The kit's check: "ready to upload: 170 episodes, 48428 frames at 30 fps".
+
+| Folder in ft-final | Episodes |
+| --- | --- |
+| `quest-split-v4-final-eef` (Quest 18:12-18:31, David's 9 drops) | 65 |
+| `leader-split-v4-final-frozen-eef` (leader takes 25-35, David's fix and 5 drops) | 28 |
+| `leader-split-v6-frozen-eef` (leader takes 39-40, 20:56-21:02: cable unplug / put down / plug-in) | 21 |
+| `leftarm-split-v5-frozen-eef` (left arm 36-38, 41: balls, cylinders, blocks) | 16 |
+| `leader-split-v1-frozen-eef` | 14 |
+| `plugin-split-v1-final-frozen-eef` (David's 1 drop) | 11 |
+| `unplug-split-v1-final-eef` (David's 1 drop) | 5 |
+| `stack-split-v1-frozen-eef` | 4 |
+| `leader-split-v2-frozen-eef` | 3 |
+| `unplug-v1-split-eef` | 3 |
+
+Per task: 69 unplug, 55 put down, 19 plug-in, 12 ball, 10 cylinder in a block's hole, 4 block, 1 cylinder on top
+of the stack (David's text). 26.9 min. Not reviewed by David yet: `leader-split-v6` and `leftarm-split-v5`.
+`ft-v1` / `ft-v2` (21:22 / 21:41) are older: built before the unplug re-cut, without takes 36-41.
+
+### Final checks (23:00), all passed
+
+- `tools/check_dataset.py --videos` on the 10 source folders: 0 errors, 0 warnings. Meta vs tables, frame and index
+  continuity, timestamps, no NaN, joints and grippers in range, one working arm with the other parked, every
+  camera's frame count, every leader camera frozen, no duplicates, and how each task ends (every unplug holding
+  the plug, every other task released). It found one ball take that ended re-closing an empty gripper; it now ends
+  at the release.
+- The laptop copies are byte-identical to the station's (checksums of every file).
+- The `-eef` data the job trains on (all 170 episodes, 96,826 rows): state 34 wide, action 32 (Dream trains up to
+  34), every hand rotation orthonormal, grips 0..1, hands within 0.9 m.
+- Dream's own check: `finetune.py --check` -> "ready to upload: 170 episodes, 48413 frames at 30 fps".
+- A random last-frame sample of every task matches its label.
+- Cross-checked against Dream's docs and the kit's `finetune.py`: embodiment `hackathon-metal` (makermods.json,
+  3 cameras, head camera `scene`), `use_eef=True` (required for Metal), service defaults (1000 steps, lr 1e-5,
+  constant schedule, base_share 0.5: half Dream data keeps general skill), dataset as a parent of subfolders (one
+  session each). The account has no jobs, datasets or embodiments yet (no name clash). Dream's queue at 22:43: 0
+  jobs ahead, 36 of 50 slots free. `/tmp` has 5.5 GB for the upload's temporary pack (ft-final is 727 MB).
+
+### Queued 23:00 (Sat 7 Nov)
+
+- Started 22:54 from the `finetune` tmux session on the station, with the fine-tune account's key held only in
+  that shell (`tools/start_finetune.sh`; the station's saved key is a different account and was not changed).
+- Dataset `ds_5ae1c3b4e8739af1` (`muhammad.mukthar11/relay-final`), uploaded 22:54, processed 23:00.
+- Job `ftj_fdff469db8e2b643`, suffix `relay-final`, queue position 1. The service's settings: 1000 steps, lr 1e-5,
+  batch 32, `use_eef`, constant schedule, resumable. The model will be `dream-1-ft:<account>-relay-final`, and only
+  that account's key can run it: on Sunday the station needs that key (export `DREAM_API_KEY` in the shell that
+  runs `dreamcli robot up`, or save it with Step 2 of Dream's Getting started).
+
+### Start it, and the overnight watcher (`tools/finetune_watch.py`, copied to the station)
+
+One command does the upload, the processing, the job and the watching, inside tmux on the station:
 
 ```bash
-cd ~/physical-ai-hacks
-# add_eef on each new folder (the frozen copy for leader takes); the four reviewed ones already have -eef
-mkdir -p ~/hackathon_data/ft-v1 && cp -r ~/hackathon_data/{quest-split-v4,leader-split-v4-frozen,plugin-split-v1-frozen,leader-split-v1-frozen,unplug-split-v1,leader-split-v2-frozen,unplug-v1-split,stack-split-v1-frozen,leftarm-split-v5-frozen}-eef ~/hackathon_data/ft-v1/
-(cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/ft-v1)   # T1, T2 counts
-~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1 --check
-# PAID, about $200 (1000 steps): only with the team's yes
 tmux new -A -s finetune
-~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1
+~/dream-env/bin/python ~/hill-climb-harness/tools/finetune_watch.py start ~/hackathon_data/ft-final \
+    --name relay-final --suffix relay-final --max-requeues 1 --i-accept-charges
 ```
 
-The platform reads each subfolder of `ft-v1` as one session. Keep the default constant learning rate (not cosine),
-which keeps `resume_from` possible. Training takes 7-8 h, so the model is ready around 04:00, and its first call can
-take up to 1 h to warm up.
+It queues exactly what `tools/finetune.py --arm metal` would (the kit's embodiment and settings). Overnight:
+retries network and 5xx errors forever; renames on a used suffix or dataset name; waits on the account's job limit;
+re-queues a failed training once (`--max-requeues 1`, a second charge) on the same processed dataset under
+`relay-final-r2`; stops and says why for anything that needs a person (no credits, a data problem, a bad key).
+When the model is published it writes `~/finetune_watch/MODEL.txt` and warms the model up (its first start can
+take an hour). `--keep-warm-until 08:30` keeps it warm until then (each ping is a small inference charge).
 
-## Sunday morning
+```bash
+cat ~/finetune_watch/STATUS.txt            # one line: where it is
+tail -f ~/finetune_watch/watch.log         # every poll
+cat ~/finetune_watch/MODEL.txt             # the model id, once ready
+~/dream-env/bin/python ~/hill-climb-harness/tools/finetune_watch.py resume   # after a crash or reboot
+```
 
-1. Warm the model up early: `dreamcli robot run --checkpoint dream-1-ft:<account>-unplug-v1 --task "unplug the USB
-   cable at the end of the hub nearest the right arm" --dry-run` (the first call may wait up to an hour).
-2. Start the agent with `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up --view --view-port 8093`:
-   plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
-3. Compare fine-tune and base on the same plan, `--verifier monitor+manual`, a few runs each: unplug success first,
-   then stacking. Put the winner's id in `plans/hill_climb_v4.yaml` (`checkpoint:`). If the fine-tune unplugs better
-   but stacks worse, splitting the checkpoint by stage is a harness change to make then.
-4. Match: `--live` with `monitor` only.
+Without `--i-accept-charges` it refuses. The kit's own command still works too (no watcher):
+`~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-final --arm metal --name relay-final --suffix relay-final`.
+
+Training takes 7-8 h plus up to 1 h warm-up: queued at 23:15, the model is ready and warm around 07:00-08:30.
+
+## Sunday morning: the fine-tune is ready
+
+**Model: `dream-1-ft:bb4b9e5f-relay-final`**, ready 07:02, warm 07:14 (8 Nov). Only the fine-tune account's key runs
+it, and that key is not the station's saved one: start every Dream program below in a shell that has it, either the
+tmux session `finetune` (it still holds the key: `tmux attach -t finetune`) or a new shell after
+`read -rs DREAM_API_KEY; export DREAM_API_KEY`. Base Dream-1 runs under that key too, so one agent serves both
+models. Every call is billed to that account.
+
+Checked with no arm moving (8 Nov 08:30): the plan's prompts against the trained texts (`python -m harness.tasks`:
+T1 69 episodes, T2 55, stacking 4 and balls 12 "low", T6 none: the fine-tune keeps base Dream-1's half for it),
+the Claude monitor live on the table photo (4/4 right, 8.5 s a reply), the harness tests.
+
+Before the match, at the robot, a hand on the e-stop. These move the arms; a person runs them.
+
+1. **Dream's own check of the loop and the model** (`python -m dream.check`, about 2 minutes; the station agent must
+   be stopped). LOOP moves the arms in small circles; INPUTS asks the person whether the cameras on its page
+   (`http://127.0.0.1:8643/`) look right; MODEL asks the fine-tune about 8 moments of a recorded unplug, with nothing
+   moving (8 billed calls), and sets each answer against the recording:
+
+       ~/dream-env/bin/python -m dream.check --recording ~/hackathon_data/ft-final/quest-split-v4-final-eef -- \
+         ~/dream-env/bin/dreamcli robot run --checkpoint dream-1-ft:bb4b9e5f-relay-final \
+         --task "unplug the USB cable at the end of the hub nearest the right arm"
+
+   FAULT `none found` means go on. `your control loop` means fix that line first; `the model` means the fine-tune
+   answers wrongly on its own training data (use base Dream-1 for the match and send Dream the four lines).
+2. **Look before it moves**: the same `dreamcli robot run ... --dry-run --view-3d` (runs the model, writes no target
+   to an arm) for each model, with the cables in the hub. The 3D page draws each chunk's hand path: the fine-tune's
+   right hand should head to the plug at the hub's right end and close on it.
+3. **A/B on Stage 1** (the station agent up: `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up
+   --view --view-port 8093`, plain `up`). Alternate base and fine-tune run by run, 5 runs each, all 4 cables in the
+   hub before each run:
+
+       python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench
+       python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench \
+         --var model=dream-1-ft:bb4b9e5f-relay-final
+       python -m harness.report runs/bench --by-checkpoint
+
+   Pick the model with the higher unplug rate (then the fewer attempts). A tie goes to the fine-tune only if
+   put_cable_down is better too.
+4. **Stacking and balls**: the fine-tune saw only 4 block and 12 ball episodes. Two runs of the whole match plan on
+   each model (`plans/hill_climb_v4.yaml`, same `--var model=...`) show whether it stacks as well as base Dream-1.
+   If the fine-tune wins the cable but stacks worse, a per-stage model is a harness change to make then. If stacking
+   runs on the fine-tune, delete `tower_prompts` from the plan (the fine-tune only knows "put a block on top of the
+   stack").
+5. **Match**: `python -m harness plans/hill_climb_v4.yaml --live` (verifier `monitor` only, no human input after go),
+   with `--var model=dream-1-ft:bb4b9e5f-relay-final` if the fine-tune won.

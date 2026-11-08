@@ -41,6 +41,14 @@ def run_dirs(root: str | Path, last: int | None = None) -> list[Path]:
     return dirs[-last:] if last else dirs
 
 
+def checkpoint_of(run: Path) -> str:
+    """The model a run started (the runner logs it on every `start` event); "?" for a run with none."""
+    for e in _jsonl(run / "events.jsonl"):
+        if e.get("event") == "start" and e.get("checkpoint"):
+            return str(e["checkpoint"])
+    return "?"
+
+
 def _normalise(reason: str) -> str:
     reason = reason.split(":")[0] if reason.startswith(("verifier said no", "monitor says", "stalled", "regressed")) else reason
     return re.sub(r"\d+(\.\d+)?", "N", reason).strip()[:80] or "(no reason)"
@@ -111,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m harness.report", description="Summarise Hill Climb runs")
     p.add_argument("runs", help="the runs/ directory")
     p.add_argument("--last", type=int, default=None, help="only the newest N runs")
+    p.add_argument("--by-checkpoint", action="store_true",
+                   help="one table per model the runs used (an A/B of base Dream-1 against a fine-tune)")
     args = p.parse_args(argv)
     try:
         dirs = run_dirs(args.runs, args.last)
@@ -120,7 +130,13 @@ def main(argv: list[str] | None = None) -> int:
     if not dirs:
         print("no finished runs found", file=sys.stderr)
         return 1
-    print(format_report(build_report(dirs)))
+    if not args.by_checkpoint:
+        print(format_report(build_report(dirs)))
+        return 0
+    groups: dict[str, list[Path]] = defaultdict(list)
+    for d in dirs:
+        groups[checkpoint_of(d)].append(d)
+    print("\n\n".join(f"== {ck} ==\n{format_report(build_report(ds))}" for ck, ds in sorted(groups.items())))
     return 0
 
 
