@@ -48,9 +48,11 @@ def test_station_faults_seen_on_the_nuc_do_not_end_the_match(name, tmp_path):
     assert r["out"] >= 1 and not r["dq"]
 
 
-def test_refused_plug_prompt_skips_the_stage_not_the_match(tmp_path):
-    r = match("refusal_plug", 1, tmp_path)
-    assert r["t_end"] >= 280 and r["tower"] >= 2, r["reason"]
+def test_refused_skip_stage_prompt_skips_the_stage_not_the_match(tmp_path):
+    r = match("refusal_put_down", 1, tmp_path)
+    assert r["t_end"] >= 280, r["reason"]
+    stages = {n: ok for n, ok, _ in r["stages"]}
+    assert stages["put_cable_down"] is False and stages.get("stack_2") is True, r["stages"]
 
 
 def test_arm_loss_still_ends_the_run_without_a_restart(tmp_path):
@@ -69,8 +71,8 @@ def test_a_held_unplugged_cable_is_never_plugged_back_in(name, tmp_path):
 
 def test_a_corrupt_stage_start_frame_does_not_blind_the_stage(tmp_path):
     r = match("corrupt_first_frame", 1, tmp_path)
-    assert ("unplug_cable", True) in [(n, ok) for n, ok, _ in r["stages"]], r["stages"]
-    assert r["tower"] >= 2 or r["plugged"] >= 1
+    passed = {n for n, ok, _ in r["stages"] if ok}
+    assert {"unplug_cable", "stack_2"} <= passed, r["stages"]
 
 
 def test_no_guard_answers_on_ball_stages_stops_the_run(tmp_path):

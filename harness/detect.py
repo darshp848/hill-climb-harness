@@ -32,7 +32,8 @@ try:
 except ImportError:   # pragma: no cover
     _ndi = None
 
-WORK_W = 320           # frames are shrunk to this width before detection
+SMALL_BALL_FRAC = 0.004  # a golf ball in the overhead view is ~0.05-0.1% of the image
+WORK_W = 640           # frames are shrunk to this width before detection
 COLORS = {"avoid": (230, 20, 20), "target": (20, 200, 60), "info": (30, 120, 230)}
 
 
@@ -41,11 +42,13 @@ class ClassSpec:
     name: str
     hsv_lo: tuple[int, int, int]
     hsv_hi: tuple[int, int, int]
-    shape: str = "any"             # round | box | cylinder | any
     min_frac: float = 0.0005       # blob area as a fraction of the image
     max_frac: float = 0.15
-    role: str = "info"             # avoid (draw red, guard) | target | info
-    label: str = ""
+    label: str = ""                # colour name, e.g. "blue"
+    # which shapes of this colour to report, and how: kind (ball | cube | stick) -> role (avoid | target | info).
+    # Empty = every kind, role info. Black lists only ball, so the black gripper fingers are never reported.
+    kinds: dict[str, str] = field(default_factory=dict)
+    small_ball: bool = False       # this colour only comes as balls: read a small compact blob as a ball
 
 
 @dataclass
@@ -78,6 +81,7 @@ class DetectConfig:
     wrist_roles: list[str] = field(default_factory=lambda: ["wrist"])
     grip_roi: tuple[float, float, float, float] = (0.25, 0.35, 0.75, 1.0)   # x0 y0 x1 y1 between the fingers
     grip_min_frac: float = 0.01   # a ball this big in the wrist view is in or at the fingers
+    table_roi: tuple[float, float, float, float] | None = None   # overhead view: ignore blobs outside (people, chairs)
     annotate: bool = True
 
 
@@ -86,14 +90,16 @@ def load_config(path: str | Path) -> DetectConfig:
     classes = []
     for name, c in (raw.get("classes") or {}).items():
         lo, hi = c["hsv"]
-        classes.append(ClassSpec(name=name, hsv_lo=tuple(lo), hsv_hi=tuple(hi), shape=c.get("shape", "any"),
+        classes.append(ClassSpec(name=name, hsv_lo=tuple(lo), hsv_hi=tuple(hi),
                                  min_frac=float(c.get("min_frac", 0.0005)), max_frac=float(c.get("max_frac", 0.15)),
-                                 role=c.get("role", "info"), label=c.get("label", name)))
+                                 label=c.get("label", name), kinds=dict(c.get("kinds") or {}),
+                                 small_ball=bool(c.get("small_ball", False))))
     g = raw.get("guard") or {}
     return DetectConfig(classes=classes, guard_class=g.get("class", "black_ball"),
                         wrist_roles=list(g.get("wrist_roles", ["wrist"])),
                         grip_roi=tuple(g.get("grip_roi", (0.25, 0.35, 0.75, 1.0))),
-                        grip_min_frac=float(g.get("grip_min_frac", 0.01)), annotate=bool(raw.get("annotate", True)))
+                        grip_min_frac=float(g.get("grip_min_frac", 0.01)), annotate=bool(raw.get("annotate", True)),
+                        table_roi=tuple(raw["table_roi"]) if raw.get("table_roi") else None)
 
 
 def _load(jpeg: bytes) -> Image.Image | None:
@@ -137,22 +143,29 @@ def _in_range(hsv: np.ndarray, lo: tuple[int, int, int], hi: tuple[int, int, int
     return hue & (s >= lo[1]) & (s <= hi[1]) & (v >= lo[2]) & (v <= hi[2])
 
 
-def _shape_ok(spec: ClassSpec, w: int, h: int, fill: float) -> tuple[bool, str | None]:
-    aspect = w / h if h else 99.0
-    if spec.shape == "round":
-        return 0.7 <= aspect <= 1.43 and 0.55 <= fill <= 0.95, None
-    if spec.shape == "box":
-        return 0.4 <= aspect <= 2.5 and fill >= 0.7, None
-    if spec.shape == "cylinder":
-        if 0.7 <= aspect <= 1.43 and fill <= 0.92:
-            return True, "upright"       # round from above: standing on its end
-        if (aspect > 1.6 or aspect < 0.62) and fill >= 0.6:
-            return True, "lying"
-        return fill >= 0.6, None
-    return True, None
+def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
+    """(kind, orientation) of one blob from its pixels, independent of rotation.
+    ball: compact and fills its circumscribed circle; cube: compact but square (or an upright stick seen from above);
+    stick: long and thin, i.e. lying on its side."""
+    n = len(xs)
+    if n < 6:
+        return None, None
+    pts = np.stack([xs, ys], axis=1).astype(float)
+    c = pts.mean(axis=0)
+    ev = np.linalg.eigvalsh(np.cov((pts - c).T)) if n > 2 else np.array([1.0, 1.0])
+    elong = float(np.sqrt(max(ev[1], 1e-9) / max(ev[0], 1e-9)))
+    rmax = float(np.sqrt(((pts - c) ** 2).sum(axis=1).max())) + 0.5
+    roundness = n / (np.pi * rmax * rmax)          # disc ~1, square ~0.64, thin bar small
+    if elong >= 2.2:
+        return "stick", "lying"
+    if elong <= 1.5 and roundness >= 0.72:
+        return "ball", None
+    if elong <= 1.6:
+        return "cube", None
+    return None, None
 
 
-def detect(jpeg: bytes, cfg: DetectConfig) -> list[Box]:
+def detect(jpeg: bytes, cfg: DetectConfig, *, overhead: bool = False) -> list[Box]:
     im = _load(jpeg)
     if im is None:
         return []
@@ -161,7 +174,10 @@ def detect(jpeg: bytes, cfg: DetectConfig) -> list[Box]:
     total = float(H * W)
     out: list[Box] = []
     for spec in cfg.classes:
-        lab, n = _label(_in_range(hsv, spec.hsv_lo, spec.hsv_hi))
+        mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
+        if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
+            mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
+        lab, n = _label(mask)
         if n == 0:
             continue
         sizes = np.bincount(lab.ravel())
@@ -171,21 +187,27 @@ def detect(jpeg: bytes, cfg: DetectConfig) -> list[Box]:
             if not spec.min_frac <= frac <= spec.max_frac:
                 continue
             ys, xs = np.nonzero(lab == i)
-            x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
-            fill = area / float((x1 - x0) * (y1 - y0))
-            ok, orient = _shape_ok(spec, x1 - x0, y1 - y0, fill)
-            if ok:
-                out.append(Box(spec.label or spec.name, x0 / W, y0 / H, x1 / W, y1 / H, frac, orient, spec.role))
+            kind, orient = _kind(ys, xs)
+            if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
+                kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
+                                # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
+            if kind is None or (spec.kinds and kind not in spec.kinds):
+                continue
+            role = spec.kinds.get(kind, "info")
+            label = f"{spec.label or spec.name} {kind}"
+            out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
+                           orient, role))
+    if overhead and cfg.table_roi:
+        x0, y0, x1, y1 = cfg.table_roi
+        out = [b for b in out if x0 <= b.cx <= x1 and y0 <= b.cy <= y1]
     return out
 
 
-def held(boxes: list[Box], cfg: DetectConfig, cls: str | None = None) -> Box | None:
-    """A box of `cls` (default the guard class) between the fingers of a wrist camera, big enough to be held."""
-    cls = cls or cfg.guard_class
-    cls = next((c.label or c.name for c in cfg.classes if c.name == cls), cls)   # boxes carry the label
+def held(boxes: list[Box], cfg: DetectConfig) -> Box | None:
+    """A ball the plan must never bin (role avoid) between the fingers of a wrist camera, big enough to be held."""
     rx0, ry0, rx1, ry1 = cfg.grip_roi
     for b in boxes:
-        if b.cls == cls and b.frac >= cfg.grip_min_frac and rx0 <= b.cx <= rx1 and ry0 <= b.cy <= ry1:
+        if b.role == "avoid" and b.frac >= cfg.grip_min_frac and rx0 <= b.cx <= rx1 and ry0 <= b.cy <= ry1:
             return b
     return None
 
@@ -217,8 +239,11 @@ class TableDetector:
     def from_file(cls, path: str | Path) -> TableDetector:
         return cls(load_config(path))
 
+    def _overhead(self, role: str) -> bool:
+        return not any(w in role for w in self.cfg.wrist_roles)
+
     def boxes(self, frames: dict[str, bytes]) -> dict[str, list[Box]]:
-        return {role: detect(j, self.cfg) for role, j in frames.items()}
+        return {role: detect(j, self.cfg, overhead=self._overhead(role)) for role, j in frames.items()}
 
     def guard(self, frames: dict[str, bytes]) -> tuple[bool | None, str]:
         """(True, why) if a wrist camera shows the guard class between the fingers; (False, ...) if the wrist views
@@ -239,10 +264,10 @@ class TableDetector:
     def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
         if not self.cfg.annotate:
             return frames
-        return {role: annotate(j, detect(j, self.cfg)) for role, j in frames.items()}
+        return {role: annotate(j, detect(j, self.cfg, overhead=self._overhead(role))) for role, j in frames.items()}
 
     def legend(self) -> str:
-        avoid = [c.label or c.name for c in self.cfg.classes if c.role == "avoid"]
+        avoid = [f"{c.label or c.name} {k}" for c in self.cfg.classes for k, r in c.kinds.items() if r == "avoid"]
         return ("Boxes on the images come from a local colour detector and can miss or mislabel objects: "
                 f"RED boxes = {', '.join(avoid) or 'objects to avoid'} (never pick these); green = targets; "
                 "blue = other objects (blocks: colour, cylinders: upright or lying).")
@@ -253,10 +278,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("config")
     ap.add_argument("image")
     ap.add_argument("--out", default="boxed.jpg")
+    ap.add_argument("--wrist", action="store_true", help="the image is a wrist view (no table_roi)")
     args = ap.parse_args(argv)
     det = TableDetector.from_file(args.config)
     jpeg = Path(args.image).read_bytes()
-    boxes = detect(jpeg, det.cfg)
+    boxes = detect(jpeg, det.cfg, overhead=not args.wrist)
     for b in boxes:
         print(f"{b.text():24s} x {b.x0:.2f}-{b.x1:.2f} y {b.y0:.2f}-{b.y1:.2f} area {b.frac:.2%}")
     Path(args.out).write_bytes(annotate(jpeg, boxes))

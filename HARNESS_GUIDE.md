@@ -247,6 +247,13 @@ guard:
 - A `guard` answer counts even when the rest of the monitor's reply can't be read.
 - The log gets `guard_yes` events (with the count) and one `guard_tripped` event. `summary.json` has `guard_tripped: true`.
 - It only sees what the monitor sees, at the monitor's pace: one answer per `check_every_s`, none during `settle_s` after a prompt change. It is a backstop, not a reflex. A team member still watches, ready to call "stop".
+- `max_blind_s: 20` also stops the run when a guarded stage has had no yes/no answer that long (Claude API down, bad frames).
+- **Local detector** (`--detect plans/table_colors.yaml`): `harness/detect.py` checks the wrist frames on every poll, with no API call, and counts an illegal ball (white, or black) between the fingers as a guard yes. It also draws labelled boxes (ball / cube / lying stick, by colour) on the frames the monitor sees. Dream's inputs and the prompts are unchanged. Re-tune the colours on the station's own cameras: `python -m harness.detect plans/table_colors.yaml frame.jpg --out boxed.jpg`.
+
+### Other stage fields added 8 Nov
+- `confirm: 1` on a stage overrides the plan's `confirm` (for stages where a false "done" costs nothing).
+- `skip_unless: "question?"` asks the monitor once before the prompt; the stage is skipped unless the answer is a confident yes.
+- Offline stress test of a whole match, no key needed: `python experiments/stress_match.py` (see `experiments/STRESS_FINDINGS.md`).
 
 ## 6e. Keep a watcher arm watching (`watch:`)
 

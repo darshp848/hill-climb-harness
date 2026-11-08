@@ -37,9 +37,22 @@ Faults are modelled on the station NUC's `robots-inference.jsonl` from 7 Nov: 42
 8. Guard: a "yes" from a call that was in flight across a stage change is no longer dropped; `max_blind_s` (20 in v4)
    stops the run when a ball stage has had no guard answer that long.
 
+Main dropped the plug-in stages on 7 Nov (merged here), so the re-plug fault can no longer happen with the v4 plan;
+`skip_unless` stays for any plan that plugs in, and `release_cable` still frees a held plug before stacking.
+
+## Local detector (`--detect plans/table_colors.yaml`)
+`harness/detect.py` finds coloured blobs and calls each a ball, cube or lying stick from its shape. Tuned on the
+top-down photo of station C (Drive IMG_2698; crop in `tests/data/`): it finds the white ball (illegal), the green,
+yellow and orange balls, blue and pink cubes, and the yellow and pink sticks; the black gripper fingers are not
+reported. The runner asks it about the guard on every poll (wrist views: an "avoid" ball between the fingers), and
+the monitor gets the frames with labelled boxes. Policy inputs and prompts are untouched.
+Sim, black_p 0.3, frames 2 s old, 6 seeds: matches lost to a binned illegal ball 4/6 with the monitor guard alone,
+2/6 with the local guard. Colours must be re-checked on the station's own overhead and wrist cameras.
+
 ## Still open
-- The black-ball guard can't beat the policy: pick to bin takes a few seconds, the monitor answers ~4 s after the
-  frame, checks run every 3 s. A fast local detector on the wrist camera is the real fix.
+- The illegal-ball guard still loses some races: pick to bin takes a few seconds, the debug view's frames are a trip
+  old (~3.4 s cadence on the station). The local detector helps (above) but can't see faster than the frames.
+- higher_* stages risk the tower: a knock-down after the pass bar keeps the +20 but loses every height point.
 - Touching a block during unplug is instant; nothing that reads camera frames afterwards can prevent that DQ.
 - Watch blocks: fixes eat the stage timeout, and after `max_fixes` the stage runs unwatched without a log line.
 - Time-budget end is reported as `ok: false, "time budget exceeded"`, which is the normal end of a v4 match.

@@ -1,117 +1,120 @@
-# Teleop recording plan: Sat 7 Nov, now until the fine-tune is queued (~21:00)
+# Teleop recording plan: Sat 7 Nov, until the fine-tune is queued at 20:00
 
-Goal: one fine-tune, queued tonight, that knows every prompt the harness will send in a match.
-Each task text below is used **byte for byte** in two places: the dashboard's "Set task" box when you record
-it, and the prompt in `plans/hill_climb_v4.yaml`. Check the match with:
+## Decision (17:50): one fine-tune on UNPLUG and PUT-DOWN only
 
-```bash
-# once, from the laptop: copy the harness to the station (it is not there yet)
-rsync -a --exclude .git --exclude runs ~/Documents/GitHub/hill-climb-harness/ pah@10.103.0.143:hill-climb-harness/
-# on the station, any time (read only)
-cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/unplug-v1 ~/hackathon_data/relay-v1
-```
+- **Unplug is everything.** It is Stage 1's pass bar: without it the run scores 0, and base Dream-1 unplugs about
+  1 try in 6. Every demo minute goes here.
+- **No plug-in.** Base Dream-1 never seated a plug, and no teleop take completed one (17:09-17:41: 50-140 s of
+  fumbling, never released). The +20 per cable is not reachable this weekend. It is also out of the match plan now.
+- **Stacking and balls stay on base Dream-1's own skill** (it stacks 2-4 cubes zero-shot). The fine-tune mixes in
+  Dream's data by default (`base_share` 0.5), which keeps general skill. Sunday morning, test the fine-tune on a
+  stack; if it got worse than base, run those stages on base Dream-1 (the harness can switch checkpoint per run).
+- **One job at 20:00**, 1000 steps (the default, ~$200), constant learning rate. Ready around 04:00, plus up to 1 h
+  of warm-up on its first call.
 
-## The six task texts (copy-paste these, do not retype)
+## The two task texts (set one in the dashboard before EVERY take)
 
-| # | Task text | Arm | Episode | Target |
+| # | Task text | Take | Have | Want by 19:45 |
 | --- | --- | --- | --- | --- |
-| T1 | `unplug the USB cable at the end of the hub nearest the right arm` | right | 10-20 s, ends holding the cable clear of the hub | 50 (7 good already) |
-| T2 | `put the held cable down on the table away from the hub` | right | 5-10 s, ends gripper open, arm up | 40 |
-| T3 | `plug the loose USB cable on the table into a free port on the hub` | pick one, always the same | 15-30 s, ends plug seated, gripper open, arm up | 50 |
-| T4 | `put a block on top of the stack` | pick one, always the same | 10-20 s, ends gripper open, arm up and clear of the tower | 70 |
-| T5 | `put a golf ball in the bin` | the arm nearest the bin | 8-15 s, ends ball released in the bin | 50 |
-| T6 | `open both grippers and move the arms up` | both | 3-6 s | 25 |
+| T1 | `unplug the USB cable at the end of the hub nearest the right arm` | Enter with the gripper open ~5 cm from the end plug. Squeeze fully, pause, pull straight up until clear. Save while holding it up. 5-10 s | ~14 | 35+ |
+| T2 | `put the held cable down on the table away from the hub` | Starts holding the cable. Carry it to the same spot each time, open, lift. Save. 3-6 s | ~10 | 25 |
 
-T1 is the text already in `unplug-v1`, so its 7 good episodes count. The harness also uses T1 for an extra unplug
-(+5), so record about 1 in 3 T1 episodes with the end port already empty: the next cable along is then "the end".
-From the station tests (HARNESS_GUIDE.md section 11): a T1 that works squeezes fully, on the plug or its black strain
-relief, pauses, then pulls straight out along the port. Most T1 episodes may start about 5 cm in front of the plug
-(5-8 s each), plus a few full ones from home so the approach joins on. T6 is the harness's one recovery prompt.
-Every other recovery in the plan just re-sends the stage's own prompt, so it needs no extra demos.
+Chain them: T1, save, switch the text to T2, Enter, put down, save. Then plug the cable back in by hand
+(arms still, between takes) and repeat. About 1 in 3 T1 takes with the end port already empty (the harness's extra
+unplug), and about 1 in 5 starting from home instead of 5 cm away.
 
-## How to record: chain the episodes
+Other texts the harness sends (`put a block on top of the stack`, `put a golf ball in the bin`,
+`open both grippers and move the arms up`) are left to base skill: `harness.tasks` will list them as MISSING, which
+is expected.
 
-The harness changes the prompt live, without homing. So each task's demos must start where the previous task
-leaves the arms. Record the relay in order, as back-to-back episodes:
+## Rules for every take
 
-- One person wears the Quest. A second person sits at the dashboard (http://localhost:8080) and presses "Set task"
-  with the next text **before** the operator presses A.
-- Unplug → save (A) → Set task T2 → A → put it down → save. Then reset the cable and do it again.
-- Stack: one tower gives 3-4 T4 episodes in a row. Place a block, save, A, place the next one, save.
-  Knock the tower down and rebuild it somewhere else.
-- Balls: one ball per episode, back to back. Empty the bin every ~8 balls.
-- About 1 in 4 episodes should start from the home pose instead (the match starts there).
+- **Press Enter before touching anything,** gripper open, so the take starts before the grasp.
+- **Under 30 s, one sub-task, exact text.** Discard (`d` / B) any take that stalls, fails or fumbles.
+- **Full squeeze, straight pull.** The good takes pull the trigger fully for most of the grasp.
+- **No hands in the overhead camera,** nobody else at the table during a take, left arm (leader) held low.
+- **Leader/follower recording:** record into its own folder, then freeze the left wrist camera (below).
 
-New folder for everything recorded from now on (T1 included). It is combined with `unplug-v1` at upload:
+## Splitting a long take into task episodes
+
+A take that does several sub-tasks in a row can be cut into one episode per sub-task, each under its exact text,
+into a NEW dataset (the source is never touched). Find the cut times from the video, write a spec like
+`tools/splits/plug-unplug-v1_ep3.json`, then run it on the laptop (it needs pyarrow, numpy and ffmpeg; the station
+has no ffmpeg):
 
 ```bash
-# on the station, in tmux "collect", hand on the e-stop
-cd ~/physical-ai-hacks
-uv run dhk-collect --config configs/station.yaml --dataset-dir ~/hackathon_data/relay-v1
+rsync -a pah@10.103.0.143:hackathon_data/<source> ~/hackathon_data/          # the spec's paths start at ~/hackathon_data
+python tools/split_episodes.py tools/splits/<spec>.json
+rsync -a ~/hackathon_data/<out> pah@10.103.0.143:hackathon_data/
+# on the station: ~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/<out> --arm metal   (runs Dream's checks)
 ```
 
-## Rules for every demo
-
-- **One strategy per task.** Use the same arm and the same grasp every time. Vary where the objects are, not
-  the method.
-- **Start still, end still.** Wait about 1 s with the arms still at both ends of the episode.
-- **Keep episodes at 10-30 s.** Throw away anything that went wrong with B. A fumble you recover from is fine.
-- **T2: the unplugged cable always goes to the same spot,** far from the loose cables. An unplugged cable may never
-  be plugged back in (rubric), and the model must not mistake it for a loose one.
-- **T4: start from 1, 2 and 3 blocks stacked,** and take a big flat block first. Always end with the arm lifted
-  clear: the tower must stand 3 s after release.
-- **T5: put both black 8-balls among the golf balls in every scene, some right beside the target.** Never touch
-  them. A black ball in the bin loses the match.
-- **T3 is the biggest prize (+20 each, up to 4) and the hardest by teleop.** If fewer than 5 of your first 10 tries
-  are good, stop recording T3 and spend that time on T4 and T5.
-
-## Timeline
-
-| Time | Block | What |
-| --- | --- | --- |
-| 14:45-15:45 | 1 | T1 → T2 chains, ~40 pairs |
-| 15:45-17:15 | 2 | T4, ~70 placements across ~20 towers |
-| 17:15-17:30 | break | Watch episodes on the dashboard, delete bad ones. Dry-check the data (below) |
-| 17:30-18:45 | 3 | T3, ~50 (or the cut rule above) |
-| 18:45-19:45 | 4 | T5, ~50 |
-| 19:45-20:15 | 5 | T6 ×25, then top up whichever task is furthest from its target |
-| 20:15-21:00 | queue | Clean up, `add_eef`, check, then the paid job |
-
-If you run behind, cut in this order: T6, then T5, then T3. T1, T2 and T4 are the pass bars, so never cut them.
-
-## Clean-up before upload (needs your yes for each episode number)
-
-In `unplug-v1`: episode 1 is 2.4 s (accidental) and episode 6 is **96 s**; drop both. Episode 4 is 46 s; watch it
-and keep it only if it's one clean unplug.
+**Automatic cut times:** `tools/auto_split.py` proposes the spec from the right gripper's grasps (a grasp at the
+hub that lifts and releases away from it = unplug + put down; a grasp away from it that releases at the hub =
+plug-in), and writes one review image per episode (right wrist at each segment's start and end, overhead at its
+end). Look at every row, delete bad segments from the spec, then run `split_episodes.py`:
 
 ```bash
-uv run dhk-dataset list ~/hackathon_data/unplug-v1
-uv run dhk-dataset drop ~/hackathon_data/unplug-v1 6 1      # renumbers after each; check `list` again
+python tools/auto_split.py ~/hackathon_data/<dataset> --out ~/hackathon_data/<dataset>-split --spec spec.json --sheets sheets/
 ```
 
-## Queue the fine-tune (~20:30, arms not needed)
+Done so far: `unplug-split-v1` (3 × T1 + 3 × T2 from the 60 s Quest take) and `leader-split-v1-frozen`
+(7 × T1 + 7 × T2 from the 17:09-17:16 leader takes, left wrist frozen); both have `-eef` built and pass Dream's checks.
+Better still, record each sub-task as its own episode from the start.
+
+## Leader/follower episodes: freeze the left wrist camera
+
+With `follower_code/metal/leader_collect.py` the left arm is the leader, moved by hand, so its wrist camera swings
+around and films the operator (measured on the 17:09 takes: the view wanders 59-63 on a 0-255 scale, against 6 for
+a parked camera). In a match the left arm is parked and that camera is still. Before `add_eef`, write a copy where
+that camera shows the parked view (laptop; the station has no ffmpeg):
+
+```bash
+rsync -a pah@10.103.0.143:hackathon_data/<leader-dataset> ~/hackathon_data/
+python tools/freeze_camera.py ~/hackathon_data/<leader-dataset> --ref ~/hackathon_data/<quest-dataset>:EP:0 --list
+python tools/freeze_camera.py ~/hackathon_data/<leader-dataset> ~/hackathon_data/<leader-dataset>-frozen \
+    --episodes all --ref ~/hackathon_data/<quest-dataset>:EP:0
+rsync -a ~/hackathon_data/<leader-dataset>-frozen pah@10.103.0.143:hackathon_data/
+# station: ~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/<leader-dataset>-frozen --arm metal
+```
+
+The reference must be a parked-left-arm frame from the CURRENT table layout. Keep leader and Quest episodes in
+separate folders, so `--episodes all` is right. Dream's checks pass on a frozen copy (tested 17:15).
+
+## Clean-up done
+
+17:00: 8 empty or no-grasp episodes dropped (unplug-v1 1, 2, 5, 7, 8, 9; plug-unplug-v1 1, 2). `unplug-v1` keeps 4
+(30, 15, 46 and 96 s). Long multi-task takes stay in `plug-unplug-v1` and never go up as they are: only their
+reviewed splits do.
+
+## Queue the fine-tune (20:00, arms not needed)
+
+What goes in: `unplug-v1`, `unplug-split-v1`, `leader-split-v1-frozen`, and whatever is recorded from now on
+(leader takes: split or recorded short with the exact text, then left wrist frozen). Each as its `-eef` copy:
 
 ```bash
 cd ~/physical-ai-hacks
 ~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/unplug-v1 --arm metal --replace
-~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/relay-v1 --arm metal --replace
-mkdir -p ~/hackathon_data/ft-v1 && cp -r ~/hackathon_data/unplug-v1-eef ~/hackathon_data/relay-v1-eef ~/hackathon_data/ft-v1/
-(cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/ft-v1)   # no MISSING?
-~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name relay-v1 --suffix relay-v1 --check
-# PAID (about $200 for the default 1000 steps). Only after the organizers' credits are on the account:
+# + add_eef on each new folder (the frozen copy for leader takes)
+mkdir -p ~/hackathon_data/ft-v1 && cp -r ~/hackathon_data/{unplug-v1,unplug-split-v1,leader-split-v1-frozen}-eef ~/hackathon_data/ft-v1/
+(cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/ft-v1)   # T1, T2 counts
+~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1 --check
+# PAID, about $200 (1000 steps): only with the team's yes
 tmux new -A -s finetune
-~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name relay-v1 --suffix relay-v1
+~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1
 ```
 
-The platform reads each subfolder of `ft-v1` as one session. Leave the learning-rate schedule constant, not
-cosine: this is a multi-task model, and constant keeps `resume_from` possible on Sunday. Training takes 7-8 h,
-so the model should be ready around 05:00. Its first call can then take up to 1 h to warm up.
+The platform reads each subfolder of `ft-v1` as one session. Keep the default constant learning rate (not cosine),
+which keeps `resume_from` possible. Training takes 7-8 h, so the model is ready around 04:00, and its first call can
+take up to 1 h to warm up.
 
 ## Sunday morning
 
-1. Warm the model up early: `dreamcli robot run --checkpoint dream-1-ft:<account>-relay-v1 --task "put a block on
-   top of the stack" --dry-run` (the first call may wait up to an hour).
-2. Put the id in `plans/hill_climb_v4.yaml` (`checkpoint:`). Start the agent with
-   `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up --view --view-port 8093`: plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
-3. Run the harness with `--dry-run`, then `--live` with `--verifier monitor+manual` for practice. Use `monitor`
-   alone in a match.
+1. Warm the model up early: `dreamcli robot run --checkpoint dream-1-ft:<account>-unplug-v1 --task "unplug the USB
+   cable at the end of the hub nearest the right arm" --dry-run` (the first call may wait up to an hour).
+2. Start the agent with `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up --view --view-port 8093`:
+   plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
+3. Compare fine-tune and base on the same plan, `--verifier monitor+manual`, a few runs each: unplug success first,
+   then stacking. Put the winner's id in `plans/hill_climb_v4.yaml` (`checkpoint:`). If the fine-tune unplugs better
+   but stacks worse, splitting the checkpoint by stage is a harness change to make then.
+4. Match: `--live` with `monitor` only.

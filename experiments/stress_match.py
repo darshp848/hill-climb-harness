@@ -304,6 +304,12 @@ class SimStation:
     def set_prompt(self, prompt: str) -> dict[str, Any]:
         self.posts.append((self.clock.now, "/prompt", prompt))
         self.prompt = prompt
+        for sub, n in list(self.refuse.items()):   # Dream checks every new instruction, not only at /start
+            if n > 0 and sub in prompt and self.state == "running":
+                self.refuse[sub] = n - 1
+                self.table.set_prompt(self.clock.now, prompt)
+                self._error("refusal")
+                return self.status()
         self.table.set_prompt(self.clock.now, prompt)
         return self.status()
 
@@ -538,7 +544,7 @@ SCENARIOS: dict[str, Scenario] = {s.name: s for s in [
     Scenario("starve_mid", faults=[Fault(70, "starve")], note="action buffer empty 12 s (seen 2x)"),
     Scenario("linalg_mid", faults=[Fault(40, "linalg")], note="SVD did not converge (seen 3x)"),
     Scenario("gateway_x3", faults=[Fault(30, "gateway"), Fault(90, "gateway"), Fault(150, "gateway")]),
-    Scenario("refusal_plug", refuse={"plug the loose": 3}, note="the plug-in prompt is refused every time"),
+    Scenario("refusal_put_down", refuse={"put the held cable down": 3}, note="the put-down prompt is refused every time"),
     Scenario("arm_loss", faults=[Fault(100, "arm")], note="must stop, must not restart"),
     Scenario("api_outage_30s", outages=[(20, 50)], note="Claude API unreachable for 30 s during unplug"),
     Scenario("api_outage_balls", Behaviour(black_p=0.25), outages=[(0, 1e9)],

@@ -12,11 +12,10 @@ from harness import tasks
 PLANS = Path(__file__).resolve().parent.parent / "plans"
 V4 = PLANS / "hill_climb_v4.yaml"
 
-# The six task texts of TELEOP_PLAN.md: the only prompts the match plan may send.
+# The task texts of TELEOP_PLAN.md the match plan sends (T3, plug-in, was dropped on 7 Nov).
 TELEOP_TASKS = {
     "unplug the USB cable at the end of the hub nearest the right arm",
     "put the held cable down on the table away from the hub",
-    "plug the loose USB cable on the table into a free port on the hub",
     "put a block on top of the stack",
     "put a golf ball in the bin",
     "open both grippers and move the arms up",

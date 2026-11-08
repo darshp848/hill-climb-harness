@@ -65,13 +65,13 @@ def test_plan_vars_defaults_and_override(tmp_path):
     assert load_plan(p, {"arm": "right"}).stages[0].prompt == "use the right arm"
 
 
-def test_v4_plan_plug_stage_cameras():
+def test_v4_plan_has_no_plug_in_and_notes_the_stacking_camera():
     plan = load_plan(Path(__file__).resolve().parent.parent / "plans" / "hill_climb_v4.yaml")
     names = [s.name for s in plan.stages]
-    assert names.index("unplug_cable") < names.index("plug_1") < names.index("stack_2")
-    plug = plan.stages[names.index("plug_1")]
-    assert plug.history_cameras == ["wrist_r"] and plug.on_fail == "skip"
-    assert "wrist_r" in plug.camera_notes
+    assert not any(n.startswith("plug") for n in names)
+    assert not any(s.prompt.startswith("plug") for s in plan.stages)
+    assert names.index("unplug_cable") < names.index("stack_2")
+    assert "wrist_r" in plan.stages[names.index("stack_2")].camera_notes
 
 
 # -- the watcher is kept watching -----------------------------------------------------------------------------
