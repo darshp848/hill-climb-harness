@@ -206,12 +206,13 @@ def test_bot_v1_plan():
     assert unplugs[0].grip_assist.loop_until_s == 150
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.10], 4.0, 1, (0.062, 0.20))
-    assert "5 inches to the right" in ga.put_down_prompt and "open the gripper" in ga.put_down_prompt
+    assert ga.put_down_prompt and unplugs[0].prompt.endswith(ga.put_down_prompt)   # one prompt: unplug + place
+    assert "5 inches to the right" in ga.put_down_prompt
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert [x.name for x in stacks] == ["tower"]
-    assert stacks[0].prompt == "stack the three foam cubes on top of each other to make a tower" and not stacks[0].write_prompt
-    assert stacks[0].confirm == 2 and stacks[0].confirm_check and "arm" not in stacks[0].prompt
+    assert stacks[0].prompt == "stack one blue cube on top of the other blue cube, then put the pink cube on top of them" and stacks[0].resume_on_no
+    assert stacks[0].confirm == 2 and stacks[0].confirm_check and not stacks[0].write_prompt
     assert not plan.tower_prompts
     balls = plan.stages[first_ball:]
     assert all(s.write_prompt and "nearest" in s.prompt and "white basket" in s.prompt and s.writer_notes
