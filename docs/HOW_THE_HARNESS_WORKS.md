@@ -1,6 +1,6 @@
 # How the Hill Climb harness works
 
-_Written 8 Nov 2026 from all branches of this repo and `darshp848/task_simulation`. Also published as a page with a drawn diagram._
+_Written 8 Nov 2026 from all branches of this repo and `darshp848/task_simulation`. Also published as a page with a drawn diagram, and as [Hill_Climb_Harness_Explained.pdf](Hill_Climb_Harness_Explained.pdf)._
 
 The harness is a supervisor that runs on the match laptop. It never drives a motor. It gives Dream-1 one short prompt per stage through Dream's own station agent, watches the cameras with a Claude vision monitor and a local colour detector, decides when a stage is done or failing, and recovers, moves on or stops. Every decision is logged with the frames it was made on.
 
