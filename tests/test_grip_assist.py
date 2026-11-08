@@ -464,3 +464,19 @@ def test_shut_on_air_then_half_reopen_is_not_a_hold(fake, write_plan, tmp_path):
     r = build(fake, _cable_plan(write_plan, _assist(regrip=0), timeout_s=0.6), tmp_path, Script([mv(None)]))
     r.run()
     assert not events(r.log, "grip_assist") and not _moves(fake)
+
+
+def test_stack_lock_flows_into_the_next_stage_and_tower_is_not_resent(fake, write_plan, tmp_path):
+    third = "put the other blue cube on top of the pink cube"
+    path = write_plan([stage("stack_2", prompt="put the pink cube on top of the blue cube", confirm=1,
+                             confirm_check="2 stacked?", lock_prompt=third),
+                       stage("tower_pass", prompt=third, confirm=1, confirm_check="> 4 in?", resume_on_no=False,
+                             timeout_s=1.0, max_attempts=1, on_fail="skip")],
+                      stop_on_pass=True, lock_prompt="open both grippers and move the arms up", hands_off=True)
+    v = Confirming([mv(True, progress=1.0)], [True, False, False, False, False])
+    r = build(fake, path, tmp_path, v)
+    r.run()
+    sent = prompts(fake)
+    assert sent[:3] == ["put the pink cube on top of the blue cube", third, "open both grippers and move the arms up"]
+    assert sent.count(third) == 1                           # kept from the lock, never resent onto the tower
+    assert events(r.log, "prompt_kept") and events(r.log, "lock_held")

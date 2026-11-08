@@ -645,7 +645,7 @@ class Runner:
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False and not self.plan.hands_off, f"verifier said no: {verdict.reason}"
                 nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts and stage.write_prompt \
-                    and not gs["done"] else None
+                    and not gs["done"] and not self.plan.hands_off else None   # hands_off: no mid-attempt rewrites
                 if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
                         and last_done_t is None and rewrites < self.plan.rewrite_max
                         and elapsed - last_prompt_t >= self.plan.rewrite_cooldown_s and nxt != self._prompt):
@@ -713,8 +713,11 @@ class Runner:
                             check = self._confirm_check(stage, verifier)
                             if check is not None:
                                 consec_done, last_done_t, last_done_sig = 0, None, None
-                                if locked:   # not done after all: Dream carries on where it stopped
-                                    back = getattr(self, "_lock_resume", None) if self.plan.lock_prompt else None
+                                if locked and not stage.resume_on_no:
+                                    self.log.event("lock_held", stage=stage.name, reason=check[:200],
+                                                   note="resume_on_no false: Dream is not sent back onto the tower")
+                                elif locked:   # not done after all: Dream carries on where it stopped
+                                    back = getattr(self, "_lock_resume", None) if (stage.lock_prompt or self.plan.lock_prompt) else None
                                     self._issue(back or self._prompt or stage.prompt,
                                                 f"after a locked pass: {check[:120]}", force_start=not back)
                                     last_prompt_t, gate = elapsed, elapsed + stage.effective_settle()
@@ -933,10 +936,11 @@ class Runner:
         """plan.stop_on_pass: stop Dream the moment a look would pass the stage. True if a run was stopped."""
         if not self.plan.stop_on_pass or self.station.status().get("state") not in ("running", "starting"):
             return False
-        self.log.event("stage_locked", stage=stage.name, prompt=self._prompt, how=self.plan.lock_prompt or "stop")
-        if self.plan.lock_prompt:
+        lock = stage.lock_prompt or self.plan.lock_prompt
+        self.log.event("stage_locked", stage=stage.name, prompt=self._prompt, how=lock or "stop")
+        if lock:
             self._lock_resume = self._prompt
-            self._issue(self.plan.lock_prompt, f"stage {stage.name} looks done: lock it, run kept warm")
+            self._issue(lock, f"stage {stage.name} looks done: lock it, run kept warm")
             return True
         self._safe_stop(f"stage {stage.name} looks done: lock it")
         self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after locking a pass")
@@ -1162,7 +1166,12 @@ class Runner:
             self.log.event("stage_already_done", stage=stage.name)
             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
         try:
-            refused = self._try_issue(self._stage_prompt(stage, verifier), "stage", force_start=first)
+            text = self._stage_prompt(stage, verifier)
+            if not first and text == self._prompt and self.station.status().get("state") == "running":
+                refused = None   # the previous stage's lock already switched Dream to this prompt: don't restart it
+                self.log.event("prompt_kept", stage=stage.name, prompt=text, note="already running from the lock")
+            else:
+                refused = self._try_issue(text, "stage", force_start=first)
         except _WriterSkip as exc:
             self.log.event("stage_skipped", stage=stage.name, reason=str(exc))
             return StageResult(stage.name, False, 0, self._clock() - t0, str(exc))

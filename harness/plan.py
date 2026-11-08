@@ -21,7 +21,7 @@ TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower ta
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
                "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check",
-               "grip_assist", "write_prompt", "retry_prompt", "writer_notes"}
+               "grip_assist", "write_prompt", "retry_prompt", "writer_notes", "lock_prompt", "resume_on_no"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 _GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
               "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s"}
@@ -122,6 +122,12 @@ class Stage:
     # Extra rules for the stage-prompt writer on this stage (plan.write_prompts). It may answer SKIP (nothing it can
     # do here, e.g. no legal ball within reach): the stage is then skipped.
     writer_notes: str | None = None
+    # plan.stop_on_pass: what Dream is switched to when this stage looks done. "" = the plan's lock_prompt. E.g. the
+    # next stage's prompt, so Dream flows on without an arms-up reset (8 Nov live: 2 cubes -> 3rd cube paused).
+    lock_prompt: str = ""
+    # After a lock, a confirm "no" sends Dream back to this stage's prompt. False: it doesn't (a tower stage: 8 Nov
+    # live, re-sending the stacking prompt onto a standing 3-cube tower made Dream knock it over).
+    resume_on_no: bool = True
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -400,6 +406,8 @@ def parse_plan(data: Any) -> Plan:
                 write_prompt=_bool(raw.get("write_prompt", True), f"{label}.write_prompt"),
                 retry_prompt=None if raw.get("retry_prompt") is None else _prompt(raw["retry_prompt"], f"{label}.retry_prompt"),
                 writer_notes=None if raw.get("writer_notes") is None else _text(raw["writer_notes"], f"{label}.writer_notes"),
+                lock_prompt=_prompt(raw["lock_prompt"], f"{label}.lock_prompt") if raw.get("lock_prompt") else "",
+                resume_on_no=_bool(raw.get("resume_on_no", True), f"{label}.resume_on_no"),
             )
         )
 
