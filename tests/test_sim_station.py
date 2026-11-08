@@ -36,12 +36,13 @@ def _example_dir():
     pytest.skip("Dream's yam_mujoco example is not installed (pip install dreamlabs) and no --example-dir")
 
 
-@pytest.fixture(scope="module")
-def sim():
+@pytest.fixture(scope="module", params=[None, 10], ids=["sync", "async"])
+def sim(request):
+    """Every state-machine test runs on Dream's example loop and on the async pacing loop (execution_horizon 10)."""
     example = _example_dir()
     try:
         station = sim_station.SimStation(policy="scripted", api_port=0, view_port=0, realtime=False,
-                                         example_dir=example).start()
+                                         example_dir=example, execution_horizon=request.param).start()
     except Exception as exc:  # no usable GL, etc.
         pytest.skip(f"simulator could not start here: {exc}")
     yield station
@@ -241,3 +242,71 @@ def test_hedged_policy_returns_the_first_reply_and_feeds_every_session():
     assert all(s.obs == 1 for s in sessions)
     hp.close()
     assert all(s.closed for s in sessions)
+
+
+def test_stop_while_the_first_request_is_in_flight_returns_to_idle(sim, monkeypatch):
+    settle(sim)
+    monkeypatch.setattr(sim, "scripted_latency_s", 3.0)        # the first reply is slow
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert sim.state == "starting"
+    code, status = call(sim, "POST", "/stop", {})
+    assert code == 200 and status["state"] == "idle"
+    monkeypatch.undo()
+    assert call(sim, "POST", "/start", {"prompt": "again"})[0] == 200   # nothing left stuck
+    assert wait_until(lambda: sim.state == "running", 60)
+    settle(sim)
+
+
+def test_a_failure_mid_run_goes_to_error_and_a_new_start_recovers(sim, monkeypatch):
+    settle(sim)
+    real_open = sim._open
+    calls = {"n": 0}
+
+    def flaky_open(model, poses):
+        policy = real_open(model, poses)
+        real_get = policy.get_action
+
+        def get_action(commanded=None):
+            calls["n"] += 1
+            if calls["n"] > 3:
+                raise RuntimeError("model fell over")
+            return real_get()
+        policy.get_action = get_action
+        return policy
+
+    monkeypatch.setattr(sim, "_open", flaky_open)
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert wait_until(lambda: sim.state == "error", 60)
+    assert call(sim, "GET", "/status")[1]["last_error"]["message"] == "model fell over"
+    monkeypatch.undo()
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert wait_until(lambda: sim.state == "running", 60)
+    settle(sim)
+
+
+def test_a_retryable_refusal_waits_in_starting_then_runs(sim, monkeypatch):
+    settle(sim)
+    real_open = sim._open
+    refusals = {"n": 0}
+
+    class Warming(Exception):
+        retryable, reason, retry_after_s = True, "pool_warming", 0.2
+
+    def warming_open(model, poses):
+        policy = real_open(model, poses)
+        real_get = policy.get_action
+
+        def get_action(commanded=None):
+            if refusals["n"] < 2:
+                refusals["n"] += 1
+                raise Warming("pool warming")
+            return real_get()
+        policy.get_action = get_action
+        return policy
+
+    monkeypatch.setattr(sim, "_open", warming_open)
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert wait_until(lambda: sim.state == "running", 60)
+    assert refusals["n"] == 2
+    monkeypatch.undo()
+    settle(sim)

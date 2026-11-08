@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import sys
 import threading
@@ -624,6 +625,36 @@ class SimStation:
                        "gripper_effort": None,
                        "positions_rad": [float(v) for v in state[side][:6]]}
                 for side in ARMS}
+            self._joints = self._joint_telemetry(data)
+
+    # Joint names as harness.can_live reports a Metal arm, so the harness reads sim and station the same way.
+    _JOINT_NAMES = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_yaw", "wrist_roll")
+
+    def _joint_telemetry(self, data: Any) -> dict[str, Any]:
+        """GET /joints in harness.can_live's shape from MuJoCo: measured angle and velocity, the commanded target, the
+        actuator's force (what the controller commands) and the joint's total actuator torque (what it produces)."""
+        arms = {}
+        for side in ARMS:
+            joints = {}
+            names = [(n, f"{side}_joint{i}", f"{side}_joint{i}") for i, n in enumerate(self._JOINT_NAMES, 1)]
+            names.append(("gripper", f"{side}_finger_1", f"{side}_finger_1"))
+            for label, jname, aname in names:
+                try:
+                    jnt, act = data.joint(jname), data.actuator(aname)
+                    tmax = float(abs(self.env.model.actuator(aname).forcerange[1])) or None
+                    q = float(jnt.qpos[0])
+                    joints[label] = {
+                        "q_deg": round(math.degrees(q), 3), "dq_deg_s": round(math.degrees(float(jnt.qvel[0])), 3),
+                        "q_cmd_deg": round(math.degrees(float(act.ctrl[0])), 3),
+                        "tau_cmd_nm": round(float(act.force[0]), 4),
+                        "tau_nm": round(float(data.qfrc_actuator[self.env.model.joint(jname).dofadr[0]]), 4),
+                        "tau_max_nm": tmax, "status": 1, "t_reply": float(data.time)}
+                    if label == "gripper":        # prismatic finger: metres, not degrees
+                        joints[label].update(q_deg=round(q, 5), q_cmd_deg=round(float(act.ctrl[0]), 5))
+                except Exception:
+                    continue
+            arms[side] = joints
+        return {"t": float(data.time), "rate_hz": {side: 20.0 for side in ARMS}, "arms": arms, "source": "sim"}
 
     def _current_targets(self) -> dict[str, Any]:
         state = self.env.state()
@@ -1045,6 +1076,9 @@ class SimStation:
                 elif route == "/arms":
                     with sim._lock:
                         self._reply(200, dict(sim._arms))
+                elif route == "/joints":            # harness.can_live's shape (station: can_live on the NUC)
+                    with sim._lock:
+                        self._reply(200, dict(getattr(sim, "_joints", {}) or {"arms": {}}))
                 elif route.startswith("/frame/") and route.endswith(".jpg"):
                     camera = route[len("/frame/"):-4]
                     name = {"scene": "top", "overhead": "top", "wrist_l": "left", "wrist_r": "right"}.get(camera)

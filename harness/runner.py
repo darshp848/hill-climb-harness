@@ -484,6 +484,10 @@ class Runner:
                 notes.append(f"{side} gripper opening {got:.2f}")
             else:
                 notes.append(f"{side} gripper commanded closed but stopped at {got:.2f}: it is holding something")
+        joints = getattr(self, "joints", None)       # harness.joint_telemetry: live joint torques (can_live / sim)
+        felt = joints.note() if joints is not None else ""
+        if felt:
+            notes.append("joint torques: " + felt)
         return "; ".join(notes)
 
     def _ask(self, verifier: Verifier, stage: Stage, frames: dict[str, bytes], elapsed: float, *,

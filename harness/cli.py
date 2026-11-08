@@ -34,6 +34,9 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--live", action="store_true", help="real run (asks you to type yes)")
     mode.add_argument("--mock", action="store_true", help="run against an in-process fake station")
     p.add_argument("--station", default="http://127.0.0.1:8091", help="station API URL")
+    p.add_argument("--joints", default=None,
+                   help="live joint torques: the NUC's harness.can_live URL (e.g. http://10.103.0.143:8097), or "
+                        "'station' when the station/sim serves GET /joints itself; adds measured grip/strain to checks")
     p.add_argument("--view", default="http://127.0.0.1:8093", help="debug view URL")
     p.add_argument("--runs-dir", default="runs", help="where run logs go")
     p.add_argument("--scenario", default="happy", help="fake station scenario (--mock only)")
@@ -230,6 +233,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.live_guard:
             print("--live-guard needs --detect (the colour detector judges the live frames)", file=sys.stderr)
             return 2
+        if args.joints:
+            from .joint_telemetry import JointTelemetry  # noqa: PLC0415
+            joints_url = station_url if args.joints == "station" else args.joints
+            runner.joints = JointTelemetry(joints_url, log=log.event).start()
+            log.event("joint_telemetry", url=joints_url)
         if plan.start_pose is not None:
             from .start_pose import StartPoses  # noqa: PLC0415
             ref = Path(plan.start_pose.reference)
