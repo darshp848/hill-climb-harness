@@ -15,7 +15,7 @@
 task: >-
   Cable practice: unplug the USB cables from the hub one at a time, nearest the right arm first, putting each
   one down on the table away from the hub. Do not touch the blocks or the ping-pong balls.
-checkpoint: dreamlabs/dream-1-beta   # base Dream-1; a Metal/Maker station has no default model. Set your dream-1-ft:... fine-tune here
+checkpoint: dream-1-ft:bb4b9e5f-relay-final   # the 7-8 Nov fine-tune (needs its owner's DREAM_API_KEY); base: --checkpoint dreamlabs/dream-1-beta
 time_budget_s: 295          # 5-minute match; a little margin for the start
 check_every_s: 3.0
 verifier: monitor

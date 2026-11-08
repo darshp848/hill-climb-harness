@@ -29,8 +29,8 @@ task: >-
   Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Do not touch the blocks before a
   cable is unplugged. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
   Do not touch the golf balls before the tower passes.
-# The model: base Dream-1 by default (a Metal station has no default model). The fine-tune of 7-8 Nov runs with
-#   --var model=dream-1-ft:bb4b9e5f-relay-final   (only with that account's DREAM_API_KEY in dreamcli's shell)
+# The model: the 7-8 Nov fine-tune by default (needs its owner's DREAM_API_KEY in dreamcli's shell). Base Dream-1 runs with
+#   --var model=dreamlabs/dream-1-beta
 checkpoint: "{model}"
 time_budget_s: 295          # 5-minute match, a little margin for the start
 check_every_s: 3.0
@@ -45,7 +45,7 @@ confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"
 # Camera role of the arm that stacks (the right arm), for the monitor's notes only.
 # The prompts never name an arm, so changing these does not change what the model is asked.
-vars: {stack_cam: wrist_r, model: dreamlabs/dream-1-beta}
+vars: {stack_cam: wrist_r, model: dream-1-ft:bb4b9e5f-relay-final}
 # 600 tokens cut off every reply (Haiku 5.5 thinks first). history_frames 4, one stitched grid image of the earlier
 # frames and two calls in flight (from hybrid-harness): live, a verdict every ~4.9 s instead of ~9.7 s.
 claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}

@@ -14,7 +14,7 @@ task: >-
   strip. Never plug a cable in. Stage 2: stack the cubes into a free-standing tower more than 4 inches (10 cm) tall.
   Do not touch the blocks before a cable is unplugged. Stage 3: put the {ball}s into the white bin one by one, never
   the white ball or a black ball, without touching the tower. Do not touch the balls before the tower passes.
-checkpoint: dreamlabs/dream-1-beta
+checkpoint: dream-1-ft:bb4b9e5f-relay-final   # the 7-8 Nov fine-tune (needs its owner's DREAM_API_KEY); base: --checkpoint dreamlabs/dream-1-beta
 time_budget_s: 295
 check_every_s: 3.0
 verifier: monitor

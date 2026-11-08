@@ -28,7 +28,7 @@
 task: >-
   Hill Climb practice without the cables. Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
   Do not touch the golf balls before the tower passes.
-checkpoint: dreamlabs/dream-1-beta   # base Dream-1 (a Metal station has no default model); then dream-1-ft:<account>-relay-v1
+checkpoint: dream-1-ft:bb4b9e5f-relay-final   # the 7-8 Nov fine-tune (needs its owner's DREAM_API_KEY); base: --checkpoint dreamlabs/dream-1-beta
 time_budget_s: 295          # 5-minute match, a little margin for the start
 check_every_s: 3.0
 verifier: monitor
