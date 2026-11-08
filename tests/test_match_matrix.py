@@ -39,6 +39,8 @@ CASES = (
     Case("ball_failure", True, True, True, "ball_2"),
     Case("eight_ball_in_bin", True, True, True, "ball_2"),
     Case("cable_never_released", True, True, True, "ball_1"),
+    Case("gateway_fault", True, True, True, "ball_1"),
+    Case("motor_fault", False, False, True, "stack_two", ("raise_stack", "ball_1")),
     Case("arm_fault", False, False, True, "raise_stack", ("clear_of_stack", "ball_1")),
     Case("prompt_ack_missing", False, False, True, "watcher_into_place", ("plug_loose_cable", "stack_two")),
     Case("work_cutoff", True, True, True, "ball_8"),
@@ -58,9 +60,18 @@ class MatchFixture(Station):
         if case == "occupied_station":
             self.state = "running"
         self.frozen_trip = None
+        self.faulted = False
 
     def status(self, *, timeout_s):
+        if self.case in ("gateway_fault", "motor_fault") and self.prompt == self.prompts["stack_two"]                 and self.state == "running" and not self.faulted:
+            self.faulted = True
+            self.state = "error"   # the station's run died mid-stage
         status = super().status(timeout_s=timeout_s)
+        if self.state == "error":
+            status["last_error"] = (
+                {"message": "DreamAPI refused the inference request: DA-6000 GATEWAY_FAULT (connection_timed_out)",
+                 "type": "DreamServerError"} if self.case == "gateway_fault" else
+                {"message": "right arm motor 4 over-current", "type": "ArmFault"})
         if self.case == "arm_fault" and self.prompt == self.prompts["raise_stack"]:
             status["arms"] = {"left": True, "right": False}
         return status
@@ -196,6 +207,12 @@ def test_full_v4_decision_matrix(case, tmp_path):
         assert results["put_cable_down"].abandoned and results["release_before_stack"].abandoned
         assert results["stack_two"].ok and results["clear_of_stack"].ok
         assert results["put_cable_down"].seconds <= 20.5 and results["release_before_stack"].seconds <= 15.5
+    elif case.name == "gateway_fault":
+        restarts = [e for e in events if e["event"] == "station_restart"]
+        assert len(restarts) == 1 and "DA-6000" in restarts[0]["error"]
+        assert [c[0] for c in fixture.commands].count("start") == 2 and results["stack_two"].ok
+    elif case.name == "motor_fault":
+        assert not any(e["event"] == "station_restart" for e in events) and "over-current" in result.reason
     elif case.name == "ball_failure":
         assert results["ball_1"].abandoned and results["ball_2"].ok
     elif case.name == "late_gate_verdict":
