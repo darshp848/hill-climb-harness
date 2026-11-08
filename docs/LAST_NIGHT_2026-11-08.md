@@ -150,7 +150,8 @@ in the sim, so test the exact match prompts before the match.
 sideways), yellow square stick, pink round stick. `tower_prompts` names the next piece, for example "put the pink
 cube on top of the stack". The order is checked and logged but doesn't block a stage.
 
-**IMG_2699 shows a different tower**: pink, blue, blue, bottom to top. Someone needs to say which one is the target.
+IMG_2699 shows pink, blue, blue instead. Darsh settled this on 8 Nov: **colour order doesn't matter**, so either tower
+counts. The colours in `tower_target` and the piece names sent by `tower_prompts` are one valid order and no more.
 Also, Darsh's notes want the last cube's hole facing up, which `main` doesn't encode. `cloud-sims` does.
 
 ## Darsh's strategy notes
@@ -188,8 +189,8 @@ dataset there dates from 7 Nov 23:00 Central. Newer recordings on the NUC are no
 |---|---|---|
 | Unplug and put-down demos | Quest 40 and 34, leader 15 and 7 | Enough for now. Add the 2-3 cable vertical pull if we want that technique |
 | Plug-in demos | 16 | More if plug-in comes back |
-| Stack in target order | 2 block demos, none confirmed in order | Record in the chosen order, after settling the photo question |
-| Upright stick demos | 8 | More, and on the right tower |
+| Stack demos | 2 block demos | Record more, any colour order |
+| Upright stick demos | 8 | More |
 | Golf ball demos | 1 | Many more |
 | Watcher-arm pose demos | None found | Record, if we keep the watcher idea |
 | Harness runs on the station, per-stage success | None on the laptop. Run 3 at 05:49 is mentioned in `hybrid-harness` commits | Copy logs off the NUC, then run matches and log each stage |
@@ -207,13 +208,13 @@ dataset there dates from 7 Nov 23:00 Central. Newer recordings on the NUC are no
 | # | Task | Owner |
 |---|---|---|
 | 1 | Pick the match branch: `main` or `cloud-sims`. Then merge | |
-| 2 | Settle the tower order, IMG_2697 or IMG_2699 | |
+| 2 | Done: colour order doesn't matter (Darsh, 8 Nov) | |
 | 3 | Add a one-call Dream check before any batch that stops on `DA-1000` (asked for 14:57, not built) | |
 | 4 | Fix the 4 failing tests on `cloud-sims` | |
 | 5 | Copy station logs from the NUC, including run 3 | |
 | 6 | Run harness matches on the real table, log per-stage success | |
 | 7 | Test the exact match prompts for refusals, keep hands out of frame | |
-| 8 | Record stack demos in the target order, plus golf balls | |
+| 8 | Record more stack demos in any colour order, plus golf balls | |
 | 9 | Rerun round 1 with fewer sessions and credits checked first | |
 | 10 | Decide if pass-bar stages should follow "fail twice, move on" | |
 | 11 | Add a minimum gap between confirming verdicts (two false "cable out" verdicts caused a DQ with two calls in flight) | |
