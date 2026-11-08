@@ -33,6 +33,7 @@ HORIZON = int(round(HORIZON_S * RATE_HZ))
 MARGIN_SCALE_DEG = 30.0
 SPEED_SCALE_DEG_S = 200.0
 TRACK_SCALE_DEG = 10.0
+TORQUE_FEATURES = slice(5, 8)                     # tau, tau_cmd, tau_diff in FEATURES
 DEFAULT_MODEL = Path(__file__).with_name("models") / "joint_fault_net.json"
 
 
@@ -169,6 +170,9 @@ class FaultModel:
         self.std = np.asarray(spec["feature_std"], dtype=np.float64)
         self.threshold = dict(spec.get("threshold") or {"now": 0.5, "soon": 0.5})
         self.persist = int(spec.get("persist", 2))
+        # Trained without torque (tools/joint_fault_real.py: Dream's rollout traces have none): zero those features
+        # here too, so a live source that does send torque feeds the model what it was trained on.
+        self.torque_free = bool(spec.get("torque_free", False))
         if spec.get("window", WINDOW) != WINDOW or tuple(spec.get("features", FEATURES)) != FEATURES:
             raise ValueError("model was trained on another window or feature set")
 
@@ -177,7 +181,10 @@ class FaultModel:
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def logits(self, windows: np.ndarray) -> np.ndarray:
-        x = (np.asarray(windows, dtype=np.float64) - self.mean) / self.std
+        x = np.array(windows, dtype=np.float64)
+        if self.torque_free:
+            x[..., TORQUE_FEATURES] = 0.0
+        x = (x - self.mean) / self.std
         return FORWARD[self.family](self.params, self.cfg, x)
 
     def probs(self, windows: np.ndarray) -> np.ndarray:

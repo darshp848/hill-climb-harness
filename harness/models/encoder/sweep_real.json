@@ -1,0 +1,1428 @@
+{
+ "split": {
+  "test": [
+   "zeroshot_20261107T214852",
+   "zeroshot_20261108T101617",
+   "zeroshot_20261108T115624",
+   "zeroshot_20261108T112010",
+   "zeroshot_20261108T101053"
+  ],
+  "val": [
+   "zeroshot_20261107T215625",
+   "zeroshot_20261108T121739",
+   "zeroshot_20261108T103146",
+   "zeroshot_20261108T115326",
+   "zeroshot_20261107T220418"
+  ],
+  "train": [
+   "zeroshot_20261108T104501",
+   "zeroshot_20261108T120120",
+   "zeroshot_20261107T215036",
+   "zeroshot_20261108T122117",
+   "zeroshot_20261108T100247",
+   "zeroshot_20261107T203646",
+   "zeroshot_20261108T110024",
+   "zeroshot_20261108T101716",
+   "zeroshot_20261108T110953",
+   "zeroshot_20261108T101840",
+   "zeroshot_20261108T095854",
+   "zeroshot_20261107T220340",
+   "zeroshot_20261108T103905",
+   "zeroshot_20261108T102040",
+   "zeroshot_20261108T120816",
+   "zeroshot_20261108T115217",
+   "zeroshot_20261108T100709",
+   "zeroshot_20261108T121455",
+   "zeroshot_20261108T115431",
+   "zeroshot_20261107T212240",
+   "zeroshot_20261108T102555"
+  ]
+ },
+ "steps": 3000,
+ "fa_budget": 2.0,
+ "fault_kinds": [
+  "limit_run",
+  "blocked",
+  "oscillation",
+  "overspeed"
+ ],
+ "candidates": [
+  {
+   "name": "tcn c32 L4",
+   "family": "tcn",
+   "config": {
+    "channels": 32,
+    "dilations": [
+     1,
+     2,
+     4,
+     8
+    ],
+    "kernel": 3
+   },
+   "weights": 10530,
+   "train_s": 60.6,
+   "thr": 0.9943599617245399,
+   "val": {
+    "fa_per_joint_hour": 1.903846153846154,
+    "timely_mean": 0.7487306780274519,
+    "kinds": {
+     "limit_run": {
+      "n": 612,
+      "recall": 1.0,
+      "timely": 0.9967320261437909,
+      "early": 0.8937908496732027,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 504,
+      "recall": 0.996031746031746,
+      "timely": 0.19642857142857142,
+      "early": 0.0,
+      "latency_med_s": 0.35000000000000003
+     },
+     "oscillation": {
+      "n": 454,
+      "recall": 0.9977973568281938,
+      "timely": 0.801762114537445,
+      "early": 0.004405286343612335,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overspeed": {
+      "n": 409,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.1466992665036675,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9984732358416203,
+    "auroc_soon": 0.9767209672043992
+   },
+   "real_fa_per_joint_hour": 0.0,
+   "real_alarms": []
+  },
+  {
+   "name": "enc d16 L1 h2",
+   "family": "transformer",
+   "config": {
+    "d_model": 16,
+    "heads": 2,
+    "layers": 1,
+    "ff": 32
+   },
+   "weights": 2690,
+   "train_s": 18.7,
+   "thr": 0.9831871621050169,
+   "val": {
+    "fa_per_joint_hour": 1.903846153846154,
+    "timely_mean": 0.6676331936524309,
+    "kinds": {
+     "limit_run": {
+      "n": 612,
+      "recall": 0.9983660130718954,
+      "timely": 0.9918300653594772,
+      "early": 0.1323529411764706,
+      "latency_med_s": 0.0
+     },
+     "blocked": {
+      "n": 504,
+      "recall": 0.998015873015873,
+      "timely": 0.41865079365079366,
+      "early": 0.0,
+      "latency_med_s": 0.30000000000000004
+     },
+     "oscillation": {
+      "n": 454,
+      "recall": 1.0,
+      "timely": 0.9030837004405287,
+      "early": 0.09691629955947137,
+      "latency_med_s": 0.1
+     },
+     "overspeed": {
+      "n": 409,
+      "recall": 0.3594132029339853,
+      "timely": 0.3569682151589242,
+      "early": 0.017114914425427872,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9981577900314281,
+    "auroc_soon": 0.9763068677272837
+   },
+   "real_fa_per_joint_hour": 0.0,
+   "real_alarms": []
+  },
+  {
+   "name": "enc d32 L1 h4",
+   "family": "transformer",
+   "config": {
+    "d_model": 32,
+    "heads": 4,
+    "layers": 1,
+    "ff": 64
+   },
+   "weights": 9474,
+   "train_s": 21.3,
+   "thr": 0.9739753669047162,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.863866755804426,
+    "kinds": {
+     "limit_run": {
+      "n": 612,
+      "recall": 1.0,
+      "timely": 0.9967320261437909,
+      "early": 0.8022875816993464,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 504,
+      "recall": 1.0,
+      "timely": 0.6666666666666666,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 454,
+      "recall": 1.0,
+      "timely": 0.8898678414096917,
+      "early": 0.1828193832599119,
+      "latency_med_s": 0.1
+     },
+     "overspeed": {
+      "n": 409,
+      "recall": 0.902200488997555,
+      "timely": 0.902200488997555,
+      "early": 0.10268948655256724,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9984769878792972,
+    "auroc_soon": 0.976885499689795
+   },
+   "real_fa_per_joint_hour": 0.0,
+   "real_alarms": []
+  },
+  {
+   "name": "enc d32 L2 h4",
+   "family": "transformer",
+   "config": {
+    "d_model": 32,
+    "heads": 4,
+    "layers": 2,
+    "ff": 64
+   },
+   "weights": 18018,
+   "train_s": 37.7,
+   "thr": 0.9864864569106756,
+   "val": {
+    "fa_per_joint_hour": 1.2115384615384615,
+    "timely_mean": 0.8681027167732627,
+    "kinds": {
+     "limit_run": {
+      "n": 612,
+      "recall": 0.9983660130718954,
+      "timely": 0.9934640522875817,
+      "early": 0.6699346405228758,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 504,
+      "recall": 1.0,
+      "timely": 0.7837301587301587,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 454,
+      "recall": 1.0,
+      "timely": 0.8590308370044053,
+      "early": 0.06167400881057269,
+      "latency_med_s": 0.1
+     },
+     "overspeed": {
+      "n": 409,
+      "recall": 0.8361858190709046,
+      "timely": 0.8361858190709046,
+      "early": 0.02689486552567237,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9986094967139261,
+    "auroc_soon": 0.977466424741213
+   },
+   "real_fa_per_joint_hour": 0.0,
+   "real_alarms": []
+  },
+  {
+   "name": "enc d64 L2 h4",
+   "family": "transformer",
+   "config": {
+    "d_model": 64,
+    "heads": 4,
+    "layers": 2,
+    "ff": 128
+   },
+   "weights": 68802,
+   "train_s": 50.1,
+   "thr": 0.9739753669047162,
+   "val": {
+    "fa_per_joint_hour": 1.903846153846154,
+    "timely_mean": 0.9140209812172196,
+    "kinds": {
+     "limit_run": {
+      "n": 612,
+      "recall": 1.0,
+      "timely": 0.9967320261437909,
+      "early": 0.946078431372549,
+      "latency_med_s": -0.1
+     },
+     "blocked": {
+      "n": 504,
+      "recall": 1.0,
+      "timely": 0.7916666666666666,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 454,
+      "recall": 1.0,
+      "timely": 0.9581497797356828,
+      "early": 0.13876651982378854,
+      "latency_med_s": 0.05
+     },
+     "overspeed": {
+      "n": 409,
+      "recall": 0.9119804400977995,
+      "timely": 0.9095354523227384,
+      "early": 0.1295843520782396,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9985989257183586,
+    "auroc_soon": 0.9777061426168723
+   },
+   "real_fa_per_joint_hour": 0.0,
+   "real_alarms": []
+  },
+  {
+   "name": "enc d64 L4 h4",
+   "family": "transformer",
+   "config": {
+    "d_model": 64,
+    "heads": 4,
+    "layers": 4,
+    "ff": 128
+   },
+   "weights": 135746,
+   "train_s": 106.4,
+   "thr": 0.9864864569106756,
+   "val": {
+    "fa_per_joint_hour": 1.903846153846154,
+    "timely_mean": 0.9161305977140631,
+    "kinds": {
+     "limit_run": {
+      "n": 612,
+      "recall": 1.0,
+      "timely": 0.9950980392156863,
+      "early": 0.8741830065359477,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 504,
+      "recall": 1.0,
+      "timely": 0.8492063492063492,
+      "early": 0.0,
+      "latency_med_s": 0.15000000000000002
+     },
+     "oscillation": {
+      "n": 454,
+      "recall": 1.0,
+      "timely": 0.9229074889867841,
+      "early": 0.07929515418502203,
+      "latency_med_s": 0.1
+     },
+     "overspeed": {
+      "n": 409,
+      "recall": 0.8973105134474327,
+      "timely": 0.8973105134474327,
+      "early": 0.044009779951100246,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9986540828546319,
+    "auroc_soon": 0.9778815947788925
+   },
+   "real_fa_per_joint_hour": 0.0,
+   "real_alarms": []
+  }
+ ],
+ "rules_untouched": {
+  "joint_hours": 0.83,
+  "per_joint_hour": {
+   "any": 90.67,
+   "limit_approach": 87.04,
+   "tracking_divergence": 3.63
+  },
+  "alarms": {
+   "any": [
+    {
+     "run": "zeroshot_20261107T214852",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 4.5,
+     "q_deg": 3.8
+    },
+    {
+     "run": "zeroshot_20261107T214852",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 6.2,
+     "q_deg": 3.4
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 0.8,
+     "q_deg": -0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 15.5,
+     "q_deg": -0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 16.95,
+     "q_deg": -0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 17.45,
+     "q_deg": -0.9
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 20.3,
+     "q_deg": -1.1
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 25.0,
+     "q_deg": -1.2
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 20.75,
+     "q_deg": 0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 17.3,
+     "q_deg": 75.4
+    },
+    {
+     "run": "zeroshot_20261108T115624",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 3.55,
+     "q_deg": 1.7
+    },
+    {
+     "run": "zeroshot_20261108T115624",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 5.0,
+     "q_deg": 1.9
+    },
+    {
+     "run": "zeroshot_20261108T112010",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 3.4,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T112010",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 3.9,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 4.75,
+     "q_deg": -4.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 6.2,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 7.7,
+     "q_deg": -3.9
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 9.25,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 10.95,
+     "q_deg": -3.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 12.15,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 12.4,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 13.45,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 13.75,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 15.3,
+     "q_deg": -2.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 16.95,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 18.65,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 18.75,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 18.9,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 20.15,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 21.6,
+     "q_deg": -2.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 23.6,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 24.9,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 26.65,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 28.35,
+     "q_deg": -3.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 29.9,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 31.85,
+     "q_deg": -3.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 33.2,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 34.8,
+     "q_deg": -3.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 36.6,
+     "q_deg": -3.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 37.95,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 39.45,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 42.7,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 44.15,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 45.7,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 47.2,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 50.3,
+     "q_deg": -3.9
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 52.0,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 53.6,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 55.6,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 56.8,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 58.3,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 59.8,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 61.15,
+     "q_deg": -2.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 1.35,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 3.05,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 4.8,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 8.25,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 14.45,
+     "q_deg": -4.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 50.85,
+     "q_deg": 1.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 57.05,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 9.7,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 6.7,
+     "q_deg": 6.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 14.45,
+     "q_deg": 2.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 5.75,
+     "q_deg": 2.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "wrist_yaw",
+     "t_s": 15.1,
+     "q_deg": 73.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 9.9,
+     "q_deg": 11.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 14.0,
+     "q_deg": 1.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 17.85,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 0.1,
+     "q_deg": 3.9
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 1.25,
+     "q_deg": 3.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 1.6,
+     "q_deg": 3.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 6.75,
+     "q_deg": 12.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 54.05,
+     "q_deg": 9.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 8.4,
+     "q_deg": -4.7
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 6.9,
+     "q_deg": -25.8
+    }
+   ],
+   "limit_approach": [
+    {
+     "run": "zeroshot_20261107T214852",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 4.5,
+     "q_deg": 3.8
+    },
+    {
+     "run": "zeroshot_20261107T214852",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 6.2,
+     "q_deg": 3.4
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 0.8,
+     "q_deg": -0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 15.5,
+     "q_deg": -0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 16.95,
+     "q_deg": -0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 17.45,
+     "q_deg": -0.9
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 20.3,
+     "q_deg": -1.1
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 25.0,
+     "q_deg": -1.2
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 20.75,
+     "q_deg": 0.8
+    },
+    {
+     "run": "zeroshot_20261108T101617",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 17.3,
+     "q_deg": 75.4
+    },
+    {
+     "run": "zeroshot_20261108T115624",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 3.55,
+     "q_deg": 1.7
+    },
+    {
+     "run": "zeroshot_20261108T115624",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 5.0,
+     "q_deg": 1.9
+    },
+    {
+     "run": "zeroshot_20261108T112010",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 3.4,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T112010",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 3.9,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 4.75,
+     "q_deg": -4.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 6.2,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 7.7,
+     "q_deg": -3.9
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 9.25,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 10.95,
+     "q_deg": -3.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 12.15,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 12.4,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 13.45,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 13.75,
+     "q_deg": -2.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 15.3,
+     "q_deg": -2.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 16.95,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 18.65,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 18.75,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 18.9,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 20.15,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 21.6,
+     "q_deg": -2.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 23.6,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 24.9,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 26.65,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 28.35,
+     "q_deg": -3.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 29.9,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 31.85,
+     "q_deg": -3.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 33.2,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 34.8,
+     "q_deg": -3.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 36.6,
+     "q_deg": -3.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 37.95,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 39.45,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 42.7,
+     "q_deg": -3.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 44.15,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 45.7,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 47.2,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 50.3,
+     "q_deg": -3.9
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 52.0,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 53.6,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 55.6,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 56.8,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 58.3,
+     "q_deg": -3.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 59.8,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 61.15,
+     "q_deg": -2.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 1.35,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 3.05,
+     "q_deg": -3.0
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 4.8,
+     "q_deg": -3.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 8.25,
+     "q_deg": -3.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "shoulder_lift",
+     "t_s": 14.45,
+     "q_deg": -4.3
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 50.85,
+     "q_deg": 1.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 57.05,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 9.7,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 6.7,
+     "q_deg": 6.5
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 14.45,
+     "q_deg": 2.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "elbow_flex",
+     "t_s": 5.75,
+     "q_deg": 2.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "left",
+     "joint": "wrist_yaw",
+     "t_s": 15.1,
+     "q_deg": 73.8
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 9.9,
+     "q_deg": 11.6
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 14.0,
+     "q_deg": 1.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 17.85,
+     "q_deg": 1.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 0.1,
+     "q_deg": 3.9
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 1.25,
+     "q_deg": 3.2
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 1.6,
+     "q_deg": 3.1
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "elbow_flex",
+     "t_s": 6.75,
+     "q_deg": 12.1
+    }
+   ],
+   "tracking_divergence": [
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 54.05,
+     "q_deg": 9.4
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 8.4,
+     "q_deg": -4.7
+    },
+    {
+     "run": "zeroshot_20261108T101053",
+     "arm": "right",
+     "joint": "wrist_flex",
+     "t_s": 6.9,
+     "q_deg": -25.8
+    }
+   ]
+  }
+ },
+ "created": "2026-11-08T20:29:19Z"
+}

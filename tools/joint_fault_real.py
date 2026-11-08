@@ -164,6 +164,8 @@ def main():
     ap.add_argument("--only", default="", help="comma-separated candidate names to run (default: all)")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--out", default="joint_fault_real.json")
+    ap.add_argument("--export", default="", help="folder: save each trained model as joint_fault_<name>.json "
+                    "(the runtime format, harness.joint_fault_net.FaultModel; torque_free set)")
     args = ap.parse_args()
     n_train, n_val = (2000, 800) if args.quick else (16000, 4000)
     if args.quick:
@@ -211,6 +213,15 @@ def main():
              "real_fa_per_joint_hour": real["per_joint_hour"].get("learned", 0.0),
              "real_alarms": real["alarms"].get("learned", [])}
         results.append(r)
+        if args.export:
+            spec = T.export(model, family, cfg, norm, thr, {
+                "name": r["name"], "n_weights": r["weights"], "torque_free": True, "beats_baseline": False,
+                "trained_on": {k: [run for run, _ in v] for k, v in split.items()}, "steps": args.steps,
+                "val": m, "real_fa_per_joint_hour": r["real_fa_per_joint_hour"],
+                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            Path(args.export).mkdir(parents=True, exist_ok=True)
+            slug = r["name"].replace(" ", "_")
+            (Path(args.export) / f"joint_fault_{slug}.json").write_text(json.dumps(spec), encoding="utf-8")
         print(f"{r['name']:22}{r['weights']:>8}{r['train_s']:>6.0f}{thr:>7.3f}{m['fa_per_joint_hour']:>10.1f}"
               f"{m['timely_mean']:>11.3f}{r['real_fa_per_joint_hour']:>11.2f}", flush=True)
 

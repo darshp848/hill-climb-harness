@@ -1,0 +1,17 @@
+test: 5 runs, 0.83 joint-hours
+val: 5 runs, 1.38 joint-hours
+train: 21 runs, 5.07 joint-hours
+model                  weights     s    thr val FA/jh val timely REAL FA/jh
+tcn c32 L4               10530    61  0.994       1.9      0.749       0.00
+enc d16 L1 h2             2690    19  0.983       1.9      0.668       0.00
+enc d32 L1 h4             9474    21  0.974       1.7      0.864       0.00
+enc d32 L2 h4            18018    38  0.986       1.2      0.868       0.00
+enc d64 L2 h4            68802    50  0.974       1.9      0.914       0.00
+enc d64 L4 h4           135746   106  0.986       1.9      0.916       0.00
+
+rule observer on the untouched test runs (0.83 joint-hours), alarms per joint-hour:
+  any                      90.67
+  limit_approach           87.04
+  tracking_divergence       3.63
+
+wrote harness/models/encoder/sweep_real.json

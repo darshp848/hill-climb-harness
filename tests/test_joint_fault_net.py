@@ -61,3 +61,27 @@ def test_shipped_model_runs_and_flags_a_limit_run():
                                                          "tau_nm": 0.5, "tau_cmd_nm": 0.5, "tau_max_nm": 10.0}})
     assert not quiet
     assert any(a["kind"] == "learned_fault_soon" for a in loud)
+
+
+def test_torque_free_model_ignores_torque():
+    _, spec = _spec_from_torch("transformer", {"d_model": 16, "heads": 2, "layers": 1, "ff": 32})
+    spec["torque_free"] = True
+    m = FaultModel(json.loads(json.dumps(spec)))
+    x = np.random.default_rng(3).normal(size=(4, WINDOW, N_FEATURES))
+    y = x.copy()
+    y[..., 5:8] = 7.0
+    assert np.allclose(m.probs(x), m.probs(y))
+    assert not FaultModel(spec | {"torque_free": False}).torque_free
+
+
+@pytest.mark.parametrize("path", sorted((DEFAULT_MODEL.parent / "encoder").glob("joint_fault_*.json")),
+                         ids=lambda p: p.stem)
+def test_real_rollout_models_load(path):
+    """The encoders trained on real Metal rollouts (tools/joint_fault_real.py --export) load and run."""
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    if "weights" not in spec:
+        pytest.skip("not a model file")
+    m = FaultModel(spec)
+    assert m.torque_free
+    p = m.probs(np.zeros((2, WINDOW, N_FEATURES)))
+    assert p.shape == (2, 2) and np.all((p >= 0) & (p <= 1))
