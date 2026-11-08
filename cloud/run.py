@@ -132,6 +132,8 @@ def run_match(args):
                          api_port=0, view_port=0, max_trips=4,
                          execution_horizon=args.execution_horizon or None, sync_above_ms=args.sync_above_ms)
         sim.hedge = args.dream_hedge     # Dream sessions raced per action chunk (sim_station.HedgedPolicy)
+        sim.hedge_cutoff_s, sim.hedge_max_in_flight, sim.hedge_max_calls = (
+            args.dream_hedge_cutoff, args.dream_hedge_max_in_flight, args.dream_hedge_max_calls)
         sim.dream_pipeline = args.dream_pipeline   # Dream sessions used in turn for throughput (PipelinedPolicy)
         sim = sim.start()
         station = StationClient(sim.api_url)
@@ -259,6 +261,9 @@ def parser():
     p.add_argument("--judge-mode", choices=["race", "alternate"], default="race")
     p.add_argument("--judge-hedge", type=int, default=1)
     p.add_argument("--dream-hedge", type=int, default=1, help="Dream sessions raced per chunk (N x Dream usage)")
+    p.add_argument("--dream-hedge-cutoff", type=float, default=None, help="seconds before a slow call is cut and resent")
+    p.add_argument("--dream-hedge-max-in-flight", type=int, default=None, help="most hedged calls running at once")
+    p.add_argument("--dream-hedge-max-calls", type=int, default=None, help="most hedged calls per action chunk")
     p.add_argument("--plan", default="plans/hill_climb_v4.yaml")
     p.add_argument("--skip", action="append", default=[])
     p.add_argument("--operator-notes", choices=["plan", "off"], default="plan",

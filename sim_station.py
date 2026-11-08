@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 from collections import deque
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,50 +57,185 @@ class HedgedPolicy:
     The Dream API is input -> output: the same observation sent to N sessions gives N samples of the policy, and the
     one that comes back first is used (harness.hedge's idea applied to the action chunks). This cuts the latency
     tail of a round trip, not its floor, and costs N x the Dream usage. A session that errors is skipped while any
-    other is still running; only if every session fails does the error reach the control loop."""
+    other is still running; only if every session fails does the error reach the control loop.
 
-    def __init__(self, sessions: list[Any]):
+    When a reply is taken the other calls are cancelled. Dream has no cancel route (only /v1/get_action and
+    /v1/end_session), so cancelling means cutting the HTTP connection: it frees the session here at once, but the
+    server may finish the work and bill it. With `cutoff_s`, a call older than that is cut and a fresh one sent, if
+    `max_calls` and `max_in_flight` allow; the last call running is never cut without a replacement to send."""
+
+    def __init__(self, sessions: list[Any], *, cutoff_s: float | None = None, max_in_flight: int | None = None,
+                 max_calls: int | None = None, log: Any = None):
         self.sessions = sessions
         self._pool = ThreadPoolExecutor(max_workers=len(sessions), thread_name_prefix="dream-hedge")
         self.wins = [0] * len(sessions)
         self.last_winner: int | None = None
+        self.cutoff_s = cutoff_s
+        self.max_in_flight = max(1, min(max_in_flight or len(sessions), len(sessions)))
+        self.max_calls = max(1, max_calls or len(sessions) + 1)     # per get_action
+        self._log = log
+        self.calls: deque[dict[str, Any]] = deque(maxlen=5000)      # started, finished, cancelled, stopped, dropped
+        self.counts = {"started": 0, "finished": 0, "cancelled": 0, "stopped": 0, "dropped": 0, "applied": 0, "error": 0}
+        self._note_lock = threading.Lock()
+        self._busy: dict[int, Any] = {}
+        self._live: dict[int, dict[str, Any]] = {}
+        self._next_id = 0
+        self._cut = [threading.Event() for _ in sessions]
+        self._guard_resend()
 
     def set_observation(self, *args: Any, **kwargs: Any) -> None:
         for s in self.sessions:
             s.set_observation(*args, **kwargs)
 
+    def _running(self) -> int:
+        """Calls in flight that can still be used; a cut call no longer counts against the cap."""
+        return sum(not r["cancelled"] for r in list(self._live.values()))
+
+    def _note(self, rec: dict[str, Any], event: str, **more: Any) -> None:
+        row = {"event": event, "call": rec["id"], "session": rec["k"], "t": time.monotonic(),
+               "latency_s": round(time.monotonic() - rec["t0"], 4), **more}
+        with self._note_lock:
+            self.calls.append(row)
+            self.counts[event] = self.counts.get(event, 0) + 1
+        if self._log is not None:
+            self._log(row)
+
+    @staticmethod
+    def _transport(session: Any) -> Any:
+        """The SDK's Transport under a Dream session, or None for anything else (a scripted or fake session)."""
+        for owner in (session, getattr(session, "_policy", None), getattr(session, "_client", None)):
+            transport = getattr(owner, "_transport", None)
+            if transport is not None and hasattr(transport, "_connection"):
+                return transport
+        return None
+
+    def _guard_resend(self) -> None:
+        """The SDK resends once when a reused connection dies before the reply, and a cut looks just like that:
+        without this, a cancelled call would go out again as a new billed call."""
+        for k, session in enumerate(self.sessions):
+            transport = self._transport(session)
+            if transport is None:
+                continue
+            try:
+                from dream.errors import DreamProtocolError
+                from dream.transport import _StaleConnectionError
+            except ImportError:
+                return
+
+            def guarded(*args: Any, _send: Any = transport._exchange, _cut: Any = self._cut[k], **kwargs: Any) -> Any:
+                try:
+                    return _send(*args, **kwargs)
+                except _StaleConnectionError:
+                    if _cut.is_set():
+                        raise DreamProtocolError("cancelled by the hedge") from None
+                    raise
+            transport._exchange = guarded
+
+    def _abort(self, rec: dict[str, Any]) -> bool:
+        """Cut the call's connection, so the blocked read fails now. True if a live socket was cut. Only the socket
+        is touched from this thread: the call's own failure path drops the connection."""
+        k = rec["k"]
+        self._cut[k].set()
+        connection = getattr(self._transport(self.sessions[k]), "_connection", None)
+        sock = getattr(connection, "sock", None)
+        if sock is None:
+            return False
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            return False
+        return True
+
+    def _cancel(self, rec: dict[str, Any], why: str) -> None:
+        if rec["cancelled"] or rec["future"].done():
+            return
+        rec["cancelled"] = True
+        rec["cut_at"] = time.monotonic()
+        self._note(rec, "cancelled", why=why, socket_cut=self._abort(rec))
+
+    def _done(self, rec: dict[str, Any], future: Any) -> None:
+        self._live.pop(rec["id"], None)
+        if rec["cancelled"]:
+            self._note(rec, "stopped", after_cut_s=round(time.monotonic() - rec["cut_at"], 4))
+
+    def _idle(self) -> list[int]:
+        return [k for k in range(len(self.sessions)) if k not in self._busy or self._busy[k].done()]
+
+    def _fire(self, k: int, commanded: Any) -> dict[str, Any]:
+        s = self.sessions[k]
+        self._cut[k].clear()
+        rec: dict[str, Any] = {"id": self._next_id, "k": k, "t0": time.monotonic(), "cancelled": False}
+        self._next_id += 1
+        f = self._pool.submit(s.get_action, commanded=commanded) if commanded is not None else \
+            self._pool.submit(s.get_action)
+        rec["future"] = f
+        self._busy[k] = f
+        self._live[rec["id"]] = rec
+        self._note(rec, "started")
+        f.add_done_callback(lambda fut: self._done(rec, fut))
+        return rec
+
     def get_action(self, commanded: Any = None) -> Any:
         from concurrent.futures import FIRST_COMPLETED, wait
 
-        # A Dream client runs one get_action at a time: a session whose losing call is still in flight sits this
-        # round out instead of raising "another get_action() is running".
-        busy = getattr(self, "_busy", {})
-        idle = [k for k in range(len(self.sessions)) if k not in busy or busy[k].done()]
+        # A Dream client runs one get_action at a time: a session whose call is still unwinding sits this round out
+        # instead of raising "another get_action() is running".
+        idle = self._idle()
         if not idle:                  # every session still busy: wait for the first to free up
-            wait(list(busy.values()), return_when=FIRST_COMPLETED)
-            idle = [k for k in range(len(self.sessions)) if busy[k].done()]
-        futures = {}
-        for k in idle:
-            s = self.sessions[k]
-            f = self._pool.submit(s.get_action, commanded=commanded) if commanded is not None else \
-                self._pool.submit(s.get_action)
-            futures[f] = k
-            busy[k] = f
-        self._busy = busy
+            wait(list(self._busy.values()), return_when=FIRST_COMPLETED)
+            idle = self._idle()
+        room = max(1, self.max_in_flight - self._running())
+        calls = [self._fire(k, commanded) for k in idle[:min(room, self.max_calls)]]
+        started, owed = len(calls), 0
         first_error: BaseException | None = None
-        pending = set(futures)
-        while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for f in done:
-                if f.exception() is None:
-                    k = futures[f]
-                    self.wins[k] += 1
-                    self.last_winner = k
-                    return f.result()
-                first_error = first_error or f.exception()
+        running = {r["future"]: r for r in calls}
+        while running or owed:
+            now = time.monotonic()
+            live = [r for r in running.values() if not r["cancelled"]]
+            timeout = 0.02 if owed else None
+            if not owed and self.cutoff_s is not None and live and started < self.max_calls:
+                timeout = max(0.02, min(r["t0"] + self.cutoff_s for r in live) - now)
+            done, _ = wait(set(running) or set(self._busy.values()), timeout=timeout, return_when=FIRST_COMPLETED)
+            for f in [f for f in done if f in running]:
+                rec = running.pop(f)
+                if rec["cancelled"]:
+                    self._note(rec, "dropped", why="reply or error of a cancelled call")
+                    continue
+                if f.exception() is not None:
+                    self._note(rec, "error", error=type(f.exception()).__name__)
+                    first_error = first_error or f.exception()
+                    continue
+                self._note(rec, "finished")
+                for other in running.values():
+                    self._cancel(other, "lost the race")
+                self.wins[rec["k"]] += 1
+                self.last_winner = rec["k"]
+                self.counts["applied"] += 1
+                return f.result()
+            if self.cutoff_s is not None:
+                now = time.monotonic()
+                for rec in [r for r in running.values() if not r["cancelled"] and now - r["t0"] >= self.cutoff_s]:
+                    if started + owed >= self.max_calls:
+                        break                     # nothing left to replace it with: let it finish
+                    if self._idle() or self._transport(self.sessions[rec["k"]]) is not None:
+                        self._cancel(rec, f"older than the {self.cutoff_s} s cutoff")
+                        owed += 1
+            while owed and self._idle() and self._running() < self.max_in_flight:
+                rec = self._fire(self._idle()[0], commanded)
+                running[rec["future"]] = rec
+                started += 1
+                owed -= 1
         raise first_error if first_error is not None else RuntimeError("no Dream session answered")
 
+    def stats(self) -> dict[str, Any]:
+        """Counts for match.json. `started` is what the account may be billed for; `applied` is what was used."""
+        with self._note_lock:
+            return {**self.counts, "sessions": len(self.sessions), "cutoff_s": self.cutoff_s,
+                    "max_in_flight": self.max_in_flight, "max_calls": self.max_calls}
+
     def close(self) -> None:
+        for rec in list(self._live.values()):
+            self._cancel(rec, "closing")
         for s in self.sessions:
             try:
                 s.close()
@@ -1021,7 +1157,8 @@ class SimStation:
                 "replies": s["replies"], "errors": s["errors"], "dry_rows": s.get("dry_rows", 0),
                 "call_hz": round((len(t) - 1) / span, 3) if span > 0 else None,
                 "rtt_p50_s": rtt[len(rtt) // 2] if rtt else None,
-                "rtt_p90_s": rtt[int(0.9 * (len(rtt) - 1))] if rtt else None}
+                "rtt_p90_s": rtt[int(0.9 * (len(rtt) - 1))] if rtt else None,
+                **({"hedge": self.hedged.stats()} if getattr(self, "hedged", None) is not None else {})}
 
     def _first_reply_pending(self) -> bool:
         with self._lock:
@@ -1037,7 +1174,10 @@ class SimStation:
             return self._open_one(model, poses)
         with ThreadPoolExecutor(max_workers=n) as ex:
             sessions = list(ex.map(lambda _: self._open_one(model, poses), range(n)))
-        return HedgedPolicy(sessions)
+        self.hedged = HedgedPolicy(sessions, cutoff_s=getattr(self, "hedge_cutoff_s", None),
+                                   max_in_flight=getattr(self, "hedge_max_in_flight", None),
+                                   max_calls=getattr(self, "hedge_max_calls", None))
+        return self.hedged
 
     def _open_one(self, model: str, poses: bool) -> Any:
         while True:
@@ -1312,6 +1452,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--policy", choices=("dream", "scripted"), default="dream")
     parser.add_argument("--hedge", type=int, default=1,
                         help="Dream sessions raced per action chunk (first reply wins; N x the Dream usage)")
+    parser.add_argument("--hedge-cutoff", type=float, default=None,
+                        help="seconds: cut a hedged call older than this and send a fresh one (cutting may not save money)")
+    parser.add_argument("--hedge-max-in-flight", type=int, default=None, help="most hedged calls running at once")
+    parser.add_argument("--hedge-max-calls", type=int, default=None, help="most hedged calls per action chunk")
     parser.add_argument("--checkpoint", default=None, help="default model: beta, or any model id (dream mode)")
     parser.add_argument("--api-port", type=int, default=8091)
     parser.add_argument("--view-port", type=int, default=8093)
@@ -1336,6 +1480,7 @@ def main(argv: list[str] | None = None) -> None:
                      view_port=args.view_port, realtime=args.realtime, example_dir=args.example_dir,
                      actions=args.actions, scene=args.scene, viewer=args.viewer)
     sim.hedge = args.hedge
+    sim.hedge_cutoff_s, sim.hedge_max_in_flight, sim.hedge_max_calls = args.hedge_cutoff, args.hedge_max_in_flight, args.hedge_max_calls
     sim = sim.start()
     print(f"sim station ({args.policy}, {'realtime' if sim.realtime else 'fast'}): api {sim.api_url}  "
           f"view {sim.view_url}  live {sim.view_url}/live  (Ctrl+C to quit)", flush=True)
