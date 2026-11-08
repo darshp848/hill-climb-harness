@@ -173,7 +173,7 @@ stages:
     expect: "The arms pick up the cubes one at a time and stack them into a single tower of three, then lift clear; the tower stays standing."
     camera_notes:
       scene: "top view of the table: the cubes and the tower"
-    timeout_s: 60          # Kaushik, 8 Nov: 1 min for stacking, then the balls
+    timeout_s: 75          # Kaushik, 8 Nov: 75 s for stacking (15 s taken from the balls)
     max_attempts: 1        # RUBRIC RISK: balls before the tower passes can be a DQ (Kaushik's call, 8 Nov)
     min_run_s: 4
     stall_s: 45
