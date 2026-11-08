@@ -1,0 +1,46 @@
+diff --git a/metal/leader_collect.py b/metal/leader_collect.py
+index 1cd91ef..065bbf8 100644
+--- a/metal/leader_collect.py
++++ b/metal/leader_collect.py
+@@ -63,6 +63,10 @@ ENGAGE_MAX_S = 3.0
+ ## joint in every recorded episode, so the follower's target trailed the leader; MakerMods' own follower speed cap
+ ## (280 deg/s = 4.9 rad/s, installed by prepare_leader_following) still applies under this.
+ FOLLOW_SPEED_RAD_S = 4.0
++## How fast the dashboard's gripper slider moves the follower's jaws: opening (0 shut .. 1 open) per second.
++DASHBOARD_GRIP_RATE = 0.6
++## Hand-guiding (teleop_supervisor.sh sets it): the moved arm is the one recorded; the other holds still.
++KINESTHETIC = __import__("os").environ.get("LEADER_COLLECT_KINESTHETIC") == "1"
+ 
+ 
+ class LeaderFollowerArms:
+@@ -302,6 +306,15 @@ class LeaderCollector(collect.Collector):
+         robot: LeaderFollowerArms = self._robot  # type: ignore[assignment]
+         side = robot.follower
+         joints = self._command.joints[side]
++        if KINESTHETIC:
++            # Hand-guiding: the arm you move does the task and is recorded (run with --record-leader); the other
++            # arm holds where it started, as it will stay parked when the model runs.
++            self._command.joints[side] = robot.start_joints[side].copy()
++            self._command.joints[robot.leader] = measured[robot.leader].copy()
++            self._command.grips[robot.leader] = robot.recorded_leader_grip
++            for clutch in self._clutches.values():
++                clutch.engaged = False
++            return
+         gap = robot.leader_joints - joints
+         if not self._engaged:
+             self._catching_up_s += self._dt_s
+@@ -314,7 +327,13 @@ class LeaderCollector(collect.Collector):
+         speed = self.follow_speed_rad_s if self._engaged else ENGAGE_SPEED_RAD_S
+         self._command.joints[side] = teleop.step_toward(joints, robot.leader_joints, speed * self._dt_s)
+         # The leader's gripper as a fraction of its own stroke, onto the follower's stroke (open = 1).
+-        self._command.grips[side] = robot.leader_grip
++        override = dashboard.GRIP_OVERRIDE[0]  # the dashboard's gripper slider, when it is set
++        if override is None:
++            self._command.grips[side] = robot.leader_grip
++        else:  # ramp toward the slider's opening, so Open / Close close the jaws smoothly instead of snapping
++            now = float(self._command.grips[side])
++            step = DASHBOARD_GRIP_RATE * self._dt_s
++            self._command.grips[side] = now + max(-step, min(step, override - now))
+         # The leader side's command is what is recorded as its action: the same value as its recorded state.
+         self._command.joints[robot.leader] = measured[robot.leader].copy()
+         self._command.grips[robot.leader] = robot.recorded_leader_grip
