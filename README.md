@@ -73,6 +73,13 @@ of the right shape, so the harness, the state machine and the frames can be test
 rendering is slow (about 5 s per chunk), so use long stage timeouts or `--verifier time`.
 `pytest tests/test_sim_station.py` covers the scripted mode and skips itself without mujoco.
 
+Watching it live: the view port serves `/live` (the three policy cameras, a ground-truth top-down map, the
+referee on `--scene hill_climb`, station state and the last policy round trips; `--open` opens it), and
+`--viewer` opens MuJoCo's own 3D window with a status overlay (macOS: start it with `mjpython`, not `python`).
+`python experiments/live_stress.py -s SCENARIO --speed 10` plays an offline stress match in the browser at 10x
+(table, stages, harness decisions, live score), and `experiments/sweep_variants.py` A/Bs plan and harness
+variants over every stress scenario at a given monitor latency (`--latency 6.5-13` is what Haiku 5.5 measured).
+
 ## Match plan and the fine-tune
 
 `plans/hill_climb_v4.yaml` is the match plan for rubric v4. Its prompts are the six task texts in
@@ -124,6 +131,13 @@ Bad plans are rejected with the stage and field named.
 
 - `claude+manual`: Claude judges every check, and your `y` / `n` overrules it. Run with
   `--verifier claude+manual`. Good for practice runs: you watch Claude's calls in `events.jsonl` and correct them.
+
+No API key? `--claude-backend subscription` (or `HARNESS_CLAUDE_BACKEND=subscription`) sends the same request
+(images, prompt, model, effort) through the Claude Code CLI, `claude -p`, on the Claude subscription it is logged
+in to (`claude`, then `/login`): no tools, no MCP, no saved session, `ANTHROPIC_API_KEY` removed from its
+environment. `python tools/check_monitor.py --backend subscription --sim` checks the real monitor on the station
+photo and MuJoCo renders with known answers (7 Nov, Haiku 5.5: 12/12 right, guard yes on a held 8-ball; latency
+median 8.4 s, max 12.7 s per call, about 2 s more than the API would take).
 
 ## Logs
 
