@@ -503,3 +503,12 @@ def test_a_plug_reading_005_after_the_lift_is_held_and_counts_the_cable(fake, wr
     res = r.run()
     assert events(r.log, "grip_pull")[0]["outcome"] == "pulled" and not events(r.log, "grip_slipped")
     assert events(r.log, "pull_counted") and res.stages[0].ok
+
+
+def test_reset_last_sends_reset_when_the_run_ends(fake, write_plan, tmp_path):
+    fake.reset_s = 0.05
+    path = write_plan([stage("a", confirm=1)], reset_first=True, reset_last=True)
+    r = build(fake, path, tmp_path, Script([mv(True, progress=1.0)]))
+    r.run()
+    rs = routes(fake)
+    assert rs[0] == "/reset" and rs[-1] == "/reset" and rs.count("/reset") == 2
