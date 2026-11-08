@@ -900,6 +900,10 @@ class Runner:
             self._nap(0.4)
         end = (self.station.pose() or {}).get(ga.arm) or {}
         outcome = "pulled" if after >= ga.empty_below else "slipped"
+        if outcome == "slipped":
+            # back down to where Dream left the hand: a restart from 10+ cm up made Dream's IK fail ("SVD did not
+            # converge" -> auto /reset of both arms, 8 Nov live)
+            self._move(ga.arm, -sum(ga.pull_up_m), 0.6, 1.5)
         zb, za = (before.get("xyz") or [None] * 3)[2], (end.get("xyz") or [None] * 3)[2]
         gs_dz = (za - zb) if isinstance(za, (int, float)) and isinstance(zb, (int, float)) else None
         self._last_pull_dz = gs_dz
