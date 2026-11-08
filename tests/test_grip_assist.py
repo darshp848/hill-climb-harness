@@ -371,3 +371,15 @@ def test_an_early_stalled_look_does_not_end_the_attempt(fake, write_plan, tmp_pa
     t0 = time.monotonic()
     r = build(fake, path, tmp_path, sv).run().stages[0]
     assert r.reason.startswith("stalled") and time.monotonic() - t0 >= 0.6   # not on the first look
+
+
+def test_fine_tune_plan_sends_only_its_trained_texts():
+    trained = {"unplug the USB cable at the end of the hub nearest the right arm",
+               "put the held cable down on the table away from the hub", "put a block on top of the stack",
+               "put a golf ball in the bin", "open both grippers and move the arms up"}
+    plan = load_plan(ROOT / "plans/bot_v1_ft.yaml")
+    sent = {p for s in plan.stages for p in [s.prompt, s.retry_prompt, s.grip_assist and s.grip_assist.put_down_prompt,
+                                             *(r.prompt for r in s.menu())] if p}
+    assert sent <= trained and plan.checkpoint == "dream-1-ft:bb4b9e5f-relay-final"
+    assert not plan.write_prompts and not plan.rewrite_prompts and not plan.prompt_prefix
+    assert all(s.grip_assist for s in plan.stages if s.name.startswith("cable_unplug")) and plan.stop_on_pass
