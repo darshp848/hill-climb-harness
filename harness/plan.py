@@ -24,7 +24,8 @@ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_ru
                "grip_assist", "write_prompt", "retry_prompt", "writer_notes", "lock_prompt", "resume_on_no"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 _GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
-              "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s"}
+              "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s",
+              "empty_below", "pull_count_dz"}
 MAX_MOVE_M = 0.12   # the station's /move takes at most 12 cm per call
 
 
@@ -81,6 +82,12 @@ class GripAssist:
     # no stage change) until this match-clock time (s since the run started), or the confirm says no plug is left.
     # The stage passes with at least one cable out. None = one cable per stage.
     loop_until_s: float | None = None
+    # Once the harness has squeezed (or lifted), the jaws read below this only when empty (8 Nov live: empty after a
+    # squeeze 0.024-0.026; a plug held through the lift 0.049-0.052, under the approach band's 0.062).
+    empty_below: float = 0.04
+    # A pull that raised the hand at least this much (m) and still holds something counts as a cable out even if the
+    # confirm look says no (8 Nov live: a real held pull, z 0.067 -> 0.170, was rejected by the camera check).
+    pull_count_dz: float | None = 0.08
 
 
 @dataclass
@@ -539,7 +546,9 @@ def _grip_assist(raw: Any, where: str) -> GripAssist | None:
                       min_z=None if raw.get("min_z") is None else float(_num(raw["min_z"], f"{where}.min_z")),
                       pass_on_pull=_bool(raw.get("pass_on_pull", True), f"{where}.pass_on_pull"),
                       drop_dxyz=_drop(raw.get("drop_dxyz"), where),
-                      loop_until_s=None if raw.get("loop_until_s") is None else float(_num(raw["loop_until_s"], f"{where}.loop_until_s")))
+                      loop_until_s=None if raw.get("loop_until_s") is None else float(_num(raw["loop_until_s"], f"{where}.loop_until_s")),
+                      empty_below=float(_num(raw.get("empty_below", d.empty_below), f"{where}.empty_below")),
+                      pull_count_dz=None if raw.get("pull_count_dz", d.pull_count_dz) is None else float(_num(raw.get("pull_count_dz", d.pull_count_dz), f"{where}.pull_count_dz")))
 
 
 def _drop(raw: Any, where: str) -> list[float] | None:

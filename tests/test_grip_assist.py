@@ -480,3 +480,23 @@ def test_stack_lock_flows_into_the_next_stage_and_tower_is_not_resent(fake, writ
     assert sent[:3] == ["put the pink cube on top of the blue cube", third, "open both grippers and move the arms up"]
     assert sent.count(third) == 1                           # kept from the lock, never resent onto the tower
     assert events(r.log, "prompt_kept") and events(r.log, "lock_held")
+
+
+def test_no_pull_while_dream_commands_the_jaws_open(fake, write_plan, tmp_path):
+    fake.grip_readings = [0.9, 0.9, 0.9, 0.12]    # half-open approach posture reads like a plug...
+    fake.grip_cmd = 0.5                            # ...but Dream is commanding the gripper open
+    r = build(fake, _cable_plan(write_plan, _assist(regrip=0), timeout_s=0.6), tmp_path, Script([mv(None)]))
+    r.run()
+    assert not events(r.log, "grip_assist")
+
+
+def test_a_plug_reading_005_after_the_lift_is_held_and_counts_the_cable(fake, write_plan, tmp_path):
+    fake.grip_readings = [0.9, 0.9, 0.9, 0.08]
+    fake.grip_cmd = 0.0
+    fake.on_move = lambda b: b["dxyz"][2] > 0 and fake.grip_readings.__setitem__(slice(None), [0.05])
+    path = _cable_plan(write_plan, _assist(seat_dz=0.0), confirm_check="fewer plugs?", timeout_s=3.0)
+    v = Confirming([mv(None)], [False])            # the camera check would say no
+    r = build(fake, path, tmp_path, v)
+    res = r.run()
+    assert events(r.log, "grip_pull")[0]["outcome"] == "pulled" and not events(r.log, "grip_slipped")
+    assert events(r.log, "pull_counted") and res.stages[0].ok
