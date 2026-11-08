@@ -1,0 +1,48 @@
+# Operator decisions (Darsh, 8 Nov 2026)
+
+Handwritten notes: [decisions.pdf](decisions.pdf). Below is a typed transcription, with Darsh's answers to the
+unclear spots in brackets. These notes are for the **real table**: coloured golf balls (green, yellow, orange) are
+legal and the white ball is illegal. In the sim the colours differ (white golf balls legal, black 8-balls illegal),
+and the sim plans translate them.
+
+## Blocks
+
+- Come down on the block from the top, normal to the table.
+- Invoke the other arm as a watcher first, then do the cylinders. [It reads "watcher", not "doesn't work".]
+- Place the square blocks (the ones with a round hole) with the hole facing sideways (circle plane normal to the
+  table).
+- Place each square block directly on top of the previous one, minimising overhang.
+- On the last block, turn the hole to face up (circle parallel to the table). Then put a cylinder in the hole,
+  minimising the cylinder's angle.
+- Pick the cylinder up normal to the table, then turn it lengthwise vertical and place it through the hole, at 90°
+  to the table (vertical).
+- Then stack the next cylinder on top, minimising vibration so the tower doesn't topple.
+
+## Golf balls
+
+- Push the white balls off the table.
+- If other objects are in the way, avoid the white balls. Pick up the coloured balls and drop them into the basket.
+
+## Cables
+
+- Use the other arm to watch the cables from a different angle.
+- Come in normal to the cables and grip at max strength.
+- Orient the cables vertical, then pull.
+- Grip 2–3 cables at a time.
+- Drop or lay the cables flat near the power hub (the big black power strip).
+
+## Power outlet
+
+- Pick up a USB-C cable connector by the black part, normal to the table, at peak strength.
+- Come down to the USB-C port (the first port from the left side), normal to the port.
+- Plug it in by bringing the arm vertically down.
+- Confirm the cable is plugged in, then open the gripper and disengage.
+
+## Error detection
+
+- Detect problems.
+
+## Decisions
+
+- If a task fails more than twice, move on.
+- Allow up to three tries if the task is worth a lot of points.
