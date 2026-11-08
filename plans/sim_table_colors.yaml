@@ -10,7 +10,7 @@ guard:
   grip_roi: [0.25, 0.35, 0.75, 1.0]
   grip_min_frac: 0.01
 classes:
-  white:  {hsv: [[0, 0, 160], [255, 35, 255]], min_frac: 0.00025, max_frac: 0.10, kinds: {ball: avoid}, small_ball: true}
+  white:  {hsv: [[0, 0, 200], [255, 13, 255]], min_frac: 0.00025, max_frac: 0.10, kinds: {ball: avoid}, small_ball: true}   # table S ~21
   black:  {hsv: [[0, 0, 0], [255, 255, 55]], min_frac: 0.0005, max_frac: 0.10, kinds: {ball: avoid}, small_ball: true}
   green:  {hsv: [[80, 90, 90], [110, 255, 255]], min_frac: 0.00025, kinds: {ball: target}, small_ball: true}
   orange: {hsv: [[10, 140, 110], [30, 255, 255]], min_frac: 0.00025, kinds: {ball: target}, small_ball: true}

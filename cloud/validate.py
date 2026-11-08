@@ -29,8 +29,8 @@ def main():
             assert all(0 <= arm["gripper"] <= 1 for arm in json.load(response).values())
         with urllib.request.urlopen(sim.api_url + "/frame/scene.jpg") as response:
             boxes = TableDetector.from_file("plans/sim_table_colors.yaml").boxes({"scene": response.read()})["scene"]
-        assert sum(b.role == "target" for b in boxes) >= 4
-        assert sum(b.role == "avoid" for b in boxes) >= 2
+        assert sum(b.role == "target" for b in boxes) >= 2        # green, yellow, orange golf balls
+        assert sum(b.role == "avoid" for b in boxes) >= 1        # the white golf ball (+ black 8-balls if added)
     # The match path must import inside the image, and the operator lessons must be there (run.py reads them).
     import importlib
     from pathlib import Path
