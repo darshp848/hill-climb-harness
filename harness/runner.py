@@ -198,7 +198,14 @@ class Runner:
             if self.plan.reset_first:
                 self._reset_and_wait("before the first stage: both grippers open")
             for stage in self.plan.stages:
-                self._apply_operator()
+                end_now, pending = self._apply_operator()
+                if pending and self.operator is not None:   # prompts typed between stages are for the next one
+                    with self.operator._lock:
+                        self.operator._actions.prompts[:0] = pending
+                if end_now:   # "skip" pressed between stages (or during the first reset): skip the next stage
+                    self.log.event("stage_skipped", stage=stage.name, reason="operator skipped it before it started")
+                    results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
+                    continue
                 if stage.requires_stage and not any(r.name == stage.requires_stage and r.ok for r in results):
                     reason = f"{stage.requires_stage} did not pass"   # e.g. no cable came out: nothing to put down
                     self.log.event("stage_skipped", stage=stage.name, reason=reason)

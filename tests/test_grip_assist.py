@@ -415,3 +415,14 @@ def test_lock_prompt_keeps_dream_running(fake, write_plan, tmp_path):
     assert sent[1:4] == ["open both grippers and move the arms up", "put a block on top of the stack",
                          "open both grippers and move the arms up"]          # lock, resume after the "no", lock
     assert sent[-2:] == ["put a golf ball in the bin", "open both grippers and move the arms up"]   # its own lock
+
+
+def test_skip_pressed_before_a_stage_skips_that_stage(fake, write_plan, tmp_path):
+    from harness.operator import Operator
+    path = write_plan([stage("cable_unplug", confirm=1), stage("stack_2", confirm=1)])
+    r = build(fake, path, tmp_path, Script([mv(True, progress=1.0)]))
+    r.operator = Operator(r.plan, r.log, transport=None)
+    r.operator.submit("!skip")                    # pressed while nothing is running yet
+    res = r.run()
+    assert [(x.name, x.ok) for x in res.stages] == [("cable_unplug", False), ("stack_2", True)]
+    assert prompts(fake) == ["do stack_2"]
