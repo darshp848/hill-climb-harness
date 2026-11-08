@@ -4,11 +4,20 @@ The plan guard otherwise looks at debug-view trips (one every ~3.4 s on the stat
 3 s in v4), so a held ball could be up to ~6 s old when judged, and pick-to-bin takes a few seconds. The station
 add-on (station_addons/sitecustomize.py) serves the controller's newest frame at GET /frame/<camera>.jpg, live at
 30 fps whether or not a run is going (checked read-only on the NUC, 7 Nov: 4 ms per frame). This thread runs the
-local detector's guard on those frames at `rate_hz`, and after `confirm_frames` yes answers on distinct frames in a
-row it POSTs /stop itself, without waiting for the runner's next poll. The runner then ends the match as for any
-guard trip.
+local detector's guard on each wrist camera at `rate_hz`; `confirm_frames` yes answers in a row on new frames of the
+same camera POST /stop at once, without waiting for the runner's next poll. The runner then ends the match as for
+any guard trip.
 
 Reads only GET /frame; the one thing it sends is /stop, and only while armed (a stage the plan guard covers).
+
+Safety rules (from the Codex review of the first version):
+- `command_lock` is shared with the runner: the runner holds it while it sends /start, /prompt or /home and checks
+  `tripped` first; the guard holds it while it sets `tripped` and sends /stop. So no motion command can follow a
+  trip unseen, and a trip right after a motion command still stops it.
+- Arming has a generation: a judgment that started before a disarm (or a re-arm for another stage) is dropped.
+- Only a new frame counts as a look: the same bytes judged again neither add a yes nor refresh `last_answer_t`, so a
+  frozen camera shows up as blindness (plan guard max_blind_s), not as "all clear".
+- Yes answers are counted per camera, so motion in one wrist view can't confirm a frozen yes in the other.
 """
 
 from __future__ import annotations
@@ -23,40 +32,42 @@ from typing import Any
 
 
 class LiveFrames:
-    """GET /frame/<role>.jpg from the station API for each role. Roles that 404 (no add-on, no such camera) are
-    dropped after `max_misses` tries in a row so a missing route costs nothing per tick."""
+    """GET /frame/<role>.jpg from the station API for each role. A role that fails this tick is just missing from
+    the result; it is tried again next tick (a camera that recovers is used again)."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:8091", roles: tuple[str, ...] = ("wrist_l", "wrist_r"),
-                 *, timeout_s: float = 1.0, max_misses: int = 3):
+                 *, timeout_s: float = 1.0):
         self.base_url = base_url.rstrip("/")
         self.roles = list(roles)
         self.timeout_s = timeout_s
-        self.max_misses = max_misses
-        self._misses: dict[str, int] = {}
         self.last_error: str | None = None
 
     def grab(self) -> dict[str, bytes]:
         out: dict[str, bytes] = {}
-        for role in list(self.roles):
+        for role in self.roles:
             try:
                 with urllib.request.urlopen(f"{self.base_url}/frame/{role}.jpg", timeout=self.timeout_s) as resp:
                     out[role] = resp.read()
-                self._misses[role] = 0
             except urllib.error.HTTPError as exc:
                 self.last_error = f"{role}: HTTP {exc.code}"
-                if exc.code == 404:
-                    self._misses[role] = self._misses.get(role, 0) + 1
-                    if self._misses[role] >= self.max_misses:
-                        self.roles.remove(role)
             except (urllib.error.URLError, OSError, TimeoutError) as exc:
                 self.last_error = f"{role}: {exc}"
         return out
 
+    def probe(self, tries: int = 3) -> list[str]:
+        """Roles that returned a frame in at least one of `tries` grabs (startup check before relying on them)."""
+        seen: set[str] = set()
+        for _ in range(tries):
+            seen |= set(self.grab())
+            if len(seen) == len(self.roles):
+                break
+        return [r for r in self.roles if r in seen]
+
 
 class LiveGuard:
-    """Runs `judge(source())` at `rate_hz` while armed. `judge` returns (True/False/None, why) like
-    TableDetector.guard. `confirm_frames` yes answers in a row, each on frames not seen before, call `stop()` once
-    and set `tripped` to the reason. A no answer resets the count; None (no readable wrist view) leaves it alone."""
+    """Runs `judge({role: jpeg})` per camera at `rate_hz` while armed. `judge` returns (True/False/None, why) like
+    TableDetector.guard. `confirm_frames` yes answers in a row on new frames of one camera call `stop()` once and
+    set `tripped` to the reason. A no on new frames of that camera resets its count; None leaves it alone."""
 
     def __init__(self, source: Callable[[], dict[str, bytes]],
                  judge: Callable[[dict[str, bytes]], tuple[bool | None, str]],
@@ -69,12 +80,14 @@ class LiveGuard:
         self.confirm_frames = confirm_frames
         self._log = log or (lambda *a, **k: None)
         self._clock = clock
-        self._lock = threading.Lock()
-        self._armed: str | None = None   # the covered stage's name while armed
-        self._count = 0
-        self._last_sig: str | None = None
+        self.command_lock = threading.RLock()   # shared with the runner's motion commands (see module doc)
+        self._lock = threading.Lock()           # guards the fields below
+        self._armed: str | None = None          # the covered stage's name while armed
+        self._gen = 0                           # bumped on every arm-from-disarmed and every disarm
+        self._count: dict[str, int] = {}        # per camera: yes answers in a row on new frames
+        self._sig: dict[str, str] = {}          # per camera: signature of the last frame judged
         self.tripped: str | None = None
-        self.last_answer_t: float | None = None   # clock() of the last yes/no answer
+        self.last_answer_t: float | None = None   # clock() of the last yes/no answer on a new frame
         self.ticks = 0
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
@@ -83,16 +96,19 @@ class LiveGuard:
     def arm(self, stage: str) -> None:
         with self._lock:
             if self._armed is None:
-                self._count, self._last_sig = 0, None
+                self._gen += 1
+                self._count, self._sig = {}, {}
                 self.last_answer_t = self._clock()   # max_blind_s counts from arming, as the poll guard does
                 self._log("live_guard_armed", stage=stage)
             self._armed = stage
 
     def disarm(self) -> None:
-        with self._lock:
-            if self._armed is not None:
-                self._log("live_guard_disarmed", stage=self._armed, ticks=self.ticks)
-            self._armed = None
+        with self.command_lock:          # waits for a stop being sent; after this no stop is dispatched
+            with self._lock:
+                if self._armed is not None:
+                    self._log("live_guard_disarmed", stage=self._armed, ticks=self.ticks)
+                self._armed = None
+                self._gen += 1
 
     def start(self) -> None:
         if self._thread is None:
@@ -107,38 +123,48 @@ class LiveGuard:
 
     # -- one look ------------------------------------------------------------------------------
     def step(self) -> None:
-        """One tick: grab, judge, count, maybe stop. The thread calls this; tests call it directly."""
+        """One tick: grab, judge each camera, count, maybe stop. The thread calls this; tests call it directly."""
         with self._lock:
-            stage = self._armed
+            stage, gen = self._armed, self._gen
         if stage is None or self.tripped is not None:
             return
         frames = self.source()
-        if not frames:
-            return
-        answer, why = self.judge(frames)
         self.ticks += 1
-        if answer is None:
-            return
-        sig = hashlib.sha1(b"".join(frames[k] for k in sorted(frames))).hexdigest()
-        with self._lock:
-            if self._armed is None:   # disarmed while judging: the answer is about a stage that has ended
+        for role in sorted(frames):
+            jpeg = frames[role]
+            sig = hashlib.sha1(jpeg).hexdigest()
+            with self._lock:
+                if gen != self._gen:
+                    return                  # disarmed or re-armed while looking: these answers are stale
+                if sig == self._sig.get(role):
+                    continue                # the same frame again is not a new look
+            answer, why = self.judge({role: jpeg})
+            with self._lock:
+                if gen != self._gen:
+                    return
+                self._sig[role] = sig
+                if answer is None:
+                    continue
+                self.last_answer_t = self._clock()
+                if answer is False:
+                    self._count[role] = 0
+                    continue
+                self._count[role] = count = self._count.get(role, 0) + 1
+            self._log("guard_yes", stage=stage, count=count, reason=why, camera=role, source="live")
+            if count >= self.confirm_frames:
+                self._trip(stage, gen, why)
                 return
-            self.last_answer_t = self._clock()
-            if answer is False:
-                self._count, self._last_sig = 0, sig
-                return
-            if sig == self._last_sig:
-                return              # the same frozen frames judged again are not a second look
-            self._count += 1
-            self._last_sig = sig
-            count = self._count
-        self._log("guard_yes", stage=stage, count=count, reason=why, source="live")
-        if count >= self.confirm_frames:
-            self.tripped = why
+
+    def _trip(self, stage: str, gen: int, why: str) -> None:
+        with self.command_lock:
+            with self._lock:
+                if gen != self._gen or self.tripped is not None:
+                    return
+                self.tripped = why
             try:
                 self._stop()
                 self._log("guard_tripped", stage=stage, reason=why, source="live", stop="sent")
-            except Exception as exc:  # noqa: BLE001 - the runner's own stop follows on its next poll
+            except Exception as exc:  # noqa: BLE001 - the runner's own stop follows on its next check
                 self._log("guard_tripped", stage=stage, reason=why, source="live", stop=f"failed: {exc}")
 
     def _loop(self) -> None:

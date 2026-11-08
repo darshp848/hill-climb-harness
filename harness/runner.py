@@ -29,6 +29,7 @@ SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-
 MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prompt change
 MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-service faults
 REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
+HOME_RESERVE_S = 30.0      # /home can't be cancelled (the station refuses /stop while homing): need this much left
 CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
 
 
@@ -235,6 +236,9 @@ class Runner:
     def _check_global(self) -> None:
         if self._stop_event.is_set():
             raise _Stop()
+        lg = self.live_guard
+        if lg is not None and lg.tripped is not None:
+            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
         if self._clock() - self._t0 > self.plan.time_budget_s:
             raise _Fail(f"time budget of {self.plan.time_budget_s:g} s exceeded")
 
@@ -249,9 +253,6 @@ class Runner:
 
     def _poll_health(self) -> dict[str, Any]:
         self._check_global()
-        lg = self.live_guard
-        if lg is not None and lg.tripped is not None:
-            raise _Guard(f"guard tripped (live frames): {lg.tripped}")
         st = self.station.status()
         if st.get("state") == "error":
             self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
@@ -261,6 +262,17 @@ class Runner:
             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
         return st
 
+    def _motion(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Sends a command that can move an arm. With a live guard, under its command lock and only if it has not
+        tripped: a trip either happened before (raise, nothing sent) or comes after, and its /stop follows this."""
+        lg = self.live_guard
+        if lg is None:
+            return fn(*args)
+        with lg.command_lock:
+            if lg.tripped is not None:
+                raise _Guard(f"guard tripped (live frames): {lg.tripped}")
+            return fn(*args)
+
     def _safe_stop(self, why: str) -> None:
         self.log.event("stop", why=why)
         try:
@@ -269,10 +281,21 @@ class Runner:
             self.log.event("stop_failed", error=str(exc))
 
     def _wait(self, states: set[str], timeout_s: float, what: str) -> dict[str, Any]:
-        try:
-            st = self.station.wait_for_state(states | {"error"}, timeout_s)
-        except TimeoutError as exc:
-            raise _Fail(f"timed out waiting for {what}: {exc}") from None
+        # In 1 s slices, so a live-guard trip (its /stop means `states` may never come) ends the wait at once.
+        deadline = time.monotonic() + timeout_s
+        while True:
+            lg = self.live_guard
+            if lg is not None and lg.tripped is not None:
+                raise _Guard(f"guard tripped (live frames) while waiting for {what}: {lg.tripped}")
+            if self._stop_event.is_set():
+                raise _Stop()
+            left = deadline - time.monotonic()
+            try:
+                st = self.station.wait_for_state(states | {"error"}, max(0.0, min(1.0, left)))
+                break
+            except TimeoutError as exc:
+                if left <= 1.0:
+                    raise _Fail(f"timed out waiting for {what}: {exc}") from None
         if st.get("state") == "error" and "error" not in states:
             raise _Fail(f"station error: {_err(st.get('last_error'))}")
         return st
@@ -296,7 +319,7 @@ class Runner:
         while True:
             self._check_global()
             self.log.event("start", prompt=prompt, checkpoint=self.plan.checkpoint)
-            self.station.start(prompt, self.plan.checkpoint)
+            self._motion(self.station.start, prompt, self.plan.checkpoint)
             left = self.plan.time_budget_s - (self._clock() - self._t0)
             st = self._wait({"running", "error"}, max(5.0, min(START_TIMEOUT_S, left)), "running")
             if st.get("state") != "error":
@@ -315,7 +338,8 @@ class Runner:
         if force_start or st.get("state") != "running":
             reply, how = self._start_run(prompt), "start"
         else:
-            reply, how = self.station.set_prompt(prompt), "set_prompt"
+            self._check_global()
+            reply, how = self._motion(self.station.set_prompt, prompt), "set_prompt"
             self.log.event("set_prompt", prompt=prompt)
         self._prompt = prompt
         chunks = reply.get("chunks") if isinstance(reply, dict) else None
@@ -425,7 +449,7 @@ class Runner:
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
             if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
                 self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
-            if guard is not None and self.fast_guard is not None and self.live_guard is None:
+            if guard is not None and self.fast_guard is not None:   # kept with a live guard too: a fallback
                 # Local detector on every poll, from the stage's first second: no API latency, works offline.
                 local, why = self.fast_guard(self.frames.latest())
                 if isinstance(local, bool):
@@ -719,12 +743,21 @@ class Runner:
             self.log.event("start_pose_home", stage=stage.name, done=False,
                            reason="the home pose is not a training start for this prompt either", **home.as_event())
             return False
+        left = self.plan.time_budget_s - (self._clock() - self._t0)
+        if left < HOME_RESERVE_S:
+            self.log.event("start_pose_home", stage=stage.name, done=False,
+                           reason=f"only {left:.0f} s left; /home can't be cancelled once started")
+            return False
+        self._check_global()
         self._homes[stage.name] = self._homes.get(stage.name, 0) + 1
         self.log.event("start_pose_home", stage=stage.name, done=True, why=why)
         if st.get("state") != "idle":
             self.station.stop()
             self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
-        self.station.home()
+        self._check_global()   # an operator stop, the deadline or a guard trip during the stop: hold, don't home
+        if self.plan.time_budget_s - (self._clock() - self._t0) < HOME_RESERVE_S:
+            raise _Fail("not enough match time left to home safely after the stop")
+        self._motion(self.station.home)
         self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
         return True
 
@@ -788,7 +821,7 @@ class Runner:
                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="home_and_retry")
                 self.station.stop()
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
-                self.station.home()
+                self._motion(self.station.home)
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
                 refused = self._try_issue(self._stage_prompt(stage, verifier), "retry", force_start=True)
             else:

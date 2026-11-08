@@ -71,7 +71,7 @@ def test_bad_start_pose_rejected(sp, match):
 def _pose_runner(fake, write_plan, tmp_path, *, right, home_before=("unplug_cable",), refs=None, verdicts=None,
                  max_attempts=2):
     path = write_plan([stage("unplug_cable", prompt="do unplug", max_attempts=max_attempts, timeout_s=0.6)],
-                      start_pose={"reference": "unused.json", "home_before": list(home_before)})
+                      start_pose={"reference": "unused.json", "home_before": list(home_before)}, time_budget_s=300)
     runner = build(fake, path, tmp_path, Script(verdicts or [mv(True)]))
     runner.start_poses = refs or _ref(**{"do unplug": [(HOME, HOME)]})
     runner.station.grippers = lambda: {"left": {"positions_rad": HOME}, "right": {"positions_rad": right}}
@@ -220,10 +220,99 @@ def test_live_guard_answer_time_and_disarm():
     assert g.last_answer_t == 105.0
 
 
-def test_live_frames_drop_a_camera_without_the_route(fake):
-    lf = LiveFrames(fake.api_url, ("wrist_l", "wrist_r"), max_misses=2)
-    assert lf.grab() == {} and lf.grab() == {}
-    assert lf.roles == [] and "404" in lf.last_error
+def test_live_frames_probe_finds_no_route(fake):
+    lf = LiveFrames(fake.api_url, ("wrist_l", "wrist_r"))
+    assert lf.probe() == [] and "404" in lf.last_error
+    assert lf.roles == ["wrist_l", "wrist_r"]          # nothing dropped: a camera that comes back is used again
+
+
+# -- Codex review findings ---------------------------------------------------------------------------------------------
+def test_yes_counts_per_camera_not_across_cameras():
+    n = {"l": 0}
+
+    def feed():
+        n["l"] += 1
+        return {"wrist_l": b"moving%d" % n["l"], "wrist_r": b"frozen-yes"}
+    stops = []
+    g = LiveGuard(feed, lambda f: (True, "y") if "wrist_r" in f else (False, "n"), lambda: stops.append(1))
+    g.arm("ball_1")
+    for _ in range(6):
+        g.step()
+    assert g.tripped is None and not stops            # one frozen yes frame is one look
+
+
+def test_frozen_frames_do_not_refresh_the_blind_clock():
+    t = [100.0]
+    g = LiveGuard(lambda: {"wrist_r": b"same"}, lambda f: (False, "n"), lambda: None, clock=lambda: t[0])
+    g.arm("ball_1")
+    t[0] = 101.0
+    g.step()
+    assert g.last_answer_t == 101.0
+    t[0] = 130.0
+    g.step()
+    assert g.last_answer_t == 101.0                   # max_blind_s will see the camera as blind
+
+
+def test_a_judgment_from_before_a_rearm_is_dropped():
+    g = None
+    stops = []
+
+    def judge(f):
+        g.disarm()
+        g.arm("ball_2")                               # the runner moved on while this frame was being judged
+        return True, "y"
+    g = LiveGuard(_Feed(), judge, lambda: stops.append(1), confirm_frames=1)
+    g.arm("ball_1")
+    g.step()
+    assert g.tripped is None and not stops
+
+
+def test_no_motion_command_after_a_trip(fake, write_plan, tmp_path):
+    from harness.runner import _Guard
+    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+    g = LiveGuard(_Feed(), lambda f: (True, "y"), lambda: None, confirm_frames=1)
+    runner.live_guard = g
+    g.arm("ball_1")
+    g.step()
+    assert g.tripped
+    before = routes(fake)
+    with pytest.raises(_Guard):
+        runner._motion(runner.station.start, "do ball_1", None)
+    with pytest.raises(_Guard):
+        runner._issue("do ball_1", "stage")
+    assert routes(fake) == before                     # nothing was sent
+
+
+def test_no_home_without_time_reserve(fake, write_plan, tmp_path):
+    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
+    runner.plan.time_budget_s = 20.0                  # < HOME_RESERVE_S
+    runner.run()
+    assert "/home" not in routes(fake)
+    assert "can't be cancelled" in events(runner.log, "start_pose_home")[0]["reason"]
+
+
+def test_operator_stop_during_the_stop_wait_means_no_home(fake, write_plan, tmp_path):
+    from harness.runner import _Stop
+    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
+    runner._t0 = runner._clock()
+    stage0 = runner.plan.stages[0]
+    runner._issue("do unplug", "stage", force_start=True)          # running, so the gate must /stop first
+    orig_stop = runner.station.stop
+    runner.station.stop = lambda: (runner.request_stop(), orig_stop())[1]
+    with pytest.raises(_Stop):
+        runner._start_pose_gate(stage0, "do unplug", "retry")
+    assert "/home" not in routes(fake)
+
+
+def test_a_trip_ends_a_wait_for_running_at_once(fake, write_plan, tmp_path):
+    import time as _t
+    from harness.runner import _Guard
+    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+    runner.live_guard = type("G", (), {"tripped": "white ball", "last_answer_t": None})()
+    t0 = _t.monotonic()
+    with pytest.raises(_Guard, match="while waiting for running"):
+        runner._wait({"running"}, 30.0, "running")       # the fake is idle: without the trip this waits 30 s
+    assert _t.monotonic() - t0 < 2.0
 
 
 def test_live_guard_trip_ends_the_match_mid_stage(fake, write_plan, tmp_path):
