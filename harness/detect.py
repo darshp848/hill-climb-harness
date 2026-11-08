@@ -33,6 +33,19 @@ except ImportError:   # pragma: no cover
     _ndi = None
 
 SMALL_BALL_FRAC = 0.004  # a golf ball in the overhead view is ~0.05-0.1% of the image
+# Measured on the station's overhead camera (8 Nov, 14 hand-labelled frames): the farthest golf ball covers ~75 px
+# at WORK_W and the nearest ~0.2% of the image. A small, half-lit ball reads as a crescent (elongation up to 2.0,
+# roundness down to 0.30); a cube's pale rim is a thin ring (roundness <= 0.15).
+BALL_MIN_PX = 50
+BALL_MAX_ELONG = 2.1
+BALL_MIN_ROUND = 0.28
+# Overhead: two touching cubes merge into a blob ~21 px wide at WORK_W; a lying stick is ~9 px wide, and shading
+# can put a dip in its ridge, so only blobs at least this wide are split.
+SPLIT_MIN_WIDTH_PX = 14.0
+# Overhead: a ball-only colour blob bigger than this is the white bin (or a ball touching it), never a ball itself.
+# A ball pressed against the bin merges with it and is missed; looking for round lobes on the bin's edge also fired
+# on the corners of a bin seen at an angle, so it is not done.
+OVERHEAD_BALL_MAX_FRAC = 0.006
 WORK_W = 640           # frames are shrunk to this width before detection
 COLORS = {"avoid": (230, 20, 20), "target": (20, 200, 60), "info": (30, 120, 230)}
 # Where a held ball sits in a wrist view, measured on the station's right wrist camera (plans/table_colors.yaml says
@@ -53,7 +66,8 @@ class ClassSpec:
     # which shapes of this colour to report, and how: kind (ball | cube | stick) -> role (avoid | target | info).
     # Empty = every kind, role info. Black lists only ball, so the black gripper fingers are never reported.
     kinds: dict[str, str] = field(default_factory=dict)
-    small_ball: bool = False       # this colour only comes as balls: read a small compact blob as a ball
+    small_ball: bool = False       # read a small compact blob of this colour as a ball (not a cube): the colour has
+                                   # no cubes on the table (it may have sticks; one standing on a cube reads upright)
     # classes whose objects this colour also shows up on: a blob of this colour centred inside one of their boxes is
     # that object's highlight or rim, not an object of its own (white: the pale face of a blue cube)
     not_inside: tuple[str, ...] = ()
@@ -164,6 +178,67 @@ def _in_range(hsv: np.ndarray, lo: tuple[int, int, int], hi: tuple[int, int, int
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     hue = (h >= lo[0]) & (h <= hi[0]) if lo[0] <= hi[0] else (h >= lo[0]) | (h <= hi[0])   # red wraps around
     return hue & (s >= lo[1]) & (s <= hi[1]) & (v >= lo[2]) & (v <= hi[2])
+
+
+def _shape(ys: np.ndarray, xs: np.ndarray) -> tuple[float, float]:
+    """(elongation, roundness) of one blob: sqrt of the covariance eigenvalue ratio, and its area over the area of
+    the circle around it (disc ~1, square ~0.64, thin bar small)."""
+    pts = np.stack([xs, ys], axis=1).astype(float)
+    c = pts.mean(axis=0)
+    ev = np.linalg.eigvalsh(np.cov((pts - c).T)) if len(xs) > 2 else np.array([1.0, 1.0])
+    elong = float(np.sqrt(max(ev[1], 1e-9) / max(ev[0], 1e-9)))
+    rmax = float(np.sqrt(((pts - c) ** 2).sum(axis=1).max())) + 0.5
+    return elong, len(xs) / (np.pi * rmax * rmax)
+
+
+def _width(blob: np.ndarray) -> float:
+    """A blob's width across its long axis, px (sqrt(12) x the minor standard deviation)."""
+    ys, xs = np.nonzero(blob)
+    if len(xs) < 3:
+        return 0.0
+    ev = np.linalg.eigvalsh(np.cov(np.stack([xs, ys]).astype(float)))
+    return float(np.sqrt(12 * max(ev[0], 0.0)))
+
+
+def _peaks(d: np.ndarray, lo: float, hi: float, size: int) -> list[tuple[int, int]]:
+    """Local maxima of a distance map with lo <= d <= hi, one point per plateau, highest first."""
+    peak = (d == _ndi.maximum_filter(d, size=size)) & (d >= lo) & (d <= hi)
+    lab, n = _ndi.label(peak, structure=np.ones((3, 3)))
+    pts = [tuple(int(v) for v in np.unravel_index(np.argmax(np.where(lab == i, d, -1)), d.shape))
+           for i in range(1, n + 1)]
+    return sorted(pts, key=lambda p: -d[p])
+
+
+def _split(blob: np.ndarray) -> list[np.ndarray]:
+    """Touching objects of one colour (two blue cubes side by side read as one long blob, a "stick") as separate
+    blobs: peaks of the distance to the blob's edge with a clear dip between them. A lying stick has a flat ridge
+    along its length, with no dip, so it stays whole."""
+    if _ndi is None:
+        return [blob]
+    ys, xs = np.nonzero(blob)
+    y0, x0 = ys.min(), xs.min()
+    b = blob[y0:ys.max() + 1, x0:xs.max() + 1]
+    d = _ndi.distance_transform_edt(np.pad(b, 1))[1:-1, 1:-1]
+    if d.max() < 3:
+        return [blob]
+    t = np.linspace(0, 1, 24)
+    keep: list[tuple[int, int]] = []
+    for p in _peaks(d, 0.55 * d.max(), np.inf, 3):
+        def dip(q, p=p):
+            line = d[np.round(p[0] + t * (q[0] - p[0])).astype(int), np.round(p[1] + t * (q[1] - p[1])).astype(int)]
+            return line.min() < 0.7 * min(d[p], d[q])
+        if all(dip(q) for q in keep):
+            keep.append(p)
+    if len(keep) < 2:
+        return [blob]
+    by, bx = np.nonzero(b)
+    near = np.argmin([(by - py) ** 2 + (bx - px) ** 2 for py, px in keep], axis=0)
+    out = []
+    for k in range(len(keep)):
+        m = np.zeros_like(blob)
+        m[by[near == k] + y0, bx[near == k] + x0] = True
+        out.append(m)
+    return out
 
 
 def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
@@ -300,21 +375,38 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
         if n == 0:
             continue
         sizes = np.bincount(lab.ravel())
+        pieces: list[np.ndarray] = []
         for i in range(1, n + 1):
-            area = sizes[i]
-            frac = area / total
+            frac = sizes[i] / total
             if not spec.min_frac <= frac <= spec.max_frac:
                 continue
-            ys, xs = np.nonzero(lab == i)
+            blob = lab == i
+            if spec.small_ball and overhead and frac > OVERHEAD_BALL_MAX_FRAC:
+                continue   # the white bin (with any ball touching it): never one ball
+            split = _split(blob) if overhead and "cube" in spec.kinds and _width(blob) >= SPLIT_MIN_WIDTH_PX else [blob]
+            pieces += [(p, len(split) > 1) for p in split]
+        for blob, cut in pieces:
+            ys, xs = np.nonzero(blob)
+            frac = len(xs) / total
+            if frac < spec.min_frac:
+                continue
             kind, orient = _kind(ys, xs)
-            if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
-                kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
-                                # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
+            if "cube" in spec.kinds and "ball" not in spec.kinds and (
+                    kind == "ball" or (cut and kind is None and _shape(ys, xs)[0] <= 2.0)):
+                kind, orient = "cube", None   # no balls of this colour: a cube seen corner-on, or one cut from a
+                                              # neighbour by _split, reads rounder than a square
+            if spec.small_ball and frac <= SMALL_BALL_FRAC and kind != "ball" and len(xs) >= BALL_MIN_PX:
+                # a colour with no cubes: a small, half-lit ball reads square-ish or as a crescent
+                # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
+                if kind == "cube" or kind is None:
+                    elong, roundness = _shape(ys, xs)
+                    if kind == "cube" or (elong <= BALL_MAX_ELONG and roundness >= BALL_MIN_ROUND):
+                        kind, orient = "ball", None
             if kind is None or (spec.kinds and kind not in spec.kinds):
                 continue
             role = spec.kinds.get(kind, "info")
             label = f"{spec.label or spec.name} {kind}"
-            axis, conf = _hole_axis(raw, lab == i, hsv[..., 2]) if kind == "cube" else (None, 0.0)
+            axis, conf = _hole_axis(raw, blob, hsv[..., 2]) if kind == "cube" else (None, 0.0)
             conf = conf if overhead else min(conf, 0.4)   # away from overhead, a centred hole can be on any face
             out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
                            orient, role, axis, conf, spec.name))
@@ -322,6 +414,11 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
     out = [b for b in out
            if b.spec in by_name and not any(o.spec in by_name[b.spec].not_inside and o.x0 <= b.cx <= o.x1
                                             and o.y0 <= b.cy <= o.y1 for o in out)]
+    for b in out:   # a compact blob of a colour that also comes as sticks, on a cube: a stick standing in its hole
+        spec = by_name[b.spec]
+        if b.cls.endswith(" ball") and "stick" in spec.kinds and any(
+                c.cls.endswith(" cube") and c.x0 <= b.cx <= c.x1 and c.y0 <= b.cy <= c.y1 for c in out):
+            b.cls, b.orientation, b.role = f"{spec.label or spec.name} stick", "upright", spec.kinds["stick"]
     _mark_upright(out, H / W)
     if overhead and cfg.table_roi:
         x0, y0, x1, y1 = cfg.table_roi

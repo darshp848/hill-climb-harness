@@ -13,6 +13,10 @@
 # than the 640x360 camera. White ball on the right wrist camera: H 147, S 47, V 169-227 (median 193), so V >= 225
 # matched 0.1% of it; the table there is H 49 S 13 V 185 (out on hue and saturation). Overhead green ball: H 114
 # (the old range stopped at 110). Check: tests/data/guard_real/ and tests/test_guard_real_frames.py.
+# 8 Nov, against hand labels on the overhead camera (docs/CLASSIFIERS_8NOV.md): the pale yellow-green golf ball is
+# H 56-65, S 57-79, V 172-198, between the old yellow (30-55) and green (72-125) ranges, so yellow now runs H 30-70 from
+# S 50. Yellow has no cubes on this table, so a compact yellow blob is a ball (one standing on a cube is an upright
+# stick). The white bin is never a ball in the overhead view (harness.detect.OVERHEAD_BALL_MAX_FRAC).
 annotate: true
 # Overhead view only: blobs outside this box are ignored (people, chairs, laptops behind the table). Station C's
 # scene camera shows the table below ~32% of the image height (last-run_inputs, 7 Nov).
@@ -34,6 +38,6 @@ classes:
   black:  {hsv: [[0, 0, 0], [255, 255, 55]], min_frac: 0.002, max_frac: 0.25, kinds: {ball: avoid}}
   green:  {hsv: [[72, 60, 120], [125, 255, 255]], min_frac: 0.0001, kinds: {ball: target}, small_ball: true}
   orange: {hsv: [[3, 90, 150], [24, 255, 255]], min_frac: 0.0001, kinds: {ball: target}, small_ball: true}
-  yellow: {hsv: [[30, 70, 150], [55, 255, 255]], min_frac: 0.0001, kinds: {ball: target, cube: info, stick: info}}
+  yellow: {hsv: [[30, 50, 150], [70, 255, 255]], min_frac: 0.0001, kinds: {ball: target, stick: info}, small_ball: true}
   blue:   {hsv: [[135, 110, 80], [165, 255, 255]], min_frac: 0.0003, kinds: {cube: info, stick: info}}
   pink:   {hsv: [[200, 60, 120], [240, 255, 255]], min_frac: 0.0003, kinds: {cube: info, stick: info}}

@@ -104,6 +104,34 @@ def real_items():
     return out
 
 
+def wrist_items():
+    """Station wrist-camera crops (8 Nov rollouts, extract_wrist.py), hand-labelled: (path, label, run)."""
+    lp, cp = os.path.join(HERE, "real/wrist_labels.json"), os.path.join(HERE, "real/wrist_cands.json")
+    if not (os.path.exists(lp) and os.path.exists(cp)):
+        return []
+    labels = json.load(open(lp))
+    cands = json.load(open(cp))
+    return [(os.path.join(HERE, f"real/wrist/{c['id']:04d}.png"), LABELS.index(labels[str(c["id"])]), "wrist:" + c["run"])
+            for c in cands if labels.get(str(c["id"])) in LABELS]
+
+
+def onnx_probs(path, items):
+    """The shipped model as the harness runs it (OpenCV DNN, batches of 8)."""
+    net = cv2.dnn.readNetFromONNX(path)
+    ds = DS(items, False)
+    xs = np.stack([ds[i][0].numpy() for i in range(len(ds))])
+    out = []
+    for k in range(0, len(xs), 8):
+        chunk = xs[k:k + 8]
+        pad = np.zeros((8,) + xs.shape[1:], np.float32)
+        pad[:len(chunk)] = chunk
+        net.setInput(pad)
+        out.append(net.forward()[:len(chunk)].copy())
+    z = np.concatenate(out)
+    e = np.exp(z - z.max(1, keepdims=True))
+    return e / e.sum(1, keepdims=True)
+
+
 def synth_items():
     out = []
     for y, lab in enumerate(LABELS):
@@ -188,6 +216,8 @@ def main():
     ap.add_argument("--out", default=os.path.join(HERE, "cable_end.onnx"))
     ap.add_argument("--final", choices=["real", "synth+real"], default="real", help="data for the shipped model")
     ap.add_argument("--final-only", action="store_true", help="skip the held-out comparisons")
+    ap.add_argument("--wrist-test", type=float, default=0.3, help="share of wrist-camera runs held out for testing")
+    ap.add_argument("--baseline", default=os.path.join(HERE, "cable_end.onnx"), help="model to compare on wrist crops")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     print("device", dev)
@@ -211,6 +241,27 @@ def main():
         at_threshold(p, ys_test, 0.7)
         report(f"{name} on held-out photos", predict(m, photo, dev), ys_photo)
 
+    wrist = wrist_items()
+    if wrist:
+        runs = sorted({s for _, _, s in wrist})
+        random.Random(1).shuffle(runs)
+        test_runs = set(runs[: max(1, int(len(runs) * args.wrist_test))])
+        w_train = [(p, y, False) for p, y, s in wrist if s not in test_runs]
+        w_test = [(p, y, False) for p, y, s in wrist if s in test_runs]
+        yw = np.array([y for _, y, _ in w_test])
+        print(f"wrist crops: train {len(w_train)} test {len(w_test)} ({len(test_runs)} of {len(runs)} runs held out)",
+              np.bincount(yw, minlength=3))
+        if os.path.exists(args.baseline):
+            pb = onnx_probs(args.baseline, w_test)
+            report(f"baseline {os.path.basename(args.baseline)} on held-out wrist runs", pb, yw)
+            at_threshold(pb, yw, 0.7)
+        old_real = [(p, y, False) for p, y, s in real]
+        m_w = train(old_real * 8 + w_train * 8, args.epochs, dev)
+        pw = predict(m_w, w_test, dev)
+        report("old real + wrist-train on held-out wrist runs", pw, yw)
+        at_threshold(pw, yw, 0.7)
+        report("old real + wrist-train on the old held-out photos", predict(m_w, photo, dev), ys_photo)
+
     if not args.final_only:
         print("== synthetic only")
         show("synthetic-only", train(synth, args.epochs, dev))
@@ -221,8 +272,8 @@ def main():
 
     # The shipped model: every labelled crop (all videos and the photos). 7 Nov, 15 epochs, held-out videos:
     # real-only 0.944 accuracy vs synthetic+real 0.918 (photos 0.73 vs 0.56), so the renders stay out by default.
-    everything = [(p, y, False) for p, y, s in real]
-    print(f"== final ({args.final}): all {len(everything)} real crops")
+    everything = [(p, y, False) for p, y, s in real] + [(p, y, False) for p, y, _ in wrist]
+    print(f"== final ({args.final}): all {len(everything)} real crops (old {len(real)} + wrist {len(wrist)})")
     m1 = train((synth if args.final == "synth+real" else []) + everything * 8, args.epochs, dev)
     m1 = m1.cpu().eval()
     torch.onnx.export(m1, torch.zeros(1, 3, SIZE, SIZE), args.out, input_names=["x"], output_names=["logits"],
