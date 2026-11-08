@@ -43,6 +43,7 @@ class MonitorVerdict(Verdict):
     tower: list[str] | None = None  # the tower the monitor sees, bottom to top (stacking stages with a tower_target)
     next_prompt: str | None = None  # the monitor's own instruction for the robot (plan.rewrite_prompts)
     latency_s: float | None = None  # how long the Claude call took
+    stage_done: bool | None = None  # raw model answer, before the confidence gate (offline judge benchmarks)
 
 
 def valid_jpeg(data: bytes) -> bool:
@@ -336,14 +337,23 @@ def to_openai_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def openrouter_request_body(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """The credential-free wire body, shared with offline request validation."""
+    return {"model": model, "messages": to_openai_messages(payload),
+            "max_tokens": int(payload.get("max_tokens", 1024))}
+
+
 def openrouter_transport(models: list[str] | None = None, api_key: str | None = None,
-                         timeout_s: float = 60.0) -> Transport:
+                         timeout_s: float = 60.0,
+                         on_attempt: Callable[[dict[str, Any]], None] | None = None) -> Transport:
     """The same monitor request sent to other multimodal models through OpenRouter (OPENROUTER_API_KEY).
 
     Models: `models`, else $HARNESS_OPENROUTER_MODELS (comma-separated OpenRouter ids). With more than one model,
     every call races them (harness.hedge.first_of) and takes the first reply that has text: a fast model answers
     first when it can, a slower, more reliable one covers when it can't. The key goes only in the Authorization
-    header to openrouter.ai and is never logged."""
+    header to openrouter.ai and is never logged. Optional on_attempt receives accounting for every HTTP attempt,
+    including empty responses and losing calls, from worker threads. It must be thread-safe and must not raise.
+    Only model, usage, response ID, provider, latency and exception type are included, never request headers."""
     key = api_key or os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise ValueError("the openrouter backend needs OPENROUTER_API_KEY")
@@ -352,20 +362,34 @@ def openrouter_transport(models: list[str] | None = None, api_key: str | None = 
         raise ValueError("the openrouter backend needs model ids in HARNESS_OPENROUTER_MODELS (comma-separated)")
 
     def one(model: str, payload: dict[str, Any]) -> dict[str, Any]:
-        body = {"model": model, "messages": to_openai_messages(payload),
-                "max_tokens": int(payload.get("max_tokens", 1024))}
-        req = urllib.request.Request(
-            OPENROUTER_URL, data=json.dumps(body).encode("utf-8"), method="POST",
-            headers={"Authorization": f"Bearer {key}", "content-type": "application/json",
-                     "X-Title": "hill-climb-harness"})
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            reply = json.loads(resp.read())
-        text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        if isinstance(text, list):
-            text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
-        if not text.strip():
-            raise RuntimeError(f"{model}: empty reply")
-        return {"content": [{"type": "text", "text": text}], "usage": reply.get("usage"), "model": model}
+        started = time.monotonic()
+        reply: dict[str, Any] = {}
+        error = None
+        try:
+            body = openrouter_request_body(model, payload)
+            req = urllib.request.Request(
+                OPENROUTER_URL, data=json.dumps(body).encode("utf-8"), method="POST",
+                headers={"Authorization": f"Bearer {key}", "content-type": "application/json",
+                         "X-Title": "hill-climb-harness"})
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                decoded = json.loads(resp.read())
+                if not isinstance(decoded, dict):
+                    raise ValueError("OpenRouter response must be an object")
+                reply = decoded
+            text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if isinstance(text, list):
+                text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+            if not text.strip():
+                raise RuntimeError(f"{model}: empty reply")
+            return {"content": [{"type": "text", "text": text}], "usage": reply.get("usage"), "model": model}
+        except Exception as exc:
+            error = type(exc).__name__
+            raise
+        finally:
+            if on_attempt is not None:
+                on_attempt({"model": model, "usage": reply.get("usage"), "id": reply.get("id"),
+                            "provider": reply.get("provider"), "latency_s": time.monotonic() - started,
+                            "error_type": error})
 
     def send(payload: dict[str, Any]) -> dict[str, Any]:
         if len(names) == 1:
@@ -447,7 +471,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
             reason = f"low confidence: {reason}"
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
                           recovery=rec, scene_ok=scene, holding=holding, guard=guard, watch_ok=watch_ok,
-                          tower=tower, next_prompt=nxt)
+                          tower=tower, next_prompt=nxt, stage_done=obj["stage_done"])
 
 
 class MonitorVerifier:

@@ -265,6 +265,7 @@ def test_monitor_async_never_blocks_and_one_in_flight():
         calls.append(payload)
         started.set()
         release.wait(5)
+        release.clear()  # each new call must wait for its own release
         return api_reply(reply_text(stage_done=True, progress=0.9))
 
     mon = MonitorVerifier(plan, transport=slow)
@@ -279,6 +280,7 @@ def test_monitor_async_never_blocks_and_one_in_flight():
     v = mon.check(st, FRAMES, 3)
     assert v.done is True and v.progress == 0.9
     assert mon.check(st, FRAMES, 4).done is None                # a result is consumed exactly once
+    release.set()
     mon.wait_idle(3)
 
 
