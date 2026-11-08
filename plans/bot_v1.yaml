@@ -113,7 +113,7 @@ stages:
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
-      loop_until_s: 120    # Kaushik, 8 Nov: 2 min for cables, 1 min tower, 2 min balls
+      loop_until_s: 105    # Kaushik, 8 Nov: 15 s moved from cables to stacking
     success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
     camera_notes:
@@ -141,7 +141,7 @@ stages:
     success: "Is one blue cube resting on top of the other blue cube, standing on its own, with no gripper holding it?"
     camera_notes:
       scene: "top view of the table: the cubes and the stack"
-    timeout_s: 40          # Kaushik, 8 Nov: three 40 s steps (2 blue, 1 pink, 1 green cube on the table)
+    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
@@ -157,7 +157,7 @@ stages:
     success: "Is the pink cube resting on top of the two stacked blue cubes, standing on its own, with no gripper holding it?"
     camera_notes:
       scene: "top view of the table: the cubes and the stack"
-    timeout_s: 40          # Kaushik, 8 Nov: three 40 s steps (2 blue, 1 pink, 1 green cube on the table)
+    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
@@ -173,7 +173,7 @@ stages:
     success: "Are four cubes stacked in one tower (two blue, then pink, then green on top), standing on its own, with no gripper holding or touching it?"
     camera_notes:
       scene: "top view of the table: the cubes and the stack"
-    timeout_s: 40          # Kaushik, 8 Nov: three 40 s steps (2 blue, 1 pink, 1 green cube on the table)
+    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
