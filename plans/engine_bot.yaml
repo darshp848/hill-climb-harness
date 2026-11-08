@@ -122,7 +122,7 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - &unplug
     name: cable_unplug
-    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug and pull it straight up."
+    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss it onto the table to the right."
     write_prompt: false
     template: unplug
     slots: {plug: "a plug standing upright in a port on top of the black power strip"}
@@ -133,7 +133,7 @@ stages:
       pull_s: 3            # seconds per lift step: slower slips less
       seat_dz: 0.01        # open a little and lower 1 cm before the squeeze, so the jaws bite the plug body
       repull: 2            # slipped on the way up: straight back down, re-grip, pull again
-      hold: [0.045, 0.20]  # a held plug reads 0.05-0.15; <= 0.045 is shut on nothing; a pull from 0.27 lost it
+      hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty)
       put_down_prompt: "Move the held cable far to the right, onto the empty table beside the power strip, lower it flat onto the table there and open the gripper."   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
