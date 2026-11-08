@@ -7,6 +7,9 @@ monitor's looks, and type to it: override Dream's prompt, skip the stage, talk t
 Practice only: a run started here takes typed input (a DQ in a match), unless "match mode" is ticked. The panel runs
 the normal CLI (`python -m harness ... --live`) as a child process and answers its "yes" for you, so the CLI's own
 checks (live guard required, preflight) all apply. Binds 127.0.0.1 only.
+
+With LIVEKIT_URL (+ a token, or key/secret/room) set and `livekit` installed, a view-only LiveKit section shows the
+room's camera tracks (`harness/livekit_view.py`); it has no inputs and sends nothing. Without them the panel is as before.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -119,7 +123,7 @@ def get(url: str, timeout: float = 2.0) -> bytes | None:
         return None
 
 
-def make_handler(run: Run, station: str, monitor_model: str) -> type[BaseHTTPRequestHandler]:
+def make_handler(run: Run, station: str, monitor_model: str, viewer: Any = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a: Any) -> None:
             pass
@@ -164,6 +168,13 @@ def make_handler(run: Run, station: str, monitor_model: str) -> type[BaseHTTPReq
                 if not cam.replace("_", "").isalnum():
                     return self._send(400, b"{}")
                 jpeg = get(f"{station}/frame/{cam}.jpg?w=480")
+                return self._send(200, jpeg, "image/jpeg") if jpeg else self._send(404, b"{}")
+            # view-only LiveKit: GET only, never touches the run or the station
+            if path == "/livekit/state":
+                return self._json(viewer.state() if viewer is not None else
+                                  {"status": "off", "reason": "viewer not started", "room": None, "tracks": {}})
+            if path.startswith("/livekit/frame/") and viewer is not None:
+                jpeg = viewer.jpeg(urllib.parse.unquote(path[len("/livekit/frame/"):]))
                 return self._send(200, jpeg, "image/jpeg") if jpeg else self._send(404, b"{}")
             self._send(404, b"{}")
 
@@ -236,6 +247,9 @@ background:var(--card);color:var(--ink);cursor:pointer}.hint{font-size:12px;colo
 .you b{color:var(--violet)}.good b{color:var(--green)}.look{color:var(--mute)}.stagebar{background:var(--soft);font-weight:600}
 .legend{display:flex;gap:12px;font-size:12px;color:var(--mute);flex-wrap:wrap;margin-bottom:6px}
 .legend i{font-style:normal}
+.lkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:8px}
+.lkgrid img{width:100%;display:block;border-radius:10px;background:#000;aspect-ratio:16/9;object-fit:cover}
+.lkon{color:var(--green)}.lkoff{color:var(--mute)}.lkbad{color:var(--red)}
 details summary{cursor:pointer;color:var(--mute);font-size:13px}pre{font:11px ui-monospace,Menlo,monospace;white-space:pre-wrap;color:var(--mute)}
 </style></head><body><div class="wrap">
 <div class="banner"><div id="state" class="state idle">Idle</div><div class="steps" id="steps"></div>
@@ -249,6 +263,8 @@ details summary{cursor:pointer;color:var(--mute);font-size:13px}pre{font:11px ui
 <div class="now"><h2>The harness thinks</h2><div class="bubble think" id="think">—</div><div class="who" id="thinkwho"></div></div>
 </div>
 <div class="card" style="margin-top:16px" id="controls"></div>
+<div class="card" style="margin-top:16px"><h2>LiveKit (view only)</h2>
+<div class="cap" id="lk_status">checking…</div><div class="lkgrid" id="lk_tracks"></div></div>
 </div>
 <div class="card"><h2>What happened, newest first</h2>
 <div class="legend"><i>🤖 sent to Dream</i><i>🛠 harness stepped in</i><i>👁 monitor / check</i><i>🛑 guard</i><i>🙋 you</i></div>
@@ -338,6 +354,20 @@ try{const r=await(await fetch(`/api/events?since=${next}&run=${run||""}`)).json(
 }catch(e){}}
 function cams(){for(const c of["scene","wrist_l","wrist_r"]){const i=new Image();i.onload=()=>$("c_"+c).src=i.src;i.src=`/api/frame/${c}.jpg?${Date.now()}`}}
 controls();setInterval(poll,1000);setInterval(cams,600);poll();cams();
+</script>
+<script>
+// LiveKit viewer: reads /livekit/* only (GET), no inputs, separate from the controls above
+const lkImgs={};
+async function lk(){try{const s=await(await fetch("/livekit/state")).json(),names=Object.keys(s.tracks||{});
+ const cls=s.status==="connected"?"lkon":s.status==="error"||s.status==="disconnected"?"lkbad":"lkoff";
+ document.getElementById("lk_status").innerHTML=`<span class="${cls}">${esc(s.status)}</span>${s.room?" · room "+esc(s.room):""}${s.reason?" · "+esc(s.reason):""}`;
+ const box=document.getElementById("lk_tracks");
+ for(const n of Object.keys(lkImgs))if(!names.includes(n)){lkImgs[n].el.remove();delete lkImgs[n]}
+ for(const n of names){if(!lkImgs[n]){const el=document.createElement("div");el.innerHTML=`<img><div class="cap"></div>`;box.appendChild(el);lkImgs[n]={el}}
+  const a=s.tracks[n].age_s,el=lkImgs[n].el;el.querySelector(".cap").textContent=`${n} · ${a<1?"live":a.toFixed(1)+" s old"}`;
+  const i=new Image();i.onload=()=>el.querySelector("img").src=i.src;i.src=`/livekit/frame/${encodeURIComponent(n)}?${Date.now()}`}
+}catch(e){document.getElementById("lk_status").textContent="panel unreachable"}}
+setInterval(lk,700);lk();
 </script></body></html>
 """
 
@@ -349,7 +379,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--monitor-model", default="google/gemini-3.1-flash-lite")
     a = ap.parse_args(argv)
     run = Run()
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(run, a.station.rstrip("/"), a.monitor_model))
+    from .livekit_view import Viewer, config_from_env   # stdlib only; livekit loads on the viewer's thread, if at all
+    config, why = config_from_env()
+    viewer = Viewer(config, why).start()   # off (no thread) unless LIVEKIT_* is set and livekit is installed
+    print(f"LiveKit viewer: {'off: ' + why if why else 'on (view only)'}", flush=True)
+    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(run, a.station.rstrip("/"), a.monitor_model, viewer))
     print(f"harness panel on http://127.0.0.1:{a.port}  (station {a.station})", flush=True)
     try:
         srv.serve_forever()
