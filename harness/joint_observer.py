@@ -14,9 +14,8 @@ present against the limits:
   fault               the motor's status nibble is a fault (robots.damiao FAULT_STATUSES)
   overheat            a temperature at or over hot_c (the Metal gripper latches off at 55 C)
 
-Pure Python (stdlib) so it runs on the NUC and the match MacBook. The prediction step is pluggable: a learned
-predictor (e.g. a GRU over the recent history, trained on the joints.jsonl traces every match records) can replace
-`predict()`; it should beat this kinematic baseline on held-out traces before it is used.
+Pure Python (stdlib) so it runs on the NUC and the match MacBook. The learned detector (harness.joint_fault_net, a
+small TCN picked by an architecture search; docs/JOINT_FAULT_NET.md) runs next to it in the harness.
 """
 
 from __future__ import annotations
@@ -29,6 +28,9 @@ from dataclasses import dataclass, field
 METAL_LIMITS_DEG = {"shoulder_pan": (-160.0, 160.0), "shoulder_lift": (-180.0, 0.0), "elbow_flex": (0.0, 180.0),
                     "wrist_flex": (-123.0, 81.0), "wrist_yaw": (-85.0, 85.0), "wrist_roll": (-145.0, 145.0),
                     "gripper": (0.0, 137.5)}
+# The sim's YAM arms (i2rt yam.xml joint ranges), in the Metal joint names sim_station reports them under.
+YAM_LIMITS_DEG = {"shoulder_pan": (-150.0, 175.0), "shoulder_lift": (0.0, 209.1), "elbow_flex": (0.0, 210.0),
+                  "wrist_flex": (-90.0, 90.0), "wrist_yaw": (-90.0, 90.0), "wrist_roll": (-120.0, 120.0)}
 # Max speed per motor model, deg/s (robots/damiao.py MOTOR_LIMITS VMAX, rad/s).
 METAL_VMAX_DEG_S = {"shoulder_pan": 573.0, "shoulder_lift": 573.0, "elbow_flex": 573.0, "wrist_flex": 573.0,
                     "wrist_yaw": 1719.0, "wrist_roll": 1719.0, "gripper": 1719.0}

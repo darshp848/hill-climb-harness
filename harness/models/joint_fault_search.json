@@ -1,0 +1,1128 @@
+{
+ "candidates": [
+  {
+   "name": "logistic",
+   "family": "mlp",
+   "config": {
+    "hidden": []
+   },
+   "weights": 258,
+   "train_s": 5.7,
+   "val": {
+    "fa_per_joint_hour": 0.34615384615384615,
+    "timely_mean": 0.001325906509392748,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.03214285714285714,
+      "timely": 0.0035714285714285713,
+      "early": 0.0,
+      "latency_med_s": 0.42500000000000004
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.0,
+      "timely": 0.0,
+      "early": 0.0,
+      "latency_med_s": null
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 0.0,
+      "timely": 0.0,
+      "early": 0.0,
+      "latency_med_s": null
+     },
+     "overload": {
+      "n": 384,
+      "recall": 0.0,
+      "timely": 0.0,
+      "early": 0.0,
+      "latency_med_s": null
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.009174311926605505,
+      "timely": 0.0030581039755351682,
+      "early": 0.0,
+      "latency_med_s": 0.30000000000000004
+     }
+    },
+    "auroc_now": 0.6029735199556979,
+    "auroc_soon": 0.5998371015519394
+   },
+   "thr": 0.9
+  },
+  {
+   "name": "mlp[32]",
+   "family": "mlp",
+   "config": {
+    "hidden": [
+     32
+    ]
+   },
+   "weights": 4194,
+   "train_s": 2.9,
+   "val": {
+    "fa_per_joint_hour": 1.903846153846154,
+    "timely_mean": 0.8586271863705551,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9767857142857143,
+      "timely": 0.9678571428571429,
+      "early": 0.6053571428571428,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9978991596638656,
+      "timely": 0.726890756302521,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 0.9976019184652278,
+      "timely": 0.6546762589928058,
+      "early": 0.002398081534772182,
+      "latency_med_s": 0.2
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9895833333333334,
+      "early": 0.21354166666666666,
+      "latency_med_s": 0.1
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.9541284403669725,
+      "timely": 0.9541284403669725,
+      "early": 0.009174311926605505,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9954926521469426,
+    "auroc_soon": 0.9754775345003113
+   },
+   "thr": 0.9831871621050169
+  },
+  {
+   "name": "mlp[64-32]",
+   "family": "mlp",
+   "config": {
+    "hidden": [
+     64,
+     32
+    ]
+   },
+   "weights": 10402,
+   "train_s": 3.6,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.9142650148634466,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9964285714285714,
+      "early": 0.7964285714285714,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.7521008403361344,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.8393285371702638,
+      "early": 0.009592326139088728,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9895833333333334,
+      "early": 0.20052083333333334,
+      "latency_med_s": 0.05
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.9938837920489296,
+      "timely": 0.9938837920489296,
+      "early": 0.26299694189602446,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9976982192793745,
+    "auroc_soon": 0.9784379920689006
+   },
+   "thr": 0.9891383091916018
+  },
+  {
+   "name": "mlp[128-64]",
+   "family": "mlp",
+   "config": {
+    "hidden": [
+     128,
+     64
+    ]
+   },
+   "weights": 24898,
+   "train_s": 4.2,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.9635870967091872,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9946428571428572,
+      "early": 0.9035714285714286,
+      "latency_med_s": -0.1
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.8760504201680672,
+      "early": 0.0,
+      "latency_med_s": 0.15000000000000002
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.947242206235012,
+      "early": 0.09112709832134293,
+      "latency_med_s": 0.05
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.3671875,
+      "latency_med_s": 0.0
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.363914373088685,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9980589252668985,
+    "auroc_soon": 0.9788084208333505
+   },
+   "thr": 0.9739753669047162
+  },
+  {
+   "name": "tcn c8 L4",
+   "family": "tcn",
+   "config": {
+    "channels": 8,
+    "dilations": [
+     1,
+     2,
+     4,
+     8
+    ],
+    "kernel": 3
+   },
+   "weights": 834,
+   "train_s": 118.3,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.7285572263028371,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9839285714285714,
+      "timely": 0.9464285714285714,
+      "early": 0.19107142857142856,
+      "latency_med_s": 0.0
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9915966386554622,
+      "timely": 0.5357142857142857,
+      "early": 0.0,
+      "latency_med_s": 0.25
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.6402877697841727,
+      "early": 0.0,
+      "latency_med_s": 0.25
+     },
+     "overload": {
+      "n": 384,
+      "recall": 0.9947916666666666,
+      "timely": 0.59375,
+      "early": 0.07291666666666667,
+      "latency_med_s": 0.25
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.926605504587156,
+      "timely": 0.926605504587156,
+      "early": 0.01529051987767584,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9966045405685531,
+    "auroc_soon": 0.9766855216862058
+   },
+   "thr": 0.9963563348270991
+  },
+  {
+   "name": "tcn c16 L3",
+   "family": "tcn",
+   "config": {
+    "channels": 16,
+    "dilations": [
+     1,
+     2,
+     4
+    ],
+    "kernel": 3
+   },
+   "weights": 2178,
+   "train_s": 101.6,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.8607819521693569,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9910714285714286,
+      "early": 0.6017857142857143,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9957983193277311,
+      "timely": 0.7352941176470589,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.8249400479616307,
+      "early": 0.011990407673860911,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.7526041666666666,
+      "early": 0.0390625,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.13761467889908258,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9977363495546707,
+    "auroc_soon": 0.9787780442280758
+   },
+   "thr": 0.9954667438812568
+  },
+  {
+   "name": "tcn c16 L4",
+   "family": "tcn",
+   "config": {
+    "channels": 16,
+    "dilations": [
+     1,
+     2,
+     4,
+     8
+    ],
+    "kernel": 3
+   },
+   "weights": 2962,
+   "train_s": 111.0,
+   "val": {
+    "fa_per_joint_hour": 1.903846153846154,
+    "timely_mean": 0.9534243886403482,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9964285714285714,
+      "early": 0.8375,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.8676470588235294,
+      "early": 0.0,
+      "latency_med_s": 0.15000000000000002
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.9160671462829736,
+      "early": 0.03836930455635491,
+      "latency_med_s": 0.1
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9869791666666666,
+      "early": 0.21614583333333334,
+      "latency_med_s": 0.05
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.28440366972477066,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9982738762328278,
+    "auroc_soon": 0.9795050976244599
+   },
+   "thr": 0.9864864569106756
+  },
+  {
+   "name": "tcn c32 L4",
+   "family": "tcn",
+   "config": {
+    "channels": 32,
+    "dilations": [
+     1,
+     2,
+     4,
+     8
+    ],
+    "kernel": 3
+   },
+   "weights": 10530,
+   "train_s": 105.5,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.9818179070189228,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.9232142857142858,
+      "latency_med_s": -0.1
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.930672268907563,
+      "early": 0.0,
+      "latency_med_s": 0.15000000000000002
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.9784172661870504,
+      "early": 0.15587529976019185,
+      "latency_med_s": 0.05
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.4375,
+      "latency_med_s": 0.0
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.3363914373088685,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9984403355702727,
+    "auroc_soon": 0.9797342084328877
+   },
+   "thr": 0.9676215234883085
+  },
+  {
+   "name": "gru h8 L1",
+   "family": "gru",
+   "config": {
+    "hidden": 8,
+    "layers": 1
+   },
+   "weights": 450,
+   "train_s": 12.8,
+   "val": {
+    "fa_per_joint_hour": 1.0384615384615385,
+    "timely_mean": 0.5005869543051858,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9946428571428572,
+      "timely": 0.8571428571428571,
+      "early": 0.0017857142857142857,
+      "latency_med_s": 0.15000000000000002
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9852941176470589,
+      "timely": 0.18277310924369747,
+      "early": 0.0,
+      "latency_med_s": 0.55
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 0.9952038369304557,
+      "timely": 0.6930455635491607,
+      "early": 0.02877697841726619,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.6354166666666666,
+      "early": 0.10416666666666667,
+      "latency_med_s": 0.2
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.1345565749235474,
+      "timely": 0.1345565749235474,
+      "early": 0.0061162079510703364,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9962587895252005,
+    "auroc_soon": 0.9759074684152044
+   },
+   "thr": 0.9739753669047162
+  },
+  {
+   "name": "gru h16 L1",
+   "family": "gru",
+   "config": {
+    "hidden": 16,
+    "layers": 1
+   },
+   "weights": 1282,
+   "train_s": 14.5,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.6834683589378593,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9857142857142858,
+      "early": 0.007142857142857143,
+      "latency_med_s": 0.1
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9978991596638656,
+      "timely": 0.5735294117647058,
+      "early": 0.0,
+      "latency_med_s": 0.25
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.8561151079136691,
+      "early": 0.023980815347721823,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.8307291666666666,
+      "early": 0.07291666666666667,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.1743119266055046,
+      "timely": 0.1712538226299694,
+      "early": 0.0,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9970592229471563,
+    "auroc_soon": 0.9770996146048805
+   },
+   "thr": 0.97908235344243
+  },
+  {
+   "name": "gru h32 L1",
+   "family": "gru",
+   "config": {
+    "hidden": 32,
+    "layers": 1
+   },
+   "weights": 4098,
+   "train_s": 18.9,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.9057774082753689,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9910714285714286,
+      "early": 0.06964285714285715,
+      "latency_med_s": 0.0
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9978991596638656,
+      "timely": 0.819327731092437,
+      "early": 0.0,
+      "latency_med_s": 0.2
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.9232613908872902,
+      "early": 0.09832134292565947,
+      "latency_med_s": 0.1
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9817708333333334,
+      "early": 0.234375,
+      "latency_med_s": 0.05
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.8165137614678899,
+      "timely": 0.8134556574923547,
+      "early": 0.0030581039755351682,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9972860127474825,
+    "auroc_soon": 0.9776647145869434
+   },
+   "thr": 0.9739753669047162
+  },
+  {
+   "name": "gru h32 L2",
+   "family": "gru",
+   "config": {
+    "hidden": 32,
+    "layers": 2
+   },
+   "weights": 10434,
+   "train_s": 36.9,
+   "val": {
+    "fa_per_joint_hour": 1.2115384615384615,
+    "timely_mean": 0.9492982259401022,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 1.0,
+      "timely": 0.9982142857142857,
+      "early": 0.6339285714285714,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 0.9978991596638656,
+      "timely": 0.8676470588235294,
+      "early": 0.0,
+      "latency_med_s": 0.15000000000000002
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.9592326139088729,
+      "early": 0.05755395683453238,
+      "latency_med_s": 0.1
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9947916666666666,
+      "early": 0.3307291666666667,
+      "latency_med_s": 0.0
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.9296636085626911,
+      "timely": 0.926605504587156,
+      "early": 0.03363914373088685,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.9982273834079484,
+    "auroc_soon": 0.9789215626803691
+   },
+   "thr": 0.9831871621050169
+  },
+  {
+   "name": "enc d16 L1 h2",
+   "family": "transformer",
+   "config": {
+    "d_model": 16,
+    "heads": 2,
+    "layers": 1,
+    "ff": 32
+   },
+   "weights": 2690,
+   "train_s": 14.3,
+   "val": {
+    "fa_per_joint_hour": 1.5576923076923077,
+    "timely_mean": 0.8077197272133724,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 1.0,
+      "timely": 0.9982142857142857,
+      "early": 0.03214285714285714,
+      "latency_med_s": 0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.9054621848739496,
+      "early": 0.0,
+      "latency_med_s": 0.15000000000000002
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.8609112709832134,
+      "early": 0.03836930455635491,
+      "latency_med_s": 0.15000000000000002
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9192708333333334,
+      "early": 0.15104166666666666,
+      "latency_med_s": 0.05
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.3547400611620795,
+      "timely": 0.3547400611620795,
+      "early": 0.024464831804281346,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9979461923216936,
+    "auroc_soon": 0.9792698143061368
+   },
+   "thr": 0.9912697708929908
+  },
+  {
+   "name": "enc d32 L1 h4",
+   "family": "transformer",
+   "config": {
+    "d_model": 32,
+    "heads": 4,
+    "layers": 1,
+    "ff": 64
+   },
+   "weights": 9474,
+   "train_s": 20.4,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.957838329906578,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 0.9982142857142857,
+      "timely": 0.9982142857142857,
+      "early": 0.6464285714285715,
+      "latency_med_s": -0.05
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.9411764705882353,
+      "early": 0.0,
+      "latency_med_s": 0.1
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.9568345323741008,
+      "early": 0.07434052757793765,
+      "latency_med_s": 0.1
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 1.0,
+      "early": 0.4244791666666667,
+      "latency_med_s": 0.0
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.8929663608562691,
+      "timely": 0.8929663608562691,
+      "early": 0.021406727828746176,
+      "latency_med_s": 0.05
+     }
+    },
+    "auroc_now": 0.9986352153714083,
+    "auroc_soon": 0.9799380888803146
+   },
+   "thr": 0.97908235344243
+  },
+  {
+   "name": "enc d32 L2 h4",
+   "family": "transformer",
+   "config": {
+    "d_model": 32,
+    "heads": 4,
+    "layers": 2,
+    "ff": 64
+   },
+   "weights": 18018,
+   "train_s": 37.3,
+   "val": {
+    "fa_per_joint_hour": 1.7307692307692308,
+    "timely_mean": 0.9824442273526796,
+    "kinds": {
+     "limit_run": {
+      "n": 560,
+      "recall": 1.0,
+      "timely": 0.9982142857142857,
+      "early": 0.8839285714285714,
+      "latency_med_s": -0.1
+     },
+     "blocked": {
+      "n": 476,
+      "recall": 1.0,
+      "timely": 0.9558823529411765,
+      "early": 0.0,
+      "latency_med_s": 0.1
+     },
+     "oscillation": {
+      "n": 417,
+      "recall": 1.0,
+      "timely": 0.9760191846522782,
+      "early": 0.07913669064748201,
+      "latency_med_s": 0.05
+     },
+     "overload": {
+      "n": 384,
+      "recall": 1.0,
+      "timely": 0.9973958333333334,
+      "early": 0.7994791666666666,
+      "latency_med_s": -0.05
+     },
+     "overspeed": {
+      "n": 327,
+      "recall": 0.9847094801223242,
+      "timely": 0.9847094801223242,
+      "early": 0.22629969418960244,
+      "latency_med_s": 0.0
+     }
+    },
+    "auroc_now": 0.998696849511656,
+    "auroc_soon": 0.9802926648491908
+   },
+   "thr": 0.97908235344243
+  }
+ ],
+ "finals": [
+  {
+   "name": "tcn c32 L4",
+   "weights": 10530,
+   "val_timely_mean": 0.9870184524649188,
+   "val_timely_sd": 0.0009106900865104362
+  },
+  {
+   "name": "enc d32 L2 h4",
+   "weights": 18018,
+   "val_timely_mean": 0.9853396590414046,
+   "val_timely_sd": 0.004338798269062388
+  },
+  {
+   "name": "enc d32 L1 h4",
+   "weights": 9474,
+   "val_timely_mean": 0.952596297547576,
+   "val_timely_sd": 0.013390866958210684
+  }
+ ],
+ "winner": "tcn c32 L4",
+ "test": {
+  "fa_per_joint_hour": 0.17307692307692307,
+  "timely_mean": 0.9057045355202252,
+  "kinds": {
+   "limit_run": {
+    "n": 556,
+    "recall": 1.0,
+    "timely": 1.0,
+    "early": 0.9010791366906474,
+    "latency_med_s": -0.1
+   },
+   "blocked": {
+    "n": 472,
+    "recall": 1.0,
+    "timely": 0.9427966101694916,
+    "early": 0.00211864406779661,
+    "latency_med_s": 0.15000000000000002
+   },
+   "oscillation": {
+    "n": 393,
+    "recall": 1.0,
+    "timely": 0.916030534351145,
+    "early": 0.005089058524173028,
+    "latency_med_s": 0.15000000000000002
+   },
+   "overload": {
+    "n": 339,
+    "recall": 1.0,
+    "timely": 0.9941002949852508,
+    "early": 0.07079646017699115,
+    "latency_med_s": 0.05
+   },
+   "overspeed": {
+    "n": 336,
+    "recall": 0.6755952380952381,
+    "timely": 0.6755952380952381,
+    "early": 0.03571428571428571,
+    "latency_med_s": 0.05
+   }
+  }
+ },
+ "rule_test": {
+  "fa_per_joint_hour": 197.30769230769232,
+  "timely_mean": 0.500167911216405,
+  "kinds": {
+   "limit_run": {
+    "n": 556,
+    "recall": 0.9982014388489209,
+    "timely": 0.9964028776978417,
+    "early": 0.9946043165467626,
+    "latency_med_s": -0.2
+   },
+   "blocked": {
+    "n": 472,
+    "recall": 0.9936440677966102,
+    "timely": 0.006355932203389831,
+    "early": 0.00211864406779661,
+    "latency_med_s": 0.55
+   },
+   "oscillation": {
+    "n": 393,
+    "recall": 0.8676844783715013,
+    "timely": 0.22137404580152673,
+    "early": 0.027989821882951654,
+    "latency_med_s": 0.4
+   },
+   "overload": {
+    "n": 339,
+    "recall": 0.9970501474926253,
+    "timely": 0.3421828908554572,
+    "early": 0.011799410029498525,
+    "latency_med_s": 0.30000000000000004
+   },
+   "overspeed": {
+    "n": 336,
+    "recall": 0.9345238095238095,
+    "timely": 0.9345238095238095,
+    "early": 0.002976190476190476,
+    "latency_med_s": 0.05
+   }
+  },
+  "fa_by_kind": {
+   "limit_breach": 0.0,
+   "limit_approach": 198.5,
+   "overspeed": 0.2,
+   "torque_saturation": 0.2,
+   "tracking_divergence": 0.9,
+   "oscillation": 0.0
+  }
+ },
+ "beats_baseline": true,
+ "numpy_us_per_step_12_joints": 832.3,
+ "operating_point": {
+  "fa_budget_per_joint_hour_val": 1.0,
+  "persist": 2,
+  "val_soon": {
+   "fa_per_joint_hour": 0.8653846153846154,
+   "timely_mean": 0.9042418309974639,
+   "kinds": {
+    "limit_run": {
+     "n": 560,
+     "recall": 0.9982142857142857,
+     "timely": 0.9982142857142857,
+     "early": 0.9232142857142858,
+     "latency_med_s": -0.1
+    },
+    "blocked": {
+     "n": 476,
+     "recall": 0.9978991596638656,
+     "timely": 0.9159663865546218,
+     "early": 0.0,
+     "latency_med_s": 0.15000000000000002
+    },
+    "oscillation": {
+     "n": 417,
+     "recall": 1.0,
+     "timely": 0.9088729016786571,
+     "early": 0.002398081534772182,
+     "latency_med_s": 0.15000000000000002
+    },
+    "overload": {
+     "n": 384,
+     "recall": 1.0,
+     "timely": 0.9947916666666666,
+     "early": 0.078125,
+     "latency_med_s": 0.05
+    },
+    "overspeed": {
+     "n": 327,
+     "recall": 0.7033639143730887,
+     "timely": 0.7033639143730887,
+     "early": 0.01834862385321101,
+     "latency_med_s": 0.05
+    }
+   }
+  },
+  "test_soon": {
+   "fa_per_joint_hour": 0.17307692307692307,
+   "timely_mean": 0.9057045355202252,
+   "kinds": {
+    "limit_run": {
+     "n": 556,
+     "recall": 1.0,
+     "timely": 1.0,
+     "early": 0.9010791366906474,
+     "latency_med_s": -0.1
+    },
+    "blocked": {
+     "n": 472,
+     "recall": 1.0,
+     "timely": 0.9427966101694916,
+     "early": 0.00211864406779661,
+     "latency_med_s": 0.15000000000000002
+    },
+    "oscillation": {
+     "n": 393,
+     "recall": 1.0,
+     "timely": 0.916030534351145,
+     "early": 0.005089058524173028,
+     "latency_med_s": 0.15000000000000002
+    },
+    "overload": {
+     "n": 339,
+     "recall": 1.0,
+     "timely": 0.9941002949852508,
+     "early": 0.07079646017699115,
+     "latency_med_s": 0.05
+    },
+    "overspeed": {
+     "n": 336,
+     "recall": 0.6755952380952381,
+     "timely": 0.6755952380952381,
+     "early": 0.03571428571428571,
+     "latency_med_s": 0.05
+    }
+   }
+  },
+  "val_now": {
+   "fa_per_joint_hour": 0.6923076923076923,
+   "timely_mean": 0.8901305193798859,
+   "kinds": {
+    "limit_run": {
+     "n": 560,
+     "recall": 0.9982142857142857,
+     "timely": 0.9946428571428572,
+     "early": 0.0,
+     "latency_med_s": 0.05
+    },
+    "blocked": {
+     "n": 476,
+     "recall": 1.0,
+     "timely": 0.930672268907563,
+     "early": 0.0,
+     "latency_med_s": 0.1
+    },
+    "oscillation": {
+     "n": 417,
+     "recall": 1.0,
+     "timely": 0.9328537170263789,
+     "early": 0.004796163069544364,
+     "latency_med_s": 0.15000000000000002
+    },
+    "overload": {
+     "n": 384,
+     "recall": 1.0,
+     "timely": 0.9869791666666666,
+     "early": 0.0078125,
+     "latency_med_s": 0.15000000000000002
+    },
+    "overspeed": {
+     "n": 327,
+     "recall": 0.6085626911314985,
+     "timely": 0.6055045871559633,
+     "early": 0.0030581039755351682,
+     "latency_med_s": 0.05
+    }
+   }
+  },
+  "test_now": {
+   "fa_per_joint_hour": 1.0384615384615385,
+   "timely_mean": 0.8875080420102075,
+   "kinds": {
+    "limit_run": {
+     "n": 556,
+     "recall": 1.0,
+     "timely": 0.9982014388489209,
+     "early": 0.0,
+     "latency_med_s": 0.05
+    },
+    "blocked": {
+     "n": 472,
+     "recall": 1.0,
+     "timely": 0.9555084745762712,
+     "early": 0.0,
+     "latency_med_s": 0.1
+    },
+    "oscillation": {
+     "n": 393,
+     "recall": 1.0,
+     "timely": 0.9211195928753181,
+     "early": 0.005089058524173028,
+     "latency_med_s": 0.15000000000000002
+    },
+    "overload": {
+     "n": 339,
+     "recall": 0.9970501474926253,
+     "timely": 0.976401179941003,
+     "early": 0.0029498525073746312,
+     "latency_med_s": 0.15000000000000002
+    },
+    "overspeed": {
+     "n": 336,
+     "recall": 0.5892857142857143,
+     "timely": 0.5863095238095238,
+     "early": 0.008928571428571428,
+     "latency_med_s": 0.05
+    }
+   }
+  }
+ }
+}

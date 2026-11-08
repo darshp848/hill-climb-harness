@@ -41,6 +41,9 @@ class JointTelemetry:
     log: Callable[..., Any] | None = None      # RunLog.event, for joint_alert events
     fetch: Callable[[], dict] | None = None    # tests: replace the HTTP read
     record_to: str | None = None               # append every reading as one JSON line (q, q_cmd, dq, tau, tau_cmd)
+    # Learned fault detector (harness.joint_fault_net) next to the rules: "auto" runs the shipped model only when its
+    # file says it beat the rule observer on held-out traces; a path runs that model; None turns it off.
+    learned_model: str | None = "auto"
 
     def __post_init__(self):
         self.latest: dict = {}
@@ -54,6 +57,29 @@ class JointTelemetry:
         from .joint_observer import JointObserver  # noqa: PLC0415
         self.observer = JointObserver()
         self._observed: dict[tuple, dict] = {}
+        self.learned = None                      # (FaultModel, {source: JointFaultNet}) when a model runs
+        if self.learned_model:
+            try:
+                from .joint_fault_net import DEFAULT_MODEL, FaultModel  # noqa: PLC0415
+                path = DEFAULT_MODEL if self.learned_model == "auto" else self.learned_model
+                model = FaultModel.load(path)
+                if self.learned_model != "auto" or model.spec.get("beats_baseline"):
+                    self.learned = (model, {})
+            except (ImportError, OSError, ValueError, KeyError):
+                self.learned = None
+
+    def _learned_step(self, snap: dict) -> list[dict]:
+        if self.learned is None:
+            return []
+        from .joint_fault_net import JointFaultNet  # noqa: PLC0415
+        from .joint_observer import METAL_LIMITS_DEG, YAM_LIMITS_DEG  # noqa: PLC0415
+        model, nets = self.learned
+        source = "sim" if snap.get("source") == "sim" else "station"
+        net = nets.get(source)
+        if net is None:
+            net = nets[source] = JointFaultNet(model, YAM_LIMITS_DEG if source == "sim" else METAL_LIMITS_DEG)
+        t = snap.get("t") or time.time()
+        return [a for arm, joints in (snap.get("arms") or {}).items() for a in net.step(t, arm, joints)]
 
     def _get(self) -> dict:
         if self.fetch:
@@ -85,6 +111,7 @@ class JointTelemetry:
             t = snap.get("t") or time.time()
             observed = [a for arm, joints in (snap.get("arms") or {}).items()
                         for a in self.observer.observe(t, arm, joints)]
+        observed = list(observed) + self._learned_step(snap)
         for a in observed:
             raised.add((a["kind"], a["arm"], a["joint"]))
             self._observed[(a["kind"], a["arm"], a["joint"])] = a
@@ -139,7 +166,10 @@ class JointTelemetry:
                     "tracking_divergence": f"{arm} {joint} cannot follow its command (pushing into something)",
                     "oscillation": f"{arm} {joint} is oscillating",
                     "fault": f"{arm} {joint} motor reports a fault (status {a.get('status')})",
-                    "overheat": f"{arm} {joint} motor is hot ({a.get('temp_c')} C)"}.get(kind, f"{arm} {joint}: {kind}")
+                    "overheat": f"{arm} {joint} motor is hot ({a.get('temp_c')} C)",
+                    "learned_fault": f"{arm} {joint} is in a fault state (learned detector, p={a.get('p')})",
+                    "learned_fault_soon": f"{arm} {joint} is about to fault within 0.25 s "
+                                          f"(learned detector, p={a.get('p')})"}.get(kind, f"{arm} {joint}: {kind}")
         j = (self.latest.get("arms") or {}).get(arm, {}).get(joint, {})
         tau, tmax = j.get("tau_nm"), j.get("tau_max_nm")
         load = f" ({abs(tau):.1f} of {tmax:.0f} N.m)" if tau is not None and tmax else ""

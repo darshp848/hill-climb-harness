@@ -24,7 +24,7 @@ def test_hybrid_plan_loads_and_cable_section_is_optional():
     assert all(s.prompt.startswith(plan.prompt_prefix) for s in plan.stages if s.name.startswith("cable_"))
     assert not any(n.startswith("cable_") for n in names[names.index("arms_clear"):])
     assert all(s.stall_s and s.stall_s >= 30 for s in plan.stages if s.name.startswith(("stack", "tower")))
-    assert "{" not in plan.system_prompt and "orange ball" in plan.stages[-1].prompt
+    assert "{" not in plan.system_prompt and "coloured golf ball" in plan.stages[-1].prompt
 
 
 def test_next_prompt_parsed_and_asked_for(write_plan):
