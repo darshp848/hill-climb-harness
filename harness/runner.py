@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
@@ -196,6 +197,13 @@ class Runner:
         except TimeoutError as exc:
             ok, reason = False, str(exc)
             self._safe_stop(reason)
+        except Exception as exc:          # any other bug (a log write, a KeyError...) must not leave the robot running
+            ok, reason = False, f"harness error: {type(exc).__name__}: {exc}"
+            self._safe_stop(reason)
+            try:
+                self.log.event("harness_error", error=reason, traceback=traceback.format_exc())
+            except Exception:
+                pass
         result = RunResult(ok=ok, stages=results, seconds=self._clock() - self._t0, reason=reason,
                            guard_tripped=tripped)
         self.log.update_manifest(end_time=datetime.now(timezone.utc).isoformat(), ok=ok, reason=reason)
@@ -254,11 +262,18 @@ class Runner:
         return st
 
     def _safe_stop(self, why: str) -> None:
-        self.log.event("stop", why=why)
+        # Stop first, log after: a failing log write (disk full, closed file) must never keep the stop from going out.
+        err: Exception | None = None
         try:
             self.station.stop()
-        except (StationError, OSError) as exc:
-            self.log.event("stop_failed", error=str(exc))
+        except Exception as exc:
+            err = exc
+        try:
+            self.log.event("stop", why=why)
+            if err is not None:
+                self.log.event("stop_failed", error=str(err))
+        except Exception:
+            pass
 
     def _wait(self, states: set[str], timeout_s: float, what: str) -> dict[str, Any]:
         try:

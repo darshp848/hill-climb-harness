@@ -67,10 +67,12 @@ tower_target:
 # Name the next piece in the stack prompt (Darsh, 8 Nov): the monitor reports the tower bottom to top, the harness
 # picks the next shape and sends the text below. Only for base Dream-1, which
 # stacks zero-shot and followed colour prompts on the station on 7 Nov ("put the pink block on top of a blue block").
-# DELETE this block when stacking runs on a fine-tune: it only knows the recorded text "put a block on top of the stack".
-tower_prompts:
-  cube: "put a block on top of the stack"   # the recorded text, byte for byte
-  stick: "stand a stick upright on top of the stack"
+# OFF (8 Nov, Codex audit A08): the plan now defaults to the fine-tune, which only knows the recorded text "put a
+# block on top of the stack"; the stick text below was never recorded. For base Dream-1 (--var
+# model=dreamlabs/dream-1-beta) uncomment it to name the next piece again.
+# tower_prompts:
+#   cube: "put a block on top of the stack"   # the recorded text, byte for byte
+#   stick: "stand a stick upright on top of the stack"
 
 stages:
   # ---- Stage 1 (pass bar: one cable out) ----

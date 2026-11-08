@@ -250,3 +250,30 @@ def test_hardware_fault_still_ends_the_run(fake, write_plan, tmp_path):
     result = runner.run()
     assert not result.ok and "over-current" in result.reason
     assert '"station_restart"' not in (runner.log.path / "events.jsonl").read_text()
+
+
+def test_unexpected_error_still_stops_the_robot(fake, write_plan, tmp_path):
+    """Codex audit A01: a bug outside the named exceptions (here a failing frame write) must not leave Dream running."""
+    path = write_plan([stage("a"), stage("b")])
+    runner = build(fake, path, tmp_path, FakeVerifier({"a": [None, True], "b": [None, True]}))
+
+    def broken_save(*_a, **_k):
+        raise OSError("No space left on device")
+
+    runner.log.save_frames = broken_save
+    result = runner.run()
+    assert result.ok is False and "harness error: OSError" in result.reason
+    assert routes(fake)[-1] == "/stop" and fake.state == "idle"
+
+
+def test_stop_goes_out_even_when_logging_fails(fake, write_plan, tmp_path):
+    path = write_plan([stage("a")])
+    runner = build(fake, path, tmp_path, FakeVerifier({"a": [True]}))
+    runner.station.start("do a", runner.plan.checkpoint)
+
+    def broken_event(*_a, **_k):
+        raise OSError("log closed")
+
+    runner.log.event = broken_event
+    runner._safe_stop("test")
+    assert routes(fake)[-1] == "/stop"

@@ -66,13 +66,17 @@ class _TowerSays:
     check_now = check
 
 
-def _prompt_for(tower, tmp_path):
+BASE_TOWER_PROMPTS = {"cube": "put a block on top of the stack", "stick": "stand a stick upright on top of the stack"}
+
+
+def _prompt_for(tower, tmp_path, tower_prompts=BASE_TOWER_PROMPTS):
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
     import stress_match as sm
     from harness.log import RunLog
     from harness.runner import Runner
     plan = load_plan(V4)
+    plan.tower_prompts = dict(tower_prompts)   # v4 ships with them off (fine-tune default); base Dream-1 turns them on
     clock = sm.VClock()
     runner = Runner(plan, sm.SimStation(clock, sm.Table(sm.Behaviour(), 1), []), sm.SimFrames(clock),
                     {"monitor": _TowerSays(tower)}, RunLog(tmp_path), clock=clock, sleep=clock.sleep)
@@ -90,6 +94,13 @@ def _prompt_for(tower, tmp_path):
 ])
 def test_tower_prompts_name_the_next_piece(tower, prompt, tmp_path):
     assert _prompt_for(tower, tmp_path) == prompt
+
+
+def test_v4_fine_tune_default_sends_only_the_recorded_stack_text(tmp_path):
+    plan = load_plan(V4)
+    assert plan.checkpoint.startswith("dream-1-ft:") and not plan.tower_prompts
+    tower = ["pink cube", "blue cube", "blue cube"]   # next piece is a stick: still the one recorded text
+    assert _prompt_for(tower, tmp_path, tower_prompts={}) == "put a block on top of the stack"
 
 
 def test_tower_prompts_need_a_template_for_every_piece():
