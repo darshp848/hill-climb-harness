@@ -44,6 +44,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="override every stage's verifier")
     p.add_argument("--skip", action="append", default=[], metavar="PREFIX",
                    help="drop the stages whose names start with PREFIX, e.g. --skip cable_ (repeatable; practice)")
+    p.add_argument("--checkpoint", default=None, help="override the plan's checkpoint, e.g. a fine-tune")
+    p.add_argument("--no-rewrite", action="store_true",
+                   help="never send monitor-written prompts (a fine-tune only follows its recorded task texts)")
     p.add_argument("--budget", type=float, default=None, metavar="S",
                    help="override the plan's time_budget_s (practice; a match is 295 s)")
     p.add_argument("--lessons", default="lessons/operator.md", metavar="FILE",
@@ -76,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     if args.budget:
         plan.time_budget_s = args.budget
+    if args.checkpoint:
+        plan.checkpoint = args.checkpoint
+    if args.no_rewrite:
+        plan.rewrite_prompts = False
     lessons_path = None if args.no_operator else Path(args.lessons)
     lessons = load_lessons(lessons_path)
     if lessons:
