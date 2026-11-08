@@ -210,8 +210,8 @@ def test_bot_v1_plan():
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert all(not s.write_prompt and "arm" not in s.prompt for s in stacks)
-    assert [x.prompt for x in stacks] == ["put the pink cube on top of the blue cube in front of the robot",
-                                          "put the other blue cube on top of the pink cube"]
+    assert [x.prompt for x in stacks] == ["put one blue cube on top of the other blue cube",
+                                          "put the pink cube on top of the stacked blue cubes"]
     assert all(x.retry_prompt == "stack the blocks and sticks as high as possible" for x in stacks)
     assert not plan.tower_prompts
     balls = plan.stages[first_ball:]
@@ -467,7 +467,7 @@ def test_shut_on_air_then_half_reopen_is_not_a_hold(fake, write_plan, tmp_path):
 
 
 def test_stack_lock_flows_into_the_next_stage_and_tower_is_not_resent(fake, write_plan, tmp_path):
-    third = "put the other blue cube on top of the pink cube"
+    third = "put the pink cube on top of the stacked blue cubes"
     path = write_plan([stage("stack_2", prompt="put the pink cube on top of the blue cube", confirm=1,
                              confirm_check="2 stacked?", lock_prompt=third),
                        stage("tower_pass", prompt=third, confirm=1, confirm_check="> 4 in?", resume_on_no=False,
