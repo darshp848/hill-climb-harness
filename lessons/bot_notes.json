@@ -67,5 +67,9 @@
       "The monitor flip-flopped on whether a cube was stacked (p 1.0 at 31 s, 0.3 at 34 s, 0.8 at 38 s): a 'regressed' rule ended the attempt at 45 s.",
       "Ended at 254 s on a station error: the overhead camera stopped sending pictures for 2 s."
     ]
+  },
+  "tries_2026-11-08": {
+    "seen": "Hand-driven prompt tries: see docs/BOT_PROMPTS_2026-11-08.md",
+    "notes": []
   }
 }

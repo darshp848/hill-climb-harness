@@ -23,7 +23,7 @@
 task: >-
   Hill Climb relay. Stage 1: unplug a USB cable from the power strip and put it down away from the strip (then one
   more the same way). Never plug a cable in. Stage 2: stack the blocks into a free-standing tower more than 4 inches
-  (10 cm) tall. Do not touch the blocks before a cable is unplugged. Stage 3: put {ball}s into the white bin, never
+  (10 cm) tall. Do not touch the blocks before a cable is unplugged. Stage 3: put the green, yellow and orange golf balls into the white bin, never
   the white ball or a black ball, without touching the tower. Do not touch the balls before the tower passes.
 checkpoint: dreamlabs/dream-1-beta
 time_budget_s: 295
@@ -37,7 +37,7 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 #   --var put_down="put the held cable down on the table away from the hub"
 vars:
   stack_cam: wrist_r
-  ball: orange ball
+  ball: green, yellow or orange golf ball   # 8 Nov: every golf ball except the white one (and any black ball) scores
   unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, grip the hard plug body of the rightmost USB cable still plugged into the power strip, pull it straight up out of its port, then toss it onto the table to the right, away from the strip."
   put_down: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Put the held cable down on the table to the right, away from the power strip, and open the gripper."
 # history_frames 4 not 6, one stitched grid image per check, two calls in flight: a verdict every ~5 s, not ~10
@@ -93,7 +93,7 @@ system_prompt: |-
   - Dream knocked the tower over by reaching across it for the next block. Good instructions carry the block high above the tower and lower it straight down, slowly. If the arm is moving low next to the tower, say so in next_prompt.
 
   BALLS
-  - Only orange balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
+  - Only the green, yellow and orange golf balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
 
   WRITING ROBOT INSTRUCTIONS (next_prompt)
   - One short action in plain words, naming objects by colour and position: "pick up the yellow block and place it gently on top of the pink block", "grip the plug body of the rightmost cable still in the strip and pull it straight up".
@@ -273,7 +273,7 @@ stages:
   # ball made every later stage impossible). 40 s each: 25 s cut zero-shot picks short.
   - &ball
     name: ball_1
-    prompt: "pick up one {ball} that is away from the tower and drop it into the white bin"
+    prompt: "pick up one {ball} that is away from the tower and drop it into the white bin, naming its colour"
     success: "Compared with the stage-start images, is there one more {ball} resting inside the bin than at the start of this stage, with no white or black ball in the bin and the tower (if any) still standing?"
     expect: "An arm picks up one {ball}, staying clear of the white ball, any black ball and the tower, and releases it over the bin."
     timeout_s: 40
