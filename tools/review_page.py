@@ -4,8 +4,9 @@ to mark each episode keep or drop. It only reads the datasets and writes the pag
 On the station (pyarrow comes from dream-env; without it the page just has no gripper chart):
 
     ~/dream-env/bin/python ~/hill-climb-harness/tools/review_page.py ~/hackathon_data/quest-split-v3 \
-        ~/hackathon_data/leader-split-v1-frozen ...        # writes ~/hackathon_review/review.html
-    python3 -m http.server 8097 --bind 127.0.0.1 --directory ~/hackathon_review
+        ~/hackathon_data/leader-split-v1-frozen ... --serve 8097   # writes ~/hackathon_review/review.html, serves it
+
+(Use --serve, not `python3 -m http.server`: that ignores HTTP Range, so videos stay black in Safari.)
 
 On the laptop:
 
@@ -46,8 +47,36 @@ def _gripper(dataset: Path, info: dict, ep: dict) -> dict | None:
     return {"hz": info["fps"] / step, "state": state, "action": action}
 
 
-def collect(datasets: list[Path], root: Path) -> list[dict]:
-    """Video paths are relative to `root`, the datasets' parent folder, which the page reaches as `data/`."""
+PREVIEW_W, PREVIEW_H = 480, 270
+
+
+def make_preview(src: Path, dst: Path) -> None:
+    """A small copy for review over a slow link: 480x270 H.264 with the index at the front, so a browser can start
+    playing before the whole file has arrived (the recorder writes the index at the end)."""
+    import av
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(".part.mp4")
+    with av.open(str(src)) as inp, av.open(str(tmp), "w", options={"movflags": "faststart"}) as out:
+        stream = inp.streams.video[0]
+        rate = stream.average_rate or 30
+        enc = out.add_stream("libx264", rate=rate)
+        enc.width, enc.height, enc.pix_fmt = PREVIEW_W, PREVIEW_H, "yuv420p"
+        enc.options = {"crf": "27", "preset": "veryfast", "threads": "2"}
+        for i, frame in enumerate(inp.decode(stream)):
+            small = frame.reformat(width=PREVIEW_W, height=PREVIEW_H, format="yuv420p")
+            small.pts = i
+            small.time_base = enc.codec_context.time_base
+            for packet in enc.encode(small):
+                out.mux(packet)
+        for packet in enc.encode():
+            out.mux(packet)
+    tmp.replace(dst)
+
+
+def collect(datasets: list[Path], root: Path, previews: Path | None = None) -> list[dict]:
+    """Video paths are relative to the page: `data/...` (the originals, through the `data` link to `root`) or, with
+    `previews`, `previews/...` (small copies, built once and reused)."""
     rows = []
     for dataset in datasets:
         info = json.loads((dataset / "meta" / "info.json").read_text())
@@ -61,7 +90,14 @@ def collect(datasets: list[Path], root: Path) -> list[dict]:
                 key = video_keys.get(cam)
                 if key:
                     rel = info["video_path"].format(episode_chunk=chunk, video_key=key, episode_index=ep["episode_index"])
-                    videos[cam] = "data/" + os.path.relpath(dataset / rel, root)
+                    src = dataset / rel
+                    if previews is None:
+                        videos[cam] = "data/" + os.path.relpath(src, root)
+                    else:
+                        dst = previews / os.path.relpath(src, root)
+                        if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+                            make_preview(src, dst)
+                        videos[cam] = "previews/" + os.path.relpath(dst, previews)
             rows.append({
                 "folder": dataset.name,
                 "ep": ep["episode_index"],
@@ -79,8 +115,11 @@ def main() -> None:
     parser.add_argument("datasets", nargs="+", type=Path)
     parser.add_argument("--out", type=Path, default=Path("~/hackathon_review/review.html"),
                         help="the page; its folder gets a `data` link to the datasets' parent (default: %(default)s)")
+    parser.add_argument("--serve", type=int, metavar="PORT", help="then serve the page on 127.0.0.1:PORT")
+    parser.add_argument("--full-size", action="store_true",
+                        help="play the original videos instead of 480x270 previews (slow over a tunnel)")
     args = parser.parse_args()
-    datasets = [d.expanduser().resolve() for d in args.datasets]
+    datasets =[d.expanduser().resolve() for d in args.datasets]
     root = datasets[0].parent
     if any(d.parent != root for d in datasets):
         parser.error("all datasets must be in the same folder")
@@ -92,10 +131,75 @@ def main() -> None:
     if link.exists():
         parser.error(f"{link} exists and is not a link; pick another --out folder")
     link.symlink_to(root)
-    rows = collect(datasets, root)
+    previews = None
+    if not args.full_size:
+        previews = out.parent / "previews"
+        os.nice(19)  # the station may be running the robot: encode at the lowest priority
+    rows = collect(datasets, root, previews)
     page = PAGE.replace("/*DATA*/null", json.dumps(rows, separators=(",", ":")))
     out.write_text(page)
     print(f"wrote {out} ({len(rows)} episodes); serve its folder and open {out.name}", file=sys.stderr)
+    if args.serve:
+        serve(out.parent, args.serve)
+
+
+def serve(folder: Path, port: int) -> None:
+    """Serves `folder` on 127.0.0.1 with HTTP Range support. Python's http.server ignores Range, so Safari shows a
+    black video and other browsers cannot seek or replay."""
+    import re
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(SimpleHTTPRequestHandler):
+        def send_head(self):
+            m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+            path = Path(self.translate_path(self.path))
+            if not m or not path.is_file():
+                return super().send_head()
+            size = path.stat().st_size
+            if m[1]:
+                start, end = int(m[1]), min(int(m[2]) if m[2] else size - 1, size - 1)
+            else:  # bytes=-N: the last N bytes
+                start, end = max(size - int(m[2] or 0), 0), size - 1
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return None
+            f = path.open("rb")
+            f.seek(start)
+            self.send_response(206)
+            self.send_header("Content-Type", self.guess_type(str(path)))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            self._left = end - start + 1
+            return f
+
+        def copyfile(self, source, outputfile):
+            left = getattr(self, "_left", None)
+            if left is None:
+                return super().copyfile(source, outputfile)
+            while left > 0:
+                block = source.read(min(left, 64 * 1024))
+                if not block:
+                    break
+                outputfile.write(block)
+                left -= len(block)
+            self._left = None
+
+        def end_headers(self):
+            if self.command == "GET" and self.headers.get("Range") is None:
+                self.send_header("Accept-Ranges", "bytes")
+            super().end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), partial(Handler, directory=str(folder)))
+    print(f"serving {folder} on http://127.0.0.1:{port}/ (Ctrl+C stops)", file=sys.stderr)
+    server.serve_forever()
 
 
 PAGE = r"""<!doctype html>
