@@ -59,3 +59,19 @@ def test_hedged_monitor_takes_the_first_good_reply(write_plan):
     t = time.monotonic()
     v = mv._call({"_frames_sig": "x"}, 0)
     assert v.done is True and time.monotonic() - t < 0.3 and mv.hedge_wins == [1]
+
+
+def test_reasoning_level_reaches_openrouter(monkeypatch):
+    from harness.verifiers import openrouter_request_body
+    payload = {"max_tokens": 10, "output_config": {"effort": "low"}, "messages": [{"role": "user", "content": "x"}]}
+    assert openrouter_request_body("m", payload)["reasoning"] == {"effort": "low"}
+    monkeypatch.setenv("HARNESS_OPENROUTER_REASONING", "none")
+    assert openrouter_request_body("m", payload)["reasoning"] == {"enabled": False}
+
+
+def test_parser_accepts_fenced_and_bare_json():
+    from harness.verifiers import parse_monitor_reply
+    obj = '{"stage_done": true, "confidence": 0.9, "progress": 1, "status": "ok", "reason": "r", "guard": false}'
+    for text in (f"<json>{obj}</json>", f"thinking...\n```json\n{obj}\n```", f"Q1: yes. {obj}"):
+        v = parse_monitor_reply(text, 0)
+        assert v.done is True and v.guard is False, text
