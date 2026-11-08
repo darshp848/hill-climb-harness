@@ -136,7 +136,7 @@ stages:
       pull_up_m: [0.10]     # one move: each /move costs 3-6 s on the station (arm re-sync), 8 Nov live
       pull_s: 4            # seconds for the 10 cm lift: slow enough not to slip
       seat_dz: 0.0         # no seat: two fewer moves (each 3-6 s)
-      repull: 1            # slipped on the way up: one re-grip and pull (each costs 3 moves)
+      repull: 0            # slipped: lower back and let Dream re-approach (a re-pull kept Dream stopped ~19 s, 8 Nov live)
       hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty)
       put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable down on the table about 5 inches to the right of the power strip."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
