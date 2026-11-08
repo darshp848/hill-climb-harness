@@ -38,7 +38,9 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 # Camera role of the arm that stacks (the right arm), for the monitor's notes only.
 # The prompts never name an arm, so changing these does not change what the model is asked.
 vars: {stack_cam: wrist_r}
-claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
+# 600 tokens cut off every reply (Haiku 5.5 thinks first). history_frames 4, one stitched grid image of the earlier
+# frames and two calls in flight (from hybrid-harness): live, a verdict every ~4.9 s instead of ~9.7 s.
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
 # Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
 # the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
 # confirm 1, because a ball goes from gripper to bin in a few seconds; a false yes only costs the balls still to come.
