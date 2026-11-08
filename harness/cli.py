@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import hashlib
 import os
 import signal
@@ -65,13 +64,34 @@ def _parser() -> argparse.ArgumentParser:
                    help="operator lessons: read into the monitor's system prompt, and new ones appended")
     p.add_argument("--no-operator", action="store_true",
                    help="ignore typed lines other than s (stop). Use this in a match: any human input is a DQ")
+    p.add_argument("--match", action="store_true",
+                   help="match mode: no operator console (any human input is a DQ), no --budget override, no manual "
+                        "verifier; operator lessons from practice are still read into the monitor")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
                    help="fill a {NAME} placeholder in the plan, e.g. --var color=orange (repeatable)")
     return p
 
 
+MANUAL_VERIFIERS = ("manual", "claude+manual", "monitor+manual")
+
+
+def match_problems(args: argparse.Namespace, plan) -> list[str]:
+    """Why these args and this plan can't run as a match (empty list = fine). Any human input after go is a DQ."""
+    problems = []
+    if args.budget:
+        problems.append("--budget: a match runs on the plan's own time_budget_s")
+    if args.verifier in MANUAL_VERIFIERS:
+        problems.append(f"--verifier {args.verifier}: a typed y/n is human input")
+    manual = sorted({st.name for st in plan.stages if st.verifier in MANUAL_VERIFIERS})
+    if manual and args.verifier not in ("monitor", "claude", "time"):
+        problems.append(f"stages answered by a person: {', '.join(manual)} (use --verifier monitor)")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.match:
+        args.no_operator = True
     variables: dict[str, str] = {}
     for item in args.var:
         name, sep, value = item.partition("=")
@@ -98,10 +118,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_rewrite:
         plan.rewrite_prompts = False
     lessons_path = None if args.no_operator else Path(args.lessons)
-    lessons = load_lessons(lessons_path)
+    # In a match the operator console is off, but the lessons written down in practice still guide the monitor.
+    lessons = load_lessons(Path(args.lessons) if args.match else lessons_path)
     if lessons:
         plan.system_prompt = (plan.system_prompt + "\n\n" if plan.system_prompt else "") + \
             "LESSONS FROM THE OPERATOR IN EARLIER TEST RUNS (follow them)\n" + lessons
+    if args.match:
+        problems = match_problems(args, plan)
+        if problems:
+            print("not a match setup:\n  " + "\n  ".join(problems), file=sys.stderr)
+            return 2
+        if not (args.detect and args.live_guard) and plan.guard is not None:
+            print("WARNING: match without --detect --live-guard: the illegal-ball guard only sees debug-view trips "
+                  "(~3.4 s apart)", file=sys.stderr)
     if args.verifier:
         for stage in plan.stages:
             stage.verifier = args.verifier
@@ -134,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         plan_path = Path(args.plan).resolve()
         log.update_manifest(
             plan_file=str(plan_path), plan_sha256=hashlib.sha256(plan_path.read_bytes()).hexdigest(),
-            harness_version=__version__, args={k: v for k, v in vars(args).items()},
+            harness_version=__version__, args={k: v for k, v in vars(args).items()}, match=bool(args.match),
             host=socket.gethostname())
         dry = args.dry_run
         station = StationClient(station_url, dry_run=dry, log=lambda m: (print(m), log.event("dry_run", message=m))[0])
