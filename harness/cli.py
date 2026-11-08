@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import signal
 import socket
@@ -94,7 +95,9 @@ def main(argv: list[str] | None = None) -> int:
             host=socket.gethostname())
         dry = args.dry_run
         station = StationClient(station_url, dry_run=dry, log=lambda m: (print(m), log.event("dry_run", message=m))[0])
-        frames = FrameSource(view_url)
+        # HARNESS_FRAMES=station: small single frames from the station's /frame add-on instead of whole debug-view
+        # round trips, which cross the station's Wi-Fi uplink and slow Dream's own uploads.
+        frames = FrameSource(view_url, station_url=station_url if os.environ.get("HARNESS_FRAMES") == "station" else None)
 
         holder: dict[str, Runner] = {}
         manual = None
