@@ -1,0 +1,7 @@
+# The match laptop (macOS arm64, Linux, Windows). All have arm64 wheels; install with --only-binary=:all:.
+# Optional extras: opencv-python-headless (--cable-ends), livekit==1.2.1 (harness.livekit_observer).
+pyyaml>=6
+numpy>=2.0
+pillow>=10.1
+scipy>=1.11
+pytest>=8

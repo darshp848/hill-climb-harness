@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
@@ -54,6 +55,11 @@ def valid_jpeg(data: bytes) -> bool:
 
 STITCH_TILE_W = 384     # 4 tiles a row: 1536 px wide, under the API's 1568 px long edge, so nothing is rescaled
 STITCH_COLS = 4
+# Resized tiles by frame digest: a stage's start frame and its history frames come back in every check, so each
+# check decodes and resizes only the frames that are new (~25 ms -> a few ms a grid). 32 tiles of 384 px ~ 8 MB.
+_TILE_CACHE = 32
+_TILES: OrderedDict[bytes, Any] = OrderedDict()
+_TILE_LOCK = threading.Lock()
 
 
 def stitch(images: list[tuple[str, bytes]]) -> bytes | None:
@@ -67,12 +73,23 @@ def stitch(images: list[tuple[str, bytes]]) -> bytes | None:
         return None
     tiles = []
     for label, jpeg in images:
-        try:
-            im = Image.open(io.BytesIO(jpeg)).convert("RGB")
-        except Exception:  # noqa: BLE001 - a bad frame is left out, not fatal
-            continue
-        h = max(1, round(im.height * STITCH_TILE_W / im.width))
-        tiles.append((label, im.resize((STITCH_TILE_W, h))))
+        key = hashlib.sha1(jpeg).digest()
+        with _TILE_LOCK:
+            tile = _TILES.get(key)
+            if tile is not None:
+                _TILES.move_to_end(key)
+        if tile is None:
+            try:
+                im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+            except Exception:  # noqa: BLE001 - a bad frame is left out, not fatal
+                continue
+            h = max(1, round(im.height * STITCH_TILE_W / im.width))
+            tile = im.resize((STITCH_TILE_W, h))
+            with _TILE_LOCK:
+                _TILES[key] = tile
+                while len(_TILES) > _TILE_CACHE:
+                    _TILES.popitem(last=False)
+        tiles.append((label, tile))
     if not tiles:
         return None
     th = max(t.height for _, t in tiles)

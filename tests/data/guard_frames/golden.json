@@ -1,0 +1,137 @@
+{
+ "real_00_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_01_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_02_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_03_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_04_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_05_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_06_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_07_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_08_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_09_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_10_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_11_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_12_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "real_13_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "sim_00_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "sim_01_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "synth_00_white_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": true,
+  "why": "local detector: white ball between the fingers in wrist_l (2.5% of the view)"
+ },
+ "synth_01_white_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": true,
+  "why": "local detector: white ball between the fingers in wrist_l (1.1% of the view)"
+ },
+ "synth_02_white_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "synth_03_white_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "synth_04_white_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "synth_05_black_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "synth_06_black_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": true,
+  "why": "local detector: black ball between the fingers in wrist_l (1.3% of the view)"
+ },
+ "synth_07_white_wrist_r.jpg": {
+  "role": "wrist_r",
+  "guard": true,
+  "why": "local detector: white ball between the fingers in wrist_r (3.8% of the view)"
+ },
+ "synth_08_white_wrist_l.jpg": {
+  "role": "wrist_l",
+  "guard": true,
+  "why": "local detector: white ball between the fingers in wrist_l (1.7% of the view)"
+ },
+ "table_c_topdown.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ },
+ "table_IMG_2704.jpg": {
+  "role": "wrist_r",
+  "guard": false,
+  "why": "local detector: none held"
+ }
+}

@@ -122,6 +122,10 @@ class StateSpace:
         vec = lambda f: np.array([getattr(w, f) for w in ws], float)  # noqa: E731
         self._conf, self._window, self._gap = vec("confirm"), vec("window_s"), vec("min_gap_s")
         self._w_goal, self._w_release, self._goal_conf = vec("w_goal"), vec("w_release"), vec("goal_conf")
+        # decide()'s thresholds, built once: a per-tick list comprehension over K weight sets is the slow part of an
+        # offline sweep with thousands of them
+        self._fail_frac, self._fail_conf = vec("fail_min_fraction"), vec("fail_confirm")
+        self._stall_conf, self._guard_conf, self._live_frames = vec("stall_confirm"), vec("guard_confirm"),             vec("live_guard_frames")
 
     def start(self, timeout_s: float, stall_s: float | None, *, monitor: bool = True) -> None:
         self.x[:] = 0.0
@@ -174,18 +178,16 @@ class StateSpace:
 
     def decide(self, pass_now: np.ndarray | None = None) -> dict[str, np.ndarray]:
         x = self.x
-        w = self.ws
         t = x[:, XI["t"]]
         no_done = x[:, XI["since_done"]] >= BIG / 2
-        fmin = np.array([v.fail_min_fraction for v in w]) * self.timeout_s
-        fail = (x[:, XI["fail"]] >= np.array([v.fail_confirm for v in w])) & ((t >= fmin) | (not self.monitor))
+        fmin = self._fail_frac * self.timeout_s
+        fail = (x[:, XI["fail"]] >= self._fail_conf) & ((t >= fmin) | (not self.monitor))
         stall = np.zeros(self.K, bool)
         if self.stall_s is not None:
-            stall = no_done & ((x[:, XI["stalled"]] >= np.array([v.stall_confirm for v in w]))
+            stall = no_done & ((x[:, XI["stalled"]] >= self._stall_conf)
                                | ((x[:, XI["since_rise"]] >= self.stall_s) & (x[:, XI["pmax"]] < 0.95)
                                   & (x[:, XI["pmax"]] > 0)))
-        guard = ((x[:, XI["guard_m"]] >= np.array([v.guard_confirm for v in w]))
-                 | (x[:, XI["guard_l"]] >= np.array([v.live_guard_frames for v in w])))
+        guard = (x[:, XI["guard_m"]] >= self._guard_conf) | (x[:, XI["guard_l"]] >= self._live_frames)
         timeout = t >= self.timeout_s
         return {"pass": pass_now if pass_now is not None else np.zeros(self.K, bool), "fail": fail, "stall": stall,
                 "guard": guard, "timeout": timeout}

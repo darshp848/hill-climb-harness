@@ -39,6 +39,67 @@ pip install pyyaml pytest             # pytest only for the tests
 python -m pytest -q                   # offline, against fake_station.py
 ```
 
+### 2b. The match laptop: macOS on Apple Silicon (MacBook Air)
+
+The match harness runs on an M-series MacBook Air. Nothing on the match path is Linux- or Windows-only (audited
+8 Nov: the only exceptions are `harness/can_torque.py listen`, which needs Linux SocketCAN and is an offline tool,
+and `sim_station.py`, whose `MUJOCO_GL=egl/osmesa` default applies only on Linux).
+
+**Python.** 3.12 or 3.13, as a native arm64 build: the python.org macOS installer (universal2), Homebrew
+(`brew install python@3.12`) or `uv python install 3.12`. Not an x86_64 Python under Rosetta, which is about 2x slower
+and pulls x86 wheels. Check:
+
+```bash
+python3.12 -c "import platform, sys; print(platform.machine(), sys.version)"   # must print arm64
+```
+
+**venv and wheels.** Everything the match needs has macOS arm64 wheels; `--only-binary` makes pip fail instead of
+silently compiling from source:
+
+```bash
+cd hill-climb-harness
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip
+pip install --only-binary=:all: -r requirements-match.txt     # pyyaml numpy pillow scipy pytest
+pip install --only-binary=:all: opencv-python-headless       # only for --cable-ends
+pip install --only-binary=:all: livekit==1.2.1                # only for harness.livekit_observer
+python -m pytest -q                                           # offline; all should pass on macOS
+python -c "import numpy; numpy.show_config()" | grep -i -A2 blas   # numpy >= 2 on macOS 14+: Accelerate
+```
+
+scipy is optional for the harness but the detector's hole filling uses it; without scipy the detector falls back
+to a pure-Python labeller that is much slower. Install it on the Mac.
+
+**Permissions.** The harness never opens a local camera: every frame comes from the station over HTTP (the SSH
+tunnel, `/frame/<camera>.jpg`, LiveKit), so macOS will not ask for Camera access. What it may ask for:
+- *Local Network* (macOS 15+): the first `ssh` to the station's LAN address, or a direct `--station http://<ip>`,
+  pops "Allow Terminal to find devices on your local network". Allow it. If it was denied, connections fail with
+  "No route to host": System Settings > Privacy & Security > Local Network > turn on Terminal (or iTerm / VS Code).
+- *Camera*: only if you record table photos with the Mac's own camera or a USB camera (System Settings > Privacy &
+  Security > Camera > your terminal app).
+
+**Keep it fast and awake on the day.**
+- On the charger, Low Power Mode off (System Settings > Battery), lid open (a fanless Air sheds heat through the
+  case; closed-lid on a dock runs hotter).
+- `caffeinate -dimsu` in a spare terminal for the whole match, so neither the Mac nor its Wi-Fi sleeps.
+- Close browsers with video, Docker, and indexing-heavy apps; Activity Monitor > CPU should show the harness alone.
+- Keep the harness terminal in front: macOS gives background apps lower QoS and moves their threads to the
+  efficiency cores.
+- `python -m harness` caps numpy/BLAS/OpenMP to one thread each (`harness/perf.py`). Its arrays are small, so a
+  thread pool only adds wake-ups and heat. Leave `OMP_NUM_THREADS` etc. unset unless you are measuring.
+
+**Measure it on the Mac before the match** (offline, no API calls, no station):
+
+```bash
+python tools/mac_bench.py                                    # component table, ~30 s
+python tools/mac_bench.py --sustained 300 --label "Air, charger, lid open"     # + 5 min of match load
+python tools/mac_bench.py --sustained 300 --sustained-mode max --threads 4     # worst-case heat, 4 threads
+```
+
+It prints p50/p95 per component and, in sustained mode, a row per 30 s with `pmset -g therm` (CPU_Speed_Limit below
+100 means the Air is throttling). Pass: live guard p95 well under 100 ms (its 10 Hz period), fast-loop tick p95 under
+50 ms, no growth in p95 across the 5 minutes. Results land in `bench_results/`; commit the JSON.
+
 ## 3. Where to run it
 
 **Option A: on the station.** This needs two terminals, both with `source ~/dream-env/bin/activate`.

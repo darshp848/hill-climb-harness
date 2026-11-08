@@ -115,10 +115,12 @@ def _load(jpeg: bytes, min_w: int | None = None) -> Image.Image | None:
         return None
 
 
-def _hsv(im: Image.Image) -> np.ndarray:
+def _hsv(im: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """H, S, V planes (uint8, each contiguous) of the image at WORK_W wide."""
     w, h = im.size
-    small = im.resize((WORK_W, max(1, round(h * WORK_W / w))))
-    return np.asarray(small.convert("HSV"), dtype=np.int16)
+    size = (WORK_W, max(1, round(h * WORK_W / w)))
+    small = im if im.size == size else im.resize(size)   # resize to the same size is only a copy
+    return tuple(np.asarray(c) for c in small.convert("HSV").split())  # type: ignore[return-value]
 
 
 def _label(mask: np.ndarray) -> tuple[np.ndarray, int]:
@@ -141,10 +143,89 @@ def _label(mask: np.ndarray) -> tuple[np.ndarray, int]:
     return lab, n
 
 
-def _in_range(hsv: np.ndarray, lo: tuple[int, int, int], hi: tuple[int, int, int]) -> np.ndarray:
-    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    hue = (h >= lo[0]) & (h <= hi[0]) if lo[0] <= hi[0] else (h >= lo[0]) | (h <= hi[0])   # red wraps around
-    return hue & (s >= lo[1]) & (s <= hi[1]) & (v >= lo[2]) & (v <= hi[2])
+def _ge(x: np.ndarray, t: int) -> np.ndarray | None:
+    """x >= t on a uint8 plane; None means true everywhere (no array built)."""
+    return None if t <= 0 else (np.zeros(x.shape, bool) if t > 255 else x >= t)
+
+
+def _le(x: np.ndarray, t: int) -> np.ndarray | None:
+    return None if t >= 255 else (np.zeros(x.shape, bool) if t < 0 else x <= t)
+
+
+def _and(parts: list[np.ndarray | None], shape: tuple[int, ...]) -> np.ndarray:
+    out = None
+    for p in parts:
+        if p is not None:
+            if out is None:
+                out = p           # a fresh array from _ge/_le: safe to AND into in place
+            else:
+                out &= p
+    return np.ones(shape, bool) if out is None else out
+
+
+def _in_range(hsv: tuple[np.ndarray, np.ndarray, np.ndarray], lo: tuple[int, int, int],
+              hi: tuple[int, int, int]) -> np.ndarray:
+    """lo <= pixel <= hi per channel on the uint8 planes; a hue range with lo > hi wraps around (red). Bounds that
+    every 0-255 value passes build no array (black's hue and saturation, say)."""
+    h, s, v = hsv
+    if lo[0] <= hi[0]:
+        hue = [_ge(h, lo[0]), _le(h, hi[0])]
+    else:
+        a, b = _ge(h, lo[0]), _le(h, hi[0])
+        hue = [None if a is None or b is None else a | b]
+    return _and(hue + [_ge(s, lo[1]), _le(s, hi[1]), _ge(v, lo[2]), _le(v, hi[2])], h.shape)
+
+
+def _close2(m: np.ndarray) -> np.ndarray:
+    """scipy.ndimage.binary_closing(m, iterations=2) with its default cross and border 0, in whole-array shifts:
+    two cross dilations, then two cross erosions that also clear the pixels next to the image edge."""
+    for _ in range(2):
+        o = m.copy()
+        o[1:] |= m[:-1]
+        o[:-1] |= m[1:]
+        o[:, 1:] |= m[:, :-1]
+        o[:, :-1] |= m[:, 1:]
+        m = o
+    for _ in range(2):
+        o = m.copy()
+        o[1:] &= m[:-1]
+        o[:-1] &= m[1:]
+        o[:, 1:] &= m[:, :-1]
+        o[:, :-1] &= m[:, 1:]
+        o[0] = o[-1] = False
+        o[:, 0] = o[:, -1] = False
+        m = o
+    return m
+
+
+def _fill_holes(m: np.ndarray) -> np.ndarray:
+    """scipy.ndimage.binary_fill_holes(m): background regions (4-connected) that touch no image edge become
+    foreground. One labelling of the background instead of scipy's iterated dilation."""
+    lab, n = _ndi.label(~m)
+    if n == 0:
+        return m
+    edge = np.zeros(n + 1, bool)
+    for line in (lab[0], lab[-1], lab[:, 0], lab[:, -1]):
+        edge[line] = True
+    edge[0] = False                       # label 0 is the foreground itself
+    if edge[1:].all():
+        return m                          # every background region reaches the edge: no holes
+    return ~edge[lab]
+
+
+def _crop(m: np.ndarray) -> tuple[int, int, int, int] | None:
+    """(y0, y1, x0, x1): the box around m's foreground plus one pixel (cut at the image edge), or None if m is empty.
+
+    Filling holes and labelling inside this box give what they give on the whole image: every blob lies inside it,
+    and the one-pixel margin (or the image edge) is background joined to everything outside the box, so a background
+    region reaches the box edge exactly when it reaches the image edge. Blobs keep their raster order, so labels
+    are numbered the same."""
+    rows = np.flatnonzero(m.any(axis=1))
+    if rows.size == 0:
+        return None
+    cols = np.flatnonzero(m.any(axis=0))
+    H, W = m.shape
+    return max(0, rows[0] - 1), min(H, rows[-1] + 2), max(0, cols[0] - 1), min(W, cols[-1] + 2)
 
 
 def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
@@ -178,36 +259,85 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
                  classes: list[ClassSpec] | None = None) -> list[Box]:
     """detect() on a decoded image; `classes` limits the colours looked for (default: all of cfg's)."""
     hsv = _hsv(im)
-    H, W = hsv.shape[:2]
-    total = float(H * W)
     out: list[Box] = []
     for spec in cfg.classes if classes is None else classes:
-        mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
-        if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
-            mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
-        lab, n = _label(mask)
-        if n == 0:
-            continue
-        sizes = np.bincount(lab.ravel())
-        for i in range(1, n + 1):
-            area = sizes[i]
-            frac = area / total
-            if not spec.min_frac <= frac <= spec.max_frac:
-                continue
-            ys, xs = np.nonzero(lab == i)
-            kind, orient = _kind(ys, xs)
-            if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
-                kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
-                                # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
-            if kind is None or (spec.kinds and kind not in spec.kinds):
-                continue
-            role = spec.kinds.get(kind, "info")
-            label = f"{spec.label or spec.name} {kind}"
-            out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
-                           orient, role))
+        out += _blobs(hsv, spec)
     if overhead and cfg.table_roi:
         x0, y0, x1, y1 = cfg.table_roi
         out = [b for b in out if x0 <= b.cx <= x1 and y0 <= b.cy <= y1]
+    return out
+
+
+def _candidates(lab: np.ndarray, n: int, spec: ClassSpec, keep: tuple[float, ...] | None, W: int, H: int,
+                oy: int = 0, ox: int = 0):
+    """(label, ys, xs, frac) of each blob within spec's size range (and `keep`), in label order, with its pixels in
+    row-major order as np.nonzero(lab == i) gives them, in whole-image coordinates (lab is the crop at oy, ox).
+    With scipy, each blob is read only inside its bounding box, and a box too small to hold min_frac of the image
+    (or centred outside `keep`'s region) is skipped unread."""
+    total = float(H * W)
+    if _ndi is None:
+        sizes = np.bincount(lab.ravel())
+        for i in range(1, n + 1):
+            frac = sizes[i] / total
+            if not spec.min_frac <= frac <= spec.max_frac:
+                continue
+            ys, xs = np.nonzero(lab == i)
+            if keep is not None and not _kept(keep, frac, xs.min(), xs.max() + 1, ys.min(), ys.max() + 1, W, H):
+                continue
+            yield i, ys, xs, frac
+        return
+    lo = max(spec.min_frac, keep[0] if keep is not None else 0.0)
+    min_box = lo * total * (1 - 1e-9)       # area <= box area; the margin keeps float rounding on the safe side
+    for i, (sy, sx) in enumerate(_ndi.find_objects(lab), 1):
+        if (sy.stop - sy.start) * (sx.stop - sx.start) < min_box:
+            continue
+        if keep is not None and not _kept(keep, 1.0, ox + sx.start, ox + sx.stop, oy + sy.start, oy + sy.stop, W, H):
+            continue
+        sub = lab[sy, sx] == i
+        area = np.count_nonzero(sub)
+        frac = area / total
+        if not spec.min_frac <= frac <= spec.max_frac or (keep is not None and frac < keep[0]):
+            continue
+        ys, xs = np.nonzero(sub)
+        yield i, ys + (oy + sy.start), xs + (ox + sx.start), frac
+
+
+def _kept(keep: tuple[float, ...], frac: float, x0: int, x1: int, y0: int, y1: int, W: int, H: int) -> bool:
+    """held()'s size and grip-region test on a blob's box (x1, y1 exclusive), with Box.cx / Box.cy's arithmetic."""
+    cx, cy = (x0 / W + x1 / W) / 2, (y0 / H + y1 / H) / 2
+    return frac >= keep[0] and keep[1] <= cx <= keep[3] and keep[2] <= cy <= keep[4]
+
+
+def _blobs(hsv: tuple[np.ndarray, np.ndarray, np.ndarray], spec: ClassSpec,
+           keep: tuple[float, float, float, float, float] | None = None) -> list[Box]:
+    """The boxes of one colour class, in label order. `keep` = (min_frac, x0, y0, x1, y1): skip, before the shape
+    test, any blob smaller than min_frac or whose box centre is outside the region (the guard's grip_roi): held()
+    would drop those anyway, and the shape test is the costly part per blob."""
+    H, W = hsv[0].shape
+    mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
+    oy = ox = 0
+    if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
+        mask = _close2(mask)
+        box = _crop(mask)
+        if box is None:
+            return []
+        oy, y1, ox, x1 = box
+        mask = _fill_holes(mask[oy:y1, ox:x1])
+    lab, n = _label(mask)
+    if n == 0:
+        return []
+    out: list[Box] = []
+    for _i, ys, xs, frac in _candidates(lab, n, spec, keep, W, H, oy, ox):
+        kind, orient = _kind(ys, xs)
+        if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
+            kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
+                            # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
+        if kind is None or (spec.kinds and kind not in spec.kinds):
+            continue
+        role = spec.kinds.get(kind, "info")
+        label = f"{spec.label or spec.name} {kind}"
+        out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
+                       orient, role))
     return out
 
 
@@ -258,7 +388,6 @@ class TableDetector:
         """(True, why) if a wrist camera shows the guard class between the fingers; (False, ...) if the wrist views
         were readable and showed none; (None, ...) if no wrist view could be read."""
         looked = False
-        avoid = [c for c in self.cfg.classes if "avoid" in c.kinds.values()]   # only the colours that can trip it
         for role, jpeg in frames.items():
             if not any(w in role for w in self.cfg.wrist_roles):
                 continue
@@ -266,10 +395,25 @@ class TableDetector:
             if im is None:
                 continue
             looked = True
-            b = held(detect_image(im, self.cfg, classes=avoid), self.cfg)
+            b = self._held(im)
             if b is not None:
                 return True, f"local detector: {b.cls} between the fingers in {role} ({b.frac:.1%} of the view)"
         return (False, "local detector: none held") if looked else (None, "local detector: no wrist view")
+
+    def _held(self, im: Image.Image) -> Box | None:
+        """held(detect_image(im, cfg, classes=<avoid colours>), cfg), computed lazily: colours in config order, blobs
+        that can't be held (too small, centre outside grip_roi) skipped before the shape test, stopping at the first
+        held ball. Same answer as the full detection (tests/test_guard_equivalence.py)."""
+        hsv = None
+        keep = (self.cfg.grip_min_frac, *self.cfg.grip_roi)
+        for spec in self.cfg.classes:
+            if "avoid" not in spec.kinds.values():   # only the colours that can trip it
+                continue
+            hsv = hsv if hsv is not None else _hsv(im)
+            b = held(_blobs(hsv, spec, keep), self.cfg)
+            if b is not None:
+                return b
+        return None
 
     def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
         if not self.cfg.annotate:

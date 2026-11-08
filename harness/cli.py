@@ -14,6 +14,7 @@ from . import __version__
 from .frames import FrameSource
 from .log import RunLog
 from .operator import Operator, load_lessons
+from .perf import cap_cv2, cap_threads
 from .plan import load_plan
 from .runner import Runner
 from .station_client import StationClient, StationError
@@ -89,6 +90,7 @@ def match_problems(args: argparse.Namespace, plan) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    cap_threads()   # before numpy / OpenCV load: one BLAS/OpenMP thread each (harness.perf)
     args = _parser().parse_args(argv)
     if args.match:
         args.no_operator = True
@@ -203,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.cable_ends:
                 from .cable_end import CableEndClassifier  # noqa: PLC0415
                 det.cable_ends = CableEndClassifier(args.cable_ends)
+                cap_cv2()
                 log.event("cable_ends", model=str(args.cable_ends))
             runner.fast_guard = det.guard
             for v in verifiers.values():
