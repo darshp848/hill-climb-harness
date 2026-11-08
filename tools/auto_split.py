@@ -10,6 +10,10 @@ point's position (Metal forward kinematics, Dream's TCP) relative to the hub:
   ending --tail s after the gripper opens). A grasp still closed at the end of the episode gives T1 only.
 - plug-in: closes more than --far from the hub and releases within --near of it -> T3 (approach + carry + insert,
   ending --tail s after it opens). Whether the plug went in is not known from the joints: CHECK THE SHEET.
+- re-insert: closes at the hub, lifts at least --lift, and releases back at the hub (pulled out and plugged back in
+  one grasp) -> T1 (the pull) and a T3 insertion half (from the top of the lift to --tail s after it opens). The
+  T3 half starts with the cable already held: CHECK THE SHEET that it went in.
+Set --hub to where the ports are (7 Nov station: the USB ports at the end of the strip, 0.36,0.17).
 - pick-and-place: with --picks, any other grasp that is released (on the left arm: every grasp, since the hub
   rules are in the right arm's frame) -> a segment from the approach to --tail s after the release, with the task
   "LABEL ME". Look at the sheet and set its task text (or drop it) in the spec: split_episodes.py refuses LABEL ME.
@@ -73,6 +77,19 @@ def grasps(cmd: np.ndarray, fps: float, min_s: float = 0.5, gap_s: float = 0.4) 
     return [(a, b) for a, b in out if (b if b is not None else n) - a >= min_s * fps]
 
 
+def lift_end(p: np.ndarray, out_at: int, limit: int, fps: float, hold_s: float = 0.3) -> int:
+    """The end of an unplug: from the frame the plug is --lift above the grasp, follow the pull until the hand stops
+    rising (under 2 cm/s for 0.2 s) or starts moving sideways (4 cm from where it was), then hold_s more. Cutting at
+    the --lift frame itself ended most unplugs mid-pull (median 0.23 s, up to 1.4 s before the lift ends)."""
+    vz = np.gradient(p[:, 2]) * fps
+    k, w = out_at, max(1, int(0.2 * fps))
+    while k < limit - w:
+        if np.all(vz[k:k + w] < 0.02) or np.linalg.norm(p[k, :2] - p[out_at, :2]) > 0.04:
+            break
+        k += 1
+    return min(k + int(hold_s * fps), limit)
+
+
 def working_arm(state: np.ndarray, action: np.ndarray | None = None, fps: float = 30.0) -> str:
     """The arm that grasps (its gripper closes and opens again); if both or neither do, the one whose joints move
     more. Quest takes can move both arms while only one works."""
@@ -112,17 +129,24 @@ def plan_episode(state: np.ndarray, action: np.ndarray, fps: float, hub: np.ndar
         d_close = float(np.linalg.norm(p[close, :2] - hub))
         d_rel = float(np.linalg.norm(p[release, :2] - hub)) if release is not None else None
         end = min(n, (release + int(tail_s * fps)) if release is not None else n)
-        if arm == "left":
-            d_close = float("inf")      # the hub rules are in the right arm's frame: every left grasp is a pick
+        if arm == "left":               # the hub rules are in the right arm's frame: every left grasp is a pick
+            d_close = float("inf")
+            d_rel = float("inf") if release is not None else None
         if d_close <= near:
             up = np.flatnonzero(p[close:(release or n), 2] >= p[close, 2] + lift)
             if not len(up):
                 notes.append(f"{t}: grasp at the hub never lifted {lift * 100:.0f} cm, left out")
                 prev_end = end - 1
                 continue
-            pull_end = min(close + int(up[0]) + int(0.2 * fps), (release or n))
+            pull_end = lift_end(p, close + int(up[0]), release or n, fps)
             s = start_from(close)
             segs.append({"start": s, "end": pull_end, "task": T1, "kind": "unplug"})
+            if release is not None and d_rel <= near:
+                peak = close + int(np.argmax(p[close:release, 2]))
+                segs.append({"start": max(peak, pull_end), "end": end, "task": T3,
+                             "kind": "re-insert: insertion half (check seated)"})
+                prev_end = end
+                continue
             if release is None:
                 notes.append(f"{t}: unplug still holding at the end: T1 only")
             elif d_rel > far:

@@ -151,7 +151,7 @@ def test_auto_split_classifies_unplug_put_down_and_plug_in(monkeypatch):
     assert [s["kind"] for s in segs] == ["unplug", "put down", "plug-in (check it seated)"]
     unplug, down, plug = segs
     assert 0.4 * fps <= unplug["start"] <= 0.6 * fps                 # stillness trimmed to 0.5 s before moving
-    assert 5.4 * fps <= unplug["end"] <= 6.0 * fps                   # ends once lifted 6 cm, not at the release
+    assert 6.9 * fps <= unplug["end"] <= 7.5 * fps                   # ends where the lift ends (+0.3 s), not at release
     assert down["start"] == unplug["end"] and down["end"] == int(9.5 * fps + 0.7 * fps)
     assert plug["start"] == down["end"] and plug["task"] == auto_split.T3
     assert any("never lifted" in n for n in notes)
@@ -183,3 +183,21 @@ def test_split_refuses_unlabelled_segments(tmp_path):
     with pytest.raises(SystemExit, match="LABEL ME"):
         split_episodes.split({"source": str(src), "out": str(tmp_path / "o"),
                               "segments": [{"episode": 0, "start_s": 0, "end_s": 2.0, "task": "LABEL ME"}]})
+
+
+def test_auto_split_reinsert_gives_pull_and_insertion_half(monkeypatch):
+    import auto_split
+    monkeypatch.setattr(auto_split, "tool_point", lambda q, tcp: [q[0], q[1], q[2]])
+    fps = 30.0
+    keys = [(0, 0.2, 0.0, 0.2, 100), (1, 0.2, 0.0, 0.2, 100), (3, 0.36, 0.17, 0.04, 100), (4, 0.36, 0.17, 0.04, 0),
+            (6, 0.36, 0.17, 0.30, 0), (9, 0.36, 0.17, 0.04, 0), (10, 0.36, 0.17, 0.04, 100), (12, 0.3, 0.1, 0.2, 100)]
+    t = np.arange(0, 12 * fps) / fps
+    state, action = np.zeros((len(t), 14)), np.zeros((len(t), 14))
+    for i in range(3):
+        state[:, 7 + i] = np.interp(t, [k[0] for k in keys], [k[1 + i] for k in keys])
+    action[:, 13] = [next(k[4] for k in reversed(keys) if k[0] <= x) for x in t]
+    segs, _ = auto_split.plan_episode(state, action, fps, np.array([0.36, 0.17]), near=0.06, far=0.08, lift=0.06,
+                                      tail_s=0.7, max_approach_s=10.0)
+    assert [s["task"] for s in segs] == [auto_split.T1, auto_split.T3]
+    pull, ins = segs
+    assert 5.8 * fps <= pull["end"] <= 6.6 * fps and ins["start"] == pull["end"] and ins["end"] == int(10.7 * fps)

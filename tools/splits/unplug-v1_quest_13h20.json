@@ -7,22 +7,22 @@
   ],
   "segments": [
     {
-      "episode": 1,
+      "episode": 3,
       "start_s": 6.267,
-      "end_s": 11.6,
+      "end_s": 11.933,
       "task": "unplug the USB cable at the end of the hub nearest the right arm",
       "kind": "unplug"
     },
     {
-      "episode": 2,
+      "episode": 4,
       "start_s": 36.133,
-      "end_s": 40.567,
+      "end_s": 40.933,
       "task": "unplug the USB cable at the end of the hub nearest the right arm",
       "kind": "unplug"
     },
     {
-      "episode": 2,
-      "start_s": 40.567,
+      "episode": 4,
+      "start_s": 40.933,
       "end_s": 42.933,
       "task": "put the held cable down on the table away from the hub",
       "kind": "put down"

@@ -99,17 +99,20 @@ def _norm(piece: str) -> str:
     return " ".join(w for w in piece.lower().replace(",", " ").split() if w not in ("a", "the", "an"))
 
 
+_SHAPES = {"cube": ("cube", "block"), "stick": ("stick", "cylinder", "rod", "peg")}
+
+
+def _shape(text: str) -> str | None:
+    t = _norm(text)
+    return next((shape for shape, words in _SHAPES.items() if any(w in t for w in words)), None)
+
+
 def tower_matches(seen: list[str], target: list[str]) -> bool:
-    """The seen tower is the target's first len(seen) pieces. Per piece, the colour (first word) and the shape (last
-    word before the comma) of the target must appear in the seen one; orientation wording varies and is not compared."""
+    """The seen tower has the target's first len(seen) shapes, bottom to top: cubes first, then sticks. Colour order
+    doesn't matter (Darsh, 8 Nov) and orientation wording varies, so neither is compared."""
     if len(seen) > len(target):
         return False
-    for s, t in zip(seen, target):
-        words = _norm(t.split(",")[0]).split()
-        key = [words[0], words[-1]] if words else []
-        if not all(k in _norm(s).split() or k in _norm(s) for k in key):
-            return False
-    return True
+    return all(_shape(s) == _shape(t) for s, t in zip(seen, target))
 
 
 def _inference_fault(last_error: Any) -> bool:

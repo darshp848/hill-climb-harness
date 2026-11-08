@@ -1,0 +1,179 @@
+{
+  "source": "~/hackathon_data/plug-unplug-v1",
+  "out": "~/hackathon_data/leader-split-v6",
+  "hub_xy": [
+    0.36,
+    0.17
+  ],
+  "segments": [
+    {
+      "episode": 39,
+      "start_s": 89.767,
+      "end_s": 96.733,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 39,
+      "start_s": 96.733,
+      "end_s": 102.033,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 39,
+      "start_s": 102.033,
+      "end_s": 121.333,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 39,
+      "start_s": 121.333,
+      "end_s": 127.9,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 13.3,
+      "end_s": 43.0,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 43.0,
+      "end_s": 45.233,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 45.233,
+      "end_s": 51.067,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 73.267,
+      "end_s": 78.7,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 86.067,
+      "end_s": 97.833,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "re-insert: insertion half (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 97.833,
+      "end_s": 103.667,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 103.667,
+      "end_s": 106.467,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 138.5,
+      "end_s": 158.867,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 158.867,
+      "end_s": 163.067,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 163.4,
+      "end_s": 171.9,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "re-insert: insertion half (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 171.9,
+      "end_s": 176.2,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 176.2,
+      "end_s": 182.967,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 182.967,
+      "end_s": 196.3,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 196.3,
+      "end_s": 200.6,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 200.6,
+      "end_s": 202.567,
+      "task": "put the held cable down on the table away from the hub",
+      "kind": "put down",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 203.633,
+      "end_s": 236.433,
+      "task": "plug the loose USB cable on the table into a free port on the hub",
+      "kind": "plug-in (checked seated)",
+      "arm": "right"
+    },
+    {
+      "episode": 40,
+      "start_s": 236.433,
+      "end_s": 241.0,
+      "task": "unplug the USB cable at the end of the hub nearest the right arm",
+      "kind": "unplug",
+      "arm": "right"
+    }
+  ],
+  "note": "leader takes 39-40 (20:56-21:02, right arm, left arm leader): plug-ins checked on full-size wrist frames (the cable stays in a USB port at the strip's end after release), unplugs start with the plug in the port and end lifted; the 85 s plug-in (39, 2.6-87.9 s) left out. Freeze left_wrist."
+}

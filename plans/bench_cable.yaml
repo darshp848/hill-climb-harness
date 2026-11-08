@@ -1,0 +1,56 @@
+# Benchmark, not a match plan: base Dream-1 against the fine-tune on Stage 1 only (one unplug, put it down, let go),
+# with the match plan's own prompts, success questions and recoveries, so a result here carries over to the match.
+#
+#   python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench
+#   python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench \
+#       --var model=dream-1-ft:bb4b9e5f-relay-final
+#   python -m harness.report runs/bench --by-checkpoint
+#
+# Alternate the two models run by run (base, fine-tune, base, ...) so the table, the light and the cables age the same
+# for both. Reset between runs: all 4 cables in the hub, arms home. 5 runs each is the least that shows a difference.
+# Unlike the match plan, unplug_cable gives up after 3 attempts (a match keeps trying until the clock runs out),
+# so a run ends in about 3 minutes at worst and every run is counted.
+task: >-
+  Unplug a USB cable that starts in the hub, put it down on the table away from the hub, and let go.
+  Never plug a cable into the hub. Do not touch the blocks or the balls.
+checkpoint: "{model}"
+vars: {model: dreamlabs/dream-1-beta}
+time_budget_s: 200
+check_every_s: 3.0
+verifier: monitor
+confirm: 2
+done_message: "CABLE BENCH RUN DONE"
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}
+
+stages:
+  - name: unplug_cable
+    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
+    expect: "The right gripper closes fully on the plug at the end of the hub nearest it and pulls it straight out along the port until the plug is clear."
+    timeout_s: 60
+    max_attempts: 3
+    min_run_s: 4
+    settle_s: 4
+    stall_s: 20
+    recovery:
+      - {name: keep_pulling, kind: retry, when: "the gripper is on a plug or right next to the hub", max_uses: 2}
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck, holds the wire instead of the plug, or has pushed the hub", settle_s: 5, max_uses: 2}
+    on_fail: abort            # nothing to put down
+
+  - name: put_cable_down
+    prompt: "put the held cable down on the table away from the hub"
+    success: "Are both grippers empty, with the unplugged cable lying on the table away from the hub?"
+    expect: "The right arm carries the unplugged cable away from the hub, lowers it to the table and opens."
+    timeout_s: 20
+    min_run_s: 3
+    confirm: 1
+    on_fail: skip
+
+  - name: release_cable
+    prompt: "open both grippers and move the arms up"
+    success: "Are both grippers open and empty, with no cable held?"
+    timeout_s: 10
+    min_run_s: 2
+    confirm: 1
+    on_fail: skip

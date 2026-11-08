@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import os
 import hashlib
+import os
 import signal
 import socket
 import sys
@@ -53,6 +53,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="operator lessons: read into the monitor's system prompt, and new ones appended")
     p.add_argument("--no-operator", action="store_true",
                    help="ignore typed lines other than s (stop). Use this in a match: any human input is a DQ")
+    p.add_argument("--claude-backend", choices=["api", "subscription"], default=None,
+                   help="how the claude/monitor verifiers reach Claude: api (ANTHROPIC_API_KEY, the default) or "
+                        "subscription (the logged-in `claude` CLI); same as $HARNESS_CLAUDE_BACKEND")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
                    help="fill a {NAME} placeholder in the plan, e.g. --var color=orange (repeatable)")
     return p
@@ -89,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     if lessons:
         plan.system_prompt = (plan.system_prompt + "\n\n" if plan.system_prompt else "") + \
             "LESSONS FROM THE OPERATOR IN EARLIER TEST RUNS (follow them)\n" + lessons
+    if args.claude_backend:
+        os.environ["HARNESS_CLAUDE_BACKEND"] = args.claude_backend
     if args.verifier:
         for stage in plan.stages:
             stage.verifier = args.verifier
