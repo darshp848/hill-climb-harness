@@ -31,6 +31,7 @@ vars:
 claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 3, hedge: 2, writer_model: claude-sonnet-5-5, confirm_model: claude-sonnet-5-5}
 reset_first: true
 stop_on_pass: true
+hands_off: true        # attempts end only on a pass, a guard or the timeout (no drop-the-cube recoveries)
 rewrite_prompts: false   # a fine-tune follows only its recorded texts
 write_prompts: false
 rewrite_max: 1
@@ -153,7 +154,7 @@ stages:
     expect: "An arm picks up a cube, lowers it onto the other cube, opens and lifts clear; the two stay stacked."
     camera_notes:
       scene: "top view of the table: the cubes and any stack"
-    timeout_s: 50
+    timeout_s: 90          # Dream needs 30-60 s to stack; hands_off lets it work
     max_attempts: 99
     min_run_s: 4
     stall_s: 35

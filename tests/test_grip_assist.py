@@ -383,3 +383,18 @@ def test_fine_tune_plan_sends_only_its_trained_texts():
     assert sent <= trained and plan.checkpoint == "dream-1-ft:bb4b9e5f-relay-final"
     assert not plan.write_prompts and not plan.rewrite_prompts and not plan.prompt_prefix
     assert all(s.grip_assist for s in plan.stages if s.name.startswith("cable_unplug")) and plan.stop_on_pass
+
+
+def test_hands_off_ignores_noisy_looks_and_never_drops_the_cube(fake, write_plan, tmp_path):
+    rec = [{"name": "let_go_and_lift", "kind": "reset", "prompt": "open both grippers and move the arms up",
+            "settle_s": 0.05}]
+    path = write_plan([stage("stack_2", prompt="put a block on top of the stack", timeout_s=0.8, stall_s=0.05,
+                             max_attempts=3, recovery=rec, confirm=1)], hands_off=True)
+    noisy = [mv(None, "ok", progress=0.5), mv(None, "stalled", progress=0.0), mv(None, "failing", progress=0.1),
+             mv(False, "stalled", progress=0.0)]
+    r = build(fake, path, tmp_path, Script(noisy, repeat=True))
+    res = r.run()
+    assert not events(r.log, "regression") and not events(r.log, "recovery")
+    assert prompts(fake) == ["put a block on top of the stack"]   # sent once, never resent, never "open both grippers"
+    assert [e["reason"] for e in events(r.log, "attempt_end")][0].startswith("timeout")
+    assert {e["mode"] for e in events(r.log, "retry")} == {"hands_off_keep_running"}

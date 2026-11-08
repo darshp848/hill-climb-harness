@@ -621,7 +621,7 @@ class Runner:
                                    seconds=round(self._clock() - self._guard_answer_t, 1), message=guard.message)
                     raise _Guard(f"guard blind in stage {stage.name!r}: no answer for {guard.max_blind_s:g} s")
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
-                failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
+                failing, why = verdict.done is False and not self.plan.hands_off, f"verifier said no: {verdict.reason}"
                 nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts and stage.write_prompt \
                     and not gs["done"] else None
                 if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
@@ -647,14 +647,15 @@ class Runner:
                         hint = verdict.recovery
                     p = verdict.progress
                     if p is not None:
-                        if max_p is not None and p <= max_p - REGRESSION_DROP and last_done_t is None:
+                        if (max_p is not None and p <= max_p - REGRESSION_DROP and last_done_t is None
+                                and not self.plan.hands_off):
                             self.log.event("regression", stage=stage.name, attempt=attempt, progress=p, max_progress=max_p)
                             failing, why = True, f"regressed: progress {p:.2f} vs max {max_p:.2f}"
                         if max_p is None or p > max_p:
                             max_p = p
                         if rise_ref is None or p >= rise_ref + STALL_RISE:
                             rise_ref, last_rise = p, elapsed
-                    if verdict.status == "failing" and not failing:
+                    if verdict.status == "failing" and not failing and not self.plan.hands_off:
                         failing, why = True, f"monitor says failing: {verdict.reason}"
                     consec_stalled = consec_stalled + 1 if verdict.status == "stalled" else 0
                     if stage.watch is not None and verdict.done is not True:
@@ -714,11 +715,11 @@ class Runner:
                 # A "stalled" look counts only once the robot has had stall_s since the last prompt change (8 Nov live:
                 # with confirm 1 and a look a second, one early "stalled" cut stacking attempts off after 10-13 s).
                 if (stage.stall_s is not None and consec_stalled >= confirm and last_done_t is None
-                        and elapsed - last_prompt_t >= stage.stall_s):
+                        and elapsed - last_prompt_t >= stage.stall_s and not self.plan.hands_off):
                     return _Attempt(False, "stalled: monitor says stalled", max_p, hint)
             # No stall once done was seen or progress is at the top: a finished stage cannot "rise" any further.
             if (stage.stall_s is not None and last_rise is not None and elapsed >= gate and last_done_t is None
-                    and (max_p or 0) < 0.95 and elapsed - last_rise >= stage.stall_s):
+                    and (max_p or 0) < 0.95 and elapsed - last_rise >= stage.stall_s and not self.plan.hands_off):
                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
                                 max_p, hint)
             if elapsed >= stage.timeout_s:
@@ -1143,7 +1144,7 @@ class Runner:
             while True:   # choose a recovery; a reset that leaves the scene broken burns an attempt
                 if attempts >= stage.max_attempts:
                     raise _Fail(f"stage {stage.name!r} failed after {attempts} attempts: {reason}")
-                idx = self._pick_recovery(stage, uses, last_rec, hint)
+                idx = None if self.plan.hands_off else self._pick_recovery(stage, uses, last_rec, hint)
                 if idx is None:
                     break
                 uses[idx] = uses.get(idx, 0) + 1
@@ -1169,7 +1170,12 @@ class Runner:
                 refused = self._try_issue(self._stage_prompt(stage, verifier, retry=True), "retry", force_start=True)
             else:
                 try:
-                    refused = self._try_issue(self._stage_prompt(stage, verifier, retry=True), "retry")
+                    nxt = self._stage_prompt(stage, verifier, retry=True)
+                    if self.plan.hands_off and nxt == self._prompt and self.station.status().get("state") == "running":
+                        refused = None   # Dream is already on it: a resend would only restart its motion
+                        self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="hands_off_keep_running")
+                        continue
+                    refused = self._try_issue(nxt, "retry")
                 except _WriterSkip as exc:
                     self.log.event("stage_skipped", stage=stage.name, reason=str(exc))
                     return StageResult(stage.name, False, attempts, self._clock() - t0, str(exc))
