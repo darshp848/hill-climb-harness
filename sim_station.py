@@ -37,6 +37,8 @@ IDLE, STARTING, RUNNING, STOPPING, HOMING, RESETTING, ERROR = (
 MAX_BODY_BYTES = 64 * 1024
 API_TIMEOUT_S = 60.0
 ARMS = ("left", "right")
+STATIC_BODIES = ("bowl", "plate", "hub", "bin")  # fixed scene parts worth reporting beside the free objects
+SCENES = ("fruit", "hill_climb")
 
 
 class _Refused(Exception):
@@ -129,15 +131,26 @@ class SimStation:
     def __init__(self, *, policy: str = "scripted", checkpoint: str | None = None, api_port: int = 8091,
                  view_port: int = 8093, realtime: bool | None = None, example_dir: str | None = None,
                  actions: int = 48, host: str = "127.0.0.1", scripted_latency_s: float = 0.05,
-                 max_trips: int = 50) -> None:
+                 max_trips: int = 50, scene: str = "fruit") -> None:
         if policy not in ("dream", "scripted"):
             raise ValueError("policy must be 'dream' or 'scripted'")
+        if scene not in SCENES:
+            raise ValueError(f"scene must be one of {SCENES}")
+        self.scene = scene
         self.policy_kind = policy
         self.realtime = (policy == "dream") if realtime is None else realtime
         self.actions = actions
         self.scripted_latency_s = scripted_latency_s
         self._api_port, self._view_port, self._host = api_port, view_port, host
         self.yam_env, self.dc = load_example(example_dir)
+        self._referee_cls = None
+        if scene == "hill_climb":
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from sim_scenes import hill_climb_table
+
+            hill_climb_table.patch(self.yam_env)
+            self._referee_cls = hill_climb_table.HillClimbReferee
+        self._referee = None
         import numpy as np
 
         self.np = np
@@ -177,6 +190,7 @@ class SimStation:
         self.calls: list[tuple[str, str, Any]] = []
         self.env: Any = None
         self.hold: dict[str, Any] | None = None  # the targets held while idle
+        self._poses: dict[str, Any] = {}  # sim-only ground truth, refreshed after every physics step
         self._servers: list[ThreadingHTTPServer] = []
         self._threads: list[threading.Thread] = []
         self.api_url = ""
@@ -312,6 +326,7 @@ class SimStation:
     def _sim_main(self, ready: threading.Event) -> None:
         try:
             self.env = self.yam_env.YamEnv()
+            self._track_poses(self.env)
             self.hold = self._current_targets()
             self._render()
         except Exception as exc:  # pragma: no cover
@@ -337,6 +352,48 @@ class SimStation:
                 self.env.close()
             except Exception:
                 pass
+
+    def _track_poses(self, env: Any) -> None:
+        """Wrap env.step/env.reset so every physics update refreshes the ground-truth snapshot behind /objects."""
+        step, reset = env.step, env.reset
+
+        model = env.model
+        self._body_names = [model.body(i).name for i in range(model.nbody)
+                            if (model.body_jntnum[i] and model.jnt_type[model.body_jntadr[i]] == 0)  # free joint
+                            or model.body(i).name in STATIC_BODIES]
+
+        def stepped(*args: Any, **kwargs: Any) -> Any:
+            out = step(*args, **kwargs)
+            if self._referee is not None:
+                self._referee.update(env.model, env.data)
+            self._snap_poses()
+            return out
+
+        def was_reset(*args: Any, **kwargs: Any) -> Any:
+            out = reset(*args, **kwargs)
+            self._new_referee()
+            self._snap_poses()
+            return out
+
+        env.step, env.reset = stepped, was_reset
+        self._new_referee()
+        self._snap_poses()
+
+    def _new_referee(self) -> None:
+        """A /reset starts a new match for the referee (scene=hill_climb only)."""
+        self._referee = self._referee_cls(self.env.model) if self._referee_cls else None
+
+    def _snap_poses(self) -> None:
+        data = self.env.data
+        bodies = {name: [round(float(v), 4) for v in data.body(name).xpos] for name in self._body_names}
+        tcp = {side: [round(float(v), 4) for v in data.site(f"{side}_tcp").xpos] for side in ARMS}
+        state = self.env.state()
+        joints = {side: [round(float(v), 4) for v in state[side]] for side in ARMS}
+        snap = {"t": round(float(data.time), 3), "bodies": bodies, "tcp": tcp, "joints": joints}
+        if self._referee is not None:
+            snap["referee"] = self._referee.report(data)
+        with self._lock:
+            self._poses = snap
 
     def _current_targets(self) -> dict[str, Any]:
         state = self.env.state()
@@ -574,10 +631,13 @@ class SimStation:
             def do_GET(self) -> None:
                 route = self.path.split("?", 1)[0]
                 sim.calls.append(("GET", route, None))
-                if route != "/status":
-                    self._reply(404, {"error": f"no such route: GET {self.path}"})
-                else:
+                if route == "/status":
                     self._reply(200, sim._status())
+                elif route == "/objects":  # sim only: ground-truth poses for offline benchmarks, never the harness
+                    with sim._lock:
+                        self._reply(200, dict(sim._poses))
+                else:
+                    self._reply(404, {"error": f"no such route: GET {self.path}"})
 
             def do_POST(self) -> None:
                 route = self.path.split("?", 1)[0]
@@ -685,6 +745,8 @@ def main(argv: list[str] | None = None) -> None:
     rt.add_argument("--no-realtime", dest="realtime", action="store_false", help="as fast as practical")
     parser.add_argument("--example-dir", default=None, help="dream_examples/yam_mujoco dir if not installed")
     parser.add_argument("--actions", type=int, default=48, help="rows executed per chunk, 1-48")
+    parser.add_argument("--scene", choices=SCENES, default="fruit",
+                        help="fruit: Dream's example table; hill_climb: the relay table with a rubric referee")
     args = parser.parse_args(argv)
     if not 1 <= args.actions <= 48:
         parser.error("--actions must be 1-48")
@@ -693,7 +755,7 @@ def main(argv: list[str] | None = None) -> None:
         os.environ["MUJOCO_GL"] = "egl" if Path("/dev/dri").exists() else "osmesa"
     sim = SimStation(policy=args.policy, checkpoint=args.checkpoint, api_port=args.api_port,
                      view_port=args.view_port, realtime=args.realtime, example_dir=args.example_dir,
-                     actions=args.actions).start()
+                     actions=args.actions, scene=args.scene).start()
     print(f"sim station ({args.policy}, {'realtime' if sim.realtime else 'fast'}): api {sim.api_url}  "
           f"view {sim.view_url}  (Ctrl+C to quit)", flush=True)
     try:
