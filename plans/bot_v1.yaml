@@ -103,7 +103,7 @@ stages:
     write_prompt: false
     grip_assist:
       regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
-      regrip_dz: -0.015
+      regrip_dz: -0.025      # 8 Nov live: 0 of 6 re-grips held at -1.5 cm (plugs gripped at z 0.067-0.08)
       pull_up_m: [0.06, 0.04]
       pull_s: 3            # seconds per lift step: slower slips less
       seat_dz: 0.01        # open a little and lower 1 cm before the squeeze, so the jaws bite the plug body

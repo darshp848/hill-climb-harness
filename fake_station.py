@@ -102,6 +102,7 @@ class FakeStation:
         # to script what the gripper reads after a regrip.
         self.grip_readings: list[float] | None = None
         self.on_move: Any = None
+        self.grip_cmd: float | None = None   # Dream's commanded right gripper, as /arms reports it
         self.hand_z = 0.10
 
     # ---------------------------------------------------------------- lifecycle
@@ -219,7 +220,7 @@ class FakeStation:
         with self._lock:
             r = self.grip_readings
             g = (r.pop(0) if pop and len(r) > 1 else r[0]) if r else 0.9
-            right = {"gripper": g, "commanded_gripper": None}
+            right = {"gripper": g, "commanded_gripper": self.grip_cmd}
             if pose:
                 right["xyz"] = [0.30, -0.10, round(self.hand_z, 4)]
             return {"right": right, "left": {"gripper": 0.10, "commanded_gripper": None}}

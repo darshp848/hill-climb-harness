@@ -581,7 +581,12 @@ class Runner:
                 last_prompt_t, gate, rise_ref, last_rise = elapsed, elapsed + stage.effective_settle(), None, None
                 if gs["pulled"] and ga.pass_on_pull:
                     gs["pulled"] = False
-                    check = self._confirm_check(stage, verifier)   # None: no check configured, or it said yes
+                    dz = getattr(self, "_last_pull_dz", None)
+                    if ga.pull_count_dz is not None and dz is not None and dz >= ga.pull_count_dz:
+                        check = None   # lifted 8+ cm with something still in the jaws: the plug is out
+                        self.log.event("pull_counted", stage=stage.name, attempt=attempt, dz=round(dz, 3))
+                    else:
+                        check = self._confirm_check(stage, verifier)   # None: no check configured, or it said yes
                     self.log.event("pull_pass_check", stage=stage.name, attempt=attempt, passed=check is None,
                                    reason=check)
                     if check is None and ga.loop_until_s is not None:
@@ -808,10 +813,14 @@ class Runner:
 
     # -- grip assist (Stage.grip_assist; ported from tools/try_prompt.py) -----------------------------------------
     def _grip_reading(self, arm: str) -> float | None:
+        return self._grip_state(arm)[0]
+
+    def _grip_state(self, arm: str) -> tuple[float | None, float | None]:
+        """(measured opening, Dream's commanded opening) from GET /arms; None where the station gives none."""
         getter = getattr(self.station, "grippers", None)
         g = ((getter() if getter else {}) or {}).get(arm) or {}
-        v = g.get("gripper")
-        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
+        return num(g.get("gripper")), num(g.get("commanded_gripper"))
 
     def _grip_assist_wait(self, stage: Stage, ga: GripAssist, gs: dict[str, Any], attempt: int) -> float:
         """Stands in for the check interval's nap: reads the gripper every poll_s. Returns the seconds the harness
@@ -820,7 +829,7 @@ class Runner:
         lo, hi = ga.hold
         while (left := end - self._clock()) > 1e-9:
             self._nap(min(ga.poll_s, left))
-            g = self._grip_reading(ga.arm)
+            g, cmd = self._grip_state(ga.arm)
             if g is None:
                 continue
             seen = gs["seen"]
@@ -831,7 +840,10 @@ class Runner:
             since = seen[last_open + 1:]
             if all(x <= lo for x in seen[-2:]) and gs["regrips"] > 0:
                 action = "regrip"
-            elif all(lo < x < hi for x in seen[-2:]) and not any(x <= lo for x in since[:-2]):
+            elif (all(lo < x < hi for x in seen[-2:]) and not any(x <= lo for x in since[:-2])
+                  and (cmd is None or cmd <= 0.2)):
+                # ... and Dream is commanding the jaws shut: a half-open approach also reads 0.07-0.17 (8 Nov live:
+                # 9 pulls fired on it and squeezed air, 3 held)
                 # a real hold closes from open straight onto the plug. 8 Nov live: 0.85 -> 0.035 -> 0.17 -> 0.12 was
                 # Dream shutting on air on the way down and half reopening, not a plug.
                 action = "pull"
@@ -910,7 +922,7 @@ class Runner:
         self._nap(0.5)
         before = (self.station.pose() or {}).get(ga.arm) or {}
         g = self._grip_reading(ga.arm) or 0.0
-        if g <= lo:
+        if g < ga.empty_below:
             self.log.event("grip_pull", stage=stage.name, attempt=attempt, outcome="lost", grip=round(g, 3))
             return "lost"
         tries = 0
@@ -918,7 +930,7 @@ class Runner:
             for dz in ga.pull_up_m:
                 self._move(ga.arm, dz, 0.0, ga.pull_s)
             after = self._grip_reading(ga.arm) or 0.0
-            if after > lo or tries >= ga.repull:
+            if after >= ga.empty_below or tries >= ga.repull:
                 break
             tries += 1   # slipped: back down to the grip point, half open, a little lower, close, and pull again
             self.log.event("grip_slipped", stage=stage.name, attempt=attempt, grip=round(after, 3), repull=tries)
@@ -927,7 +939,10 @@ class Runner:
             self._move(ga.arm, 0.0, 0.0, 0.6)
             self._nap(0.4)
         end = (self.station.pose() or {}).get(ga.arm) or {}
-        outcome = "pulled" if after > lo else "slipped"
+        outcome = "pulled" if after >= ga.empty_below else "slipped"
+        zb, za = (before.get("xyz") or [None] * 3)[2], (end.get("xyz") or [None] * 3)[2]
+        gs_dz = (za - zb) if isinstance(za, (int, float)) and isinstance(zb, (int, float)) else None
+        self._last_pull_dz = gs_dz
         self.log.event("grip_pull", stage=stage.name, attempt=attempt, outcome=outcome, grip_before=round(g, 3),
                        grip_after=round(after, 3), repulls=tries, steps_m=ga.pull_up_m,
                        z_before=(before.get("xyz") or [None] * 3)[2], z_after=(end.get("xyz") or [None] * 3)[2])
