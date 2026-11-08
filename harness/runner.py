@@ -514,7 +514,7 @@ class Runner:
                 return _Attempt(False, "operator ended the stage", max_p, hint, operator=True)
             for prompt in prompts:
                 self._issue(prompt, "operator")
-                rewrites = REWRITE_MAX   # the operator's prompt stands: no monitor rewrite undoes it (run 3)
+                rewrites = self.plan.rewrite_max   # the operator's prompt stands: no monitor rewrite undoes it (run 3)
                 last_prompt_t, consec_done, consec_fail, consec_stalled = elapsed, 0, 0, 0
                 gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
             if st.get("state") == "idle":
@@ -566,8 +566,8 @@ class Runner:
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
                 nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts else None
                 if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
-                        and last_done_t is None and rewrites < REWRITE_MAX
-                        and elapsed - last_prompt_t >= REWRITE_COOLDOWN_S and nxt != self._prompt):
+                        and last_done_t is None and rewrites < self.plan.rewrite_max
+                        and elapsed - last_prompt_t >= self.plan.rewrite_cooldown_s and nxt != self._prompt):
                     # The monitor's diagnosis as the robot's next instruction. Its verdict was on the old prompt,
                     # so the counters and the stall clock start over, after the stage's settle time.
                     prefix = self.plan.prompt_prefix
@@ -820,10 +820,30 @@ class Runner:
                        reason=verdict.reason, skipped=bool(done))
         return bool(done)
 
+    def _write_prompt(self, stage: Stage, verifier: Verifier) -> str | None:
+        """plan.write_prompts: the monitor's one instruction for this stage from the current frames, with the plan's
+        prompt_prefix when the stage's own prompt has it. None (use stage.prompt) when it can't write one."""
+        fn = getattr(verifier, "write_prompt", None) or getattr(getattr(verifier, "second", None), "write_prompt", None)
+        if fn is None:
+            return None
+        if hasattr(fn.__self__, "grip_note"):
+            fn.__self__.grip_note = self._grip_note()
+        text, why, latency = fn(stage, self._frames_for_check(stage))
+        prefix = self.plan.prompt_prefix
+        if text and prefix and stage.prompt.startswith(prefix) and not text.startswith(prefix):
+            text = f"{prefix} {text}"
+        self.log.event("prompt_written", stage=stage.name, prompt=text, fallback=stage.prompt if not text else None,
+                       why=why, latency_s=latency)
+        return text
+
     def _stage_prompt(self, stage: Stage, verifier: Verifier) -> str:
         """The stage's prompt, or with plan.tower_prompts on a stacking stage: the next target piece by name, after
         the tower the monitor last reported (one synchronous look if it hasn't reported one yet)."""
         plan = self.plan
+        if plan.write_prompts:
+            written = self._write_prompt(stage, verifier)
+            if written:
+                return written
         if not plan.tower_prompts or not stage.name.startswith(TOWER_STAGES):
             return stage.prompt
         if self._tower is None:

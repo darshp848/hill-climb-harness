@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
-from .plan import TOWER_STAGES, Plan, Stage
+from .plan import MAX_PROMPT_CHARS, TOWER_STAGES, Plan, Stage
 
 CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 MIN_CONFIDENCE = 0.7
@@ -233,10 +233,24 @@ NEXT_PROMPT_RULE = (
     'makes the robot start its motion over. It is always for the CURRENT stage\'s task: never send the robot back to '
     'a stage listed as already done. Follow the system rules and any operator feedback. Otherwise null.')
 NEXT_PROMPT_MAX_CHARS = 300
+# plan.write_prompts (8 Nov, bot, base Dream-1): named objects worked ("pick up the pink cube ... onto the blue cube"
+# stacked; "a cube ... onto the cube" put a block on a ball), coaching hurt (a 111-word prompt did worst), and the
+# fine-tune's recorded texts are short and imperative. "Pull it straight up" without "out of its port" made it
+# stop short of unplugging.
+WRITE_PROMPT_RULE = (
+    "Write the robot's instruction for THIS stage. The robot runs Dream-1, a vision-language-action model that "
+    "follows short instructions like the ones it was trained on, e.g. \"unplug the rightmost USB cable from the "
+    "power strip and put it on the table to the right\", \"pick up the pink cube and put it on top of the blue "
+    "cube\", \"pick up the orange ball next to the tower and drop it in the white bin\". Rules: one sentence, at "
+    "most 30 words, imperative; name the exact object by colour and shape and, if there are look-alikes, where it is "
+    "(e.g. \"the blue cube next to the basket\"), and exactly where it goes; keep the stage's end state from \"What it is for\" (e.g. \"out of its port\", \"toss it onto the table to the right\"): an instruction without one makes the robot stop short; say \"with the right arm\" unless the "
+    "stage says otherwise; only objects you can see; never make the white ball or a black ball a target; no advice "
+    "about angles, grip strength, speed or safety (a safety sentence is added for you). Reply with the instruction "
+    "only, as <prompt>...</prompt>.")
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-BACKENDS = ("api", "subscription")
+BACKENDS = ("api", "subscription", "openrouter")
 CLI_SYSTEM_PROMPT = ("You are a vision monitor for a robot station. Judge only from the images and text given, and "
                      "answer exactly in the output format the user asks for.")
 
@@ -301,11 +315,153 @@ def default_transport(timeout_s: float = 60.0, api_key: str | None = None, what:
     """The transport $HARNESS_CLAUDE_BACKEND asks for: the API (ANTHROPIC_API_KEY) or the subscription (claude CLI)."""
     if api_key is None and claude_backend() == "subscription":
         return claude_cli_transport(max(timeout_s, 90.0))
+    if api_key is None and claude_backend() == "openrouter":
+        fast = openrouter_transport(timeout_s=timeout_s)
+        # The confirm model (plan claude.confirm_model, a Claude model) stays on the Anthropic API: only the frequent
+        # monitor checks go to the fast OpenRouter model ($HARNESS_ANTHROPIC_MODELS, default claude-sonnet-5-5).
+        keep = {m.strip() for m in os.environ.get("HARNESS_ANTHROPIC_MODELS", "claude-sonnet-5-5").split(",") if m.strip()}
+        akey = os.environ.get("ANTHROPIC_API_KEY")
+        slow = anthropic_transport(akey, timeout_s) if akey else None
+        return lambda payload: (slow if slow and payload.get("model") in keep else fast)(payload)
     key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise ValueError(f"{what} needs ANTHROPIC_API_KEY to be set (or HARNESS_CLAUDE_BACKEND=subscription / "
                          "--claude-backend subscription to use your Claude subscription through the claude CLI)")
     return anthropic_transport(key, timeout_s)
+
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def to_openai_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Anthropic Messages payload -> OpenAI chat messages (system first; image blocks as data URLs)."""
+    out: list[dict[str, Any]] = []
+    system = payload.get("system")
+    if system:
+        out.append({"role": "system", "content": system if isinstance(system, str) else
+                    " ".join(b.get("text", "") for b in system if isinstance(b, dict))})
+    for m in payload.get("messages", []):
+        content = m.get("content")
+        if isinstance(content, str):
+            out.append({"role": m["role"], "content": content})
+            continue
+        parts = []
+        for b in content or []:
+            if b.get("type") == "text":
+                parts.append({"type": "text", "text": b.get("text", "")})
+            elif b.get("type") == "image":
+                src = b.get("source") or {}
+                parts.append({"type": "image_url", "image_url": {
+                    "url": f"data:{src.get('media_type', 'image/jpeg')};base64,{src.get('data', '')}"}})
+        out.append({"role": m["role"], "content": parts})
+    return out
+
+
+REASONING_LEVELS = ("none", "low", "medium", "high")
+
+
+def openrouter_reasoning(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenRouter's unified `reasoning` field. $HARNESS_OPENROUTER_REASONING (none|low|medium|high) wins; otherwise
+    the effort the harness asks Claude for (output_config.effort, `low` in the monitor) is passed on, so every model
+    reasons at the same requested level. Measured 8 Nov: with no field, Gemini Flash-Lite does not reason at all,
+    Haiku 5.5 reasons a little and GPT-5 nano a lot; GPT-5 nano refuses `none`."""
+    level = (os.environ.get("HARNESS_OPENROUTER_REASONING") or
+             str((payload.get("output_config") or {}).get("effort") or "")).strip().lower()
+    if not level:
+        return None
+    if level not in REASONING_LEVELS:
+        raise ValueError(f"reasoning level must be one of {REASONING_LEVELS}, not {level!r}")
+    return {"enabled": False} if level == "none" else {"effort": level}
+
+
+def openrouter_request_body(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """The credential-free wire body, shared with offline request validation."""
+    body = {"model": model, "messages": to_openai_messages(payload),
+            "max_tokens": int(payload.get("max_tokens", 1024))}
+    reasoning = openrouter_reasoning(payload)
+    if reasoning is not None:
+        body["reasoning"] = reasoning
+    return body
+
+
+def openrouter_transport(models: list[str] | None = None, api_key: str | None = None,
+                         timeout_s: float = 60.0,
+                         on_attempt: Callable[[dict[str, Any]], None] | None = None,
+                         mode: str = "race") -> Transport:
+    """The same monitor request sent to other multimodal models through OpenRouter (OPENROUTER_API_KEY).
+
+    Models: `models`, else $HARNESS_OPENROUTER_MODELS (comma-separated OpenRouter ids). With more than one model,
+    every call races them (harness.hedge.first_of) and takes the first reply that has text: a fast model answers
+    first when it can, a slower, more reliable one covers when it can't. The key goes only in the Authorization
+    header to openrouter.ai and is never logged. Optional on_attempt receives accounting for every HTTP attempt,
+    including empty responses and losing calls, from worker threads. It must be thread-safe and must not raise.
+    Only model, usage, response ID, provider, latency and exception type are included, never request headers."""
+    key = api_key or os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise ValueError("the openrouter backend needs OPENROUTER_API_KEY")
+    names = models or [m.strip() for m in os.environ.get("HARNESS_OPENROUTER_MODELS", "").split(",") if m.strip()]
+    if not names:
+        raise ValueError("the openrouter backend needs model ids in HARNESS_OPENROUTER_MODELS (comma-separated)")
+
+    def one(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+        started = time.monotonic()
+        reply: dict[str, Any] = {}
+        error = None
+        try:
+            body = openrouter_request_body(model, payload)
+            req = urllib.request.Request(
+                OPENROUTER_URL, data=json.dumps(body).encode("utf-8"), method="POST",
+                headers={"Authorization": f"Bearer {key}", "content-type": "application/json",
+                         "X-Title": "hill-climb-harness"})
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                decoded = json.loads(resp.read())
+                if not isinstance(decoded, dict):
+                    raise ValueError("OpenRouter response must be an object")
+                reply = decoded
+            text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if isinstance(text, list):
+                text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+            if not text.strip():
+                raise RuntimeError(f"{model}: empty reply")
+            return {"content": [{"type": "text", "text": text}], "usage": reply.get("usage"), "model": model}
+        except Exception as exc:
+            error = type(exc).__name__
+            raise
+        finally:
+            if on_attempt is not None:
+                on_attempt({"model": model, "usage": reply.get("usage"), "id": reply.get("id"),
+                            "provider": reply.get("provider"), "latency_s": time.monotonic() - started,
+                            "error_type": error})
+
+    if mode not in ("race", "alternate"):
+        raise ValueError("openrouter mode: race or alternate")
+    turn = {"k": 0}
+    turn_lock = threading.Lock()
+
+    def send(payload: dict[str, Any]) -> dict[str, Any]:
+        if len(names) == 1:
+            return one(names[0], payload)
+        if mode == "alternate":
+            # Each call goes to the next model in turn. With claude.parallel 2 and confirm 2, two "done" verdicts in
+            # a row then come from two different models: a fast model proposes, the other one confirms.
+            with turn_lock:
+                k = turn["k"] % len(names)
+                turn["k"] += 1
+            return one(names[k], payload)
+        from .hedge import first_of  # noqa: PLC0415
+        it = iter(range(len(names)))
+        lock = threading.Lock()
+
+        def next_call() -> dict[str, Any]:
+            with lock:
+                k = next(it)
+            return one(names[k], payload)
+        res = first_of(next_call, len(names), timeout_s=timeout_s)
+        if res.value is None:
+            raise RuntimeError("all OpenRouter models failed: " + "; ".join(res.errors)[:300])
+        return res.value
+
+    return send
 
 
 def anthropic_transport(api_key: str, timeout_s: float = 60.0) -> Transport:
@@ -651,6 +807,53 @@ class MonitorVerifier:
         verdict = Verdict(obj["yes"], 1.0, str(obj.get("reason", "")))
         verdict.latency_s = round(time.monotonic() - t0, 2)
         return verdict
+
+    def write_prompt(self, stage: Stage, frames: dict[str, bytes]) -> tuple[str | None, str, float | None]:
+        """plan.write_prompts: one instruction for Dream-1 for this stage, written from the current frames by
+        claude.writer_model (default: confirm_model, then the monitor's model). (prompt or None, why, latency_s)."""
+        model = self.plan.claude_user.get("writer_model") or self.plan.claude_user.get("confirm_model", self.model)
+        good = {r: j for r, j in frames.items() if valid_jpeg(j)}
+        if not good:
+            return None, "no frames available", None
+        content: list[dict[str, Any]] = []
+        for role, jpeg in sorted(good.items()):
+            note = stage.note_for(role)
+            content.append({"type": "text", "text": f"NOW: {role}" + (f" [{note}]" if note else "")})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": base64.b64encode(jpeg).decode("ascii")}})
+        prefix = self.plan.prompt_prefix
+        intent = stage.prompt[len(prefix):].strip() if prefix and stage.prompt.startswith(prefix) else stage.prompt
+        lines = [f"Whole task: {self.plan.task}"]
+        if self.done_stages:
+            lines.append("Already done: " + "; ".join(self.done_stages))
+        lines += [f"This stage: {stage.name}. What it is for: {intent}", f"It passes when: {stage.success}"]
+        if stage.expect:
+            lines.append(f"What it should look like: {stage.expect}")
+        if self.plan.tower_target and stage.name.startswith(TOWER_STAGES):
+            lines.append("Target tower, bottom to top (colours don't matter, shapes do): " +
+                         "; ".join(self.plan.tower_target))
+        if self.grip_note:
+            lines.append(f"Gripper sensors now (measured): {self.grip_note}")
+        lines.append(WRITE_PROMPT_RULE)
+        content.append({"type": "text", "text": "\n".join(lines)})
+        payload = {"model": model, "max_tokens": 4000, "output_config": {"effort": "low"},
+                   "messages": [{"role": "user", "content": content}]}
+        if self.plan.system_prompt:
+            payload["system"] = self.plan.system_prompt
+        t0 = time.monotonic()
+        try:
+            reply = self._transport(payload)
+            text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
+        except Exception as exc:  # noqa: BLE001 - fall back to the stage prompt
+            return None, f"writer error: {type(exc).__name__}: {str(exc)[:200]}", None
+        latency = round(time.monotonic() - t0, 2)
+        start, end = text.rfind("<prompt>"), text.rfind("</prompt>")
+        out = " ".join(text[start + len("<prompt>"):end].split()) if 0 <= start < end else ""
+        if not out:
+            return None, f"writer gave no <prompt>: {text[-120:]!r}", latency
+        if len(out) > MAX_PROMPT_CHARS - len(prefix) - 1:
+            return None, f"writer prompt too long ({len(out)} chars)", latency
+        return out, "written", latency
 
     def check_now(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
         """Synchronous: waits for any call in flight, then asks once and returns that answer."""

@@ -15,7 +15,8 @@ ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
-              "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first"}
+              "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first",
+              "write_prompts", "rewrite_max", "rewrite_cooldown_s"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
@@ -143,6 +144,12 @@ class Plan:
     # Let the monitor write the robot's next prompt (its `next_prompt`), with a cooldown and a cap per attempt.
     # Base Dream-1 only: a fine-tune follows only its recorded task texts.
     rewrite_prompts: bool = False
+    rewrite_max: int = 3               # monitor-written prompts per attempt
+    rewrite_cooldown_s: float = 15.0   # no monitor-written prompt sooner than this after any prompt change
+    # The monitor writes each stage's prompt at stage start (and at each retry) from what it sees: one short
+    # instruction naming the object and where it goes. stage.prompt is the intent it works from and the fallback.
+    # Base Dream-1 only (8 Nov, bot: "the pink cube onto the blue cube" stacked; "a cube onto the cube" hit a ball).
+    write_prompts: bool = False
     # A sentence a rewritten prompt must open with when the stage's own prompt opens with it (Dream refuses cable
     # work without the "no power" sentence); added when the monitor drops it.
     prompt_prefix: str = ""
@@ -155,6 +162,13 @@ def _roles(value: Any, where: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(c, str) and c.strip() for c in value):
         raise ValueError(f"{where}: must be a list of camera role names")
     return [c.strip() for c in value]
+
+
+def _cooldown(value: Any) -> float:
+    """plan.rewrite_cooldown_s: a number of seconds, 0 allowed."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"plan.rewrite_cooldown_s: must be a number >= 0, got {value!r}")
+    return float(value)
 
 
 def _num(value: Any, where: str, *, integer: bool = False) -> float:
@@ -360,6 +374,9 @@ def parse_plan(data: Any) -> Plan:
         guard=guard,
         system_prompt=system_prompt.strip(),
         rewrite_prompts=_bool(data.get("rewrite_prompts", False), "plan.rewrite_prompts"),
+        rewrite_max=int(_num(data.get("rewrite_max", 3), "plan.rewrite_max", integer=True)),
+        rewrite_cooldown_s=_cooldown(data.get("rewrite_cooldown_s", 15.0)),
+        write_prompts=_bool(data.get("write_prompts", False), "plan.write_prompts"),
         prompt_prefix=prefix.strip(),
         reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
         tower_target=[x.strip() for x in tower],

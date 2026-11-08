@@ -1,0 +1,71 @@
+{
+  "20261108T175656Z": {
+    "seen": "Started by mistake on base Dream-1 (--var model did nothing on cloud-sims); stopped after 30 s.",
+    "notes": [
+      "cloud-sims' hill_climb_v4.yaml hard-coded the base checkpoint at the time; --checkpoint is the override."
+    ]
+  },
+  "20261108T175748Z": {
+    "seen": "Unplugged one cable, then struggled to even grasp the rest.",
+    "notes": [
+      "Arms started ~1.0 rad (left) / 0.7 rad (right) from any recorded start: the base run before left them mid-air, and the start-pose gate had no joint state at the first start.",
+      "From 132 s the right wrist is rolled ~90 degrees and never recovers: the hand approaches the plugs side-on.",
+      "Monitor said done at 43, 149, 174, 245 s but never twice in a row (confirm 2): Stage 1 never passed, so the robot was re-sent 'unplug' 5 times.",
+      "Clutter at the strip (glasses, leaflet, a box placed mid-run) and hands in the workspace."
+    ]
+  },
+  "20261108T180555Z": {
+    "seen": "Did not do anything.",
+    "notes": [
+      "Every pass was false: each cable has a USB plug on both ends; the free ends lay on the table from the start and the monitor took them for unplugged plugs once the wrist camera was close.",
+      "The fine-tune rolls the right wrist ~90 degrees within ~30 s of starting from home: in the training videos the hand stays upright on the approach.",
+      "unplug_more has a 20 s timeout: too short (last night's second unplugs took ~2 min)."
+    ]
+  },
+  "20261108T181539Z": {
+    "seen": "Stopped by hand: the fine-tune was still not grasping.",
+    "notes": [
+      "First try of the Gemini Flash-Lite monitor through OpenRouter: it worked (~3.5 s per look) and made no false dones in 97 s."
+    ]
+  },
+  "20261108T181746Z": {
+    "seen": "Stopped: this was Darsh's match plan with our gates, not the hybrid plan.",
+    "notes": []
+  },
+  "20261108T181854Z": {
+    "seen": "Much worse than base Dream-1 last night.",
+    "notes": [
+      "Hybrid plan on the fine-tune: the hybrid prompts are written for base Dream-1 (power-strip prefix, coaching), which the fine-tune never saw."
+    ]
+  },
+  "20261108T182057Z": {
+    "seen": "Real unplug at 36 s. Stacked pink on blue.",
+    "notes": [
+      "Base Dream-1 + hybrid plan + Haiku: matches last night's best station run (unplug + 2-cube stack)."
+    ]
+  },
+  "20261108T182651Z": {
+    "seen": "Unplugged another cable, but the run never counted it.",
+    "notes": [
+      "Gemini Flash-Lite never said done, even after the real unplug (false negative), so the run stayed on Stage 1.",
+      "It rewrote Dream's prompt 11 times (about every 16 s): each rewrite restarts Dream's motion."
+    ]
+  },
+  "20261108T183407Z": {
+    "seen": "Way too cautious: grips properly, opens, grips again, keeps trying. Grabs the cable but doesn't pull it up.",
+    "notes": [
+      "Darsh's prompt layering put 53 words of operator coaching in front of the instruction (111 words): right angle to the cable, turn it vertical, take two or three cables at once. These pull against each other.",
+      "The gripper kept closing on the thin cord above the plug instead of the plug body (sensor 0.05 = empty), so the cord slipped and Dream re-gripped.",
+      "Dream refused the first instruction: it saw a person's hand on a cable."
+    ]
+  },
+  "20261108T184048Z": {
+    "seen": "Grabs a cube, drops it, tries again and again. Grabs blocks by a diagonal corner. Tried to put a block on a ball.",
+    "notes": [
+      "The stack prompt names no colours ('pick up a cube ... lower it onto the cube', Darsh's 8 Nov change: colour order doesn't matter). 'The cube' is ambiguous next to a ball: Dream put the block on the green ball. Our hybrid run, which named both cubes ('pink cube ... onto the blue cube'), stacked at about 3 min.",
+      "Drops are partly the harness: twice (87 s, 167 s) it sent 'open both grippers and move the arms up', a direct order to let go, and it re-sent the stack prompt 4 more times (each resets Dream).",
+      "The monitor flip-flopped on whether a cube was stacked (p 1.0 at 31 s, 0.3 at 34 s, 0.8 at 38 s): a 'regressed' rule ended the attempt at 45 s.",
+      "Ended at 254 s on a station error: the overhead camera stopped sending pictures for 2 s."
+    ]
+  }
+}

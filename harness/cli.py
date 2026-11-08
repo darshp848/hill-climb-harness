@@ -53,7 +53,7 @@ def _parser() -> argparse.ArgumentParser:
                    help="operator lessons: read into the monitor's system prompt, and new ones appended")
     p.add_argument("--no-operator", action="store_true",
                    help="ignore typed lines other than s (stop). Use this in a match: any human input is a DQ")
-    p.add_argument("--claude-backend", choices=["api", "subscription"], default=None,
+    p.add_argument("--claude-backend", choices=["api", "subscription", "openrouter"], default=None,
                    help="how the claude/monitor verifiers reach Claude: api (ANTHROPIC_API_KEY, the default) or "
                         "subscription (the logged-in `claude` CLI); same as $HARNESS_CLAUDE_BACKEND")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",

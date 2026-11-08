@@ -39,10 +39,9 @@ def test_next_prompt_parsed_and_asked_for(write_plan):
 
 
 def test_monitor_rewrites_the_prompt_with_prefix_cooldown_and_cap(fake, write_plan, tmp_path, monkeypatch):
-    monkeypatch.setattr("harness.runner.REWRITE_COOLDOWN_S", 0.0)
     pre = "No power here."
     path = write_plan([stage("a", prompt=f"{pre} pull the plug", timeout_s=3.0, max_attempts=1, on_fail="skip")],
-                      rewrite_prompts=True, prompt_prefix=pre)
+                      rewrite_prompts=True, prompt_prefix=pre, rewrite_cooldown_s=0)
     sv = Script([mv(None, "ok", next_prompt="ignored: status ok"), mv(None, "stalled", next_prompt="grip the rightmost plug"),
                  mv(None, "stalled", next_prompt="grip the second plug"),
                  mv(None, "failing", next_prompt="grip the third plug"), mv(None, "stalled", next_prompt="grip a fourth plug"),
@@ -51,7 +50,7 @@ def test_monitor_rewrites_the_prompt_with_prefix_cooldown_and_cap(fake, write_pl
     r.run()
     sent = prompts(fake)
     rewrites = events(r.log, "prompt_rewrite")
-    assert len(rewrites) == 3                                   # REWRITE_MAX per attempt
+    assert len(rewrites) == 3                                   # plan.rewrite_max (default 3) per attempt
     assert sent[1] == f"{pre} grip the rightmost plug"          # the prefix is put back on
     assert all(e["previous"] for e in rewrites)
 
@@ -209,3 +208,59 @@ def test_long_plan_uses_short_whole_task_prompts():
     assert [s.name for s in plan.stages] == ["cable_1", "cable_2", "arms_clear", "tower", "tower_higher", "ball_all"]
     assert all(len(s.prompt.split()) <= 20 for s in plan.stages if not s.name.startswith("cable_"))
     assert plan.guard.covers("ball_all") and not plan.tower_prompts and "{" not in plan.system_prompt
+
+
+class Writer(Script):
+    """Script that also writes stage prompts (plan.write_prompts)."""
+
+    def __init__(self, items, written):
+        super().__init__(items)
+        self.written, self.asked = written, []
+
+    def write_prompt(self, stage, frames):
+        self.asked.append(stage.name)
+        return self.written
+
+
+def test_written_prompt_goes_to_dream_with_the_prefix(fake, write_plan, tmp_path):
+    pre = "No power here."
+    path = write_plan([stage("stack", prompt=f"{pre} stack the cubes", max_attempts=1, on_fail="skip")],
+                      write_prompts=True, prompt_prefix=pre)
+    w = Writer([mv(True, progress=1.0)], ("with the right arm, pick up the pink cube and put it on the blue cube",
+                                          "written", 1.2))
+    r = build(fake, path, tmp_path, w)
+    r.run()
+    assert prompts(fake)[0] == f"{pre} with the right arm, pick up the pink cube and put it on the blue cube"
+    ev = events(r.log, "prompt_written")
+    assert w.asked == ["stack"] and ev[0]["latency_s"] == 1.2 and ev[0]["fallback"] is None
+
+
+def test_writer_failure_falls_back_to_the_stage_prompt(fake, write_plan, tmp_path):
+    path = write_plan([stage("stack", prompt="stack the cubes", max_attempts=1, on_fail="skip")], write_prompts=True)
+    r = build(fake, path, tmp_path, Writer([mv(True, progress=1.0)], (None, "writer error: Timeout", None)))
+    r.run()
+    assert prompts(fake)[0] == "stack the cubes"
+    assert events(r.log, "prompt_written")[0]["fallback"] == "stack the cubes"
+
+
+def test_monitor_writes_one_short_prompt_with_the_writer_model(write_plan):
+    plan = load_plan(write_plan([stage("stack_2", prompt="Safe. stack", verifier="monitor")], prompt_prefix="Safe.",
+                                claude={"model": "claude-haiku-5-5", "confirm_model": "claude-sonnet-5-5"}))
+    t = Transport("I see a pink cube by the strip. <prompt> pick up the pink cube\n and put it on the blue cube </prompt>")
+    m = MonitorVerifier(plan, transport=t)
+    text, why, _ = m.write_prompt(plan.stages[0], {"video.scene": b"\xff\xd8x\xff\xd9"})
+    assert (text, why) == ("pick up the pink cube and put it on the blue cube", "written")
+    assert t.payloads[0]["model"] == "claude-sonnet-5-5"
+    asked = t.payloads[0]["messages"][0]["content"][-1]["text"]
+    assert "What it is for: stack" in asked and "<prompt>" in asked
+    assert m.write_prompt(plan.stages[0], {}) == (None, "no frames available", None)
+
+
+def test_plan_caps_rewrites(fake, write_plan, tmp_path):
+    path = write_plan([stage("a", prompt="pull the plug", timeout_s=3.0, max_attempts=1, on_fail="skip")],
+                      rewrite_prompts=True, rewrite_max=1, rewrite_cooldown_s=0)
+    sv = Script([mv(None, "stalled", next_prompt="grip the first plug"), mv(None, "stalled", next_prompt="grip another"),
+                 mv(True, progress=1.0)], repeat=True)
+    r = build(fake, path, tmp_path, sv)
+    r.run()
+    assert len(events(r.log, "prompt_rewrite")) == 1
