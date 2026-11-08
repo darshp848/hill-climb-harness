@@ -351,6 +351,7 @@ class MonitorVerifier:
         self._history: dict[str, list[tuple[float, bytes]]] = {}
         self._last_prompt: str | None = None
         self._guard_alert = False   # a guard "yes" whose verdict was dropped (stage or prompt changed in flight)
+        self.guard_answers = 0      # every yes/no guard answer, kept or dropped: the runner's "not blind" signal
         # Optional local detector (harness.detect.TableDetector): draws labelled boxes on the frames sent to Claude
         self.annotator: Callable[[dict[str, bytes]], dict[str, bytes]] | None = None
         self.legend = ""
@@ -516,6 +517,8 @@ class MonitorVerifier:
         verdict.latency_s = round(time.monotonic() - t0, 2)
         with self._lock:
             self._latency = verdict.latency_s
+            if isinstance(verdict.guard, bool):
+                self.guard_answers += 1
             if gen == self._gen and seq > self._result_seq:
                 self._result, self._result_seq = verdict, seq
             elif verdict.guard is True:

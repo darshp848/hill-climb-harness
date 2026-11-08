@@ -34,7 +34,9 @@ time"). Reply to the operator in 1-3 short sentences, then output JSON only betw
  "prompt_now": str|null,              // a new instruction for the robot to follow right now, max 200 characters
  "note": str|null}                    // lasting feedback for how prompts and judging should go from now on
 This is a test run to tune the harness, not a match: do what the operator asks, even where a match rule would
-forbid it, and never argue. Only set an action the operator asked for. A question alone gets only a reply. Set
+forbid it, and never argue. Only set an action the operator asked for. A question alone gets only a reply. When the operator wants to skip or
+move past what the robot is doing now, set end_current_stage true (skip_stages only lists LATER stages); when they
+ask for another task, also skip the stages before it. Set
 "note" only when the operator says how the robot or the judging should do things (it is kept for later runs), never
 for a skip, a stop or another one-off order; word it as their instruction."""
 

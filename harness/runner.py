@@ -35,6 +35,9 @@ REWRITE_MAX = 3            # monitor-written prompts per attempt
 # station, a /reset (grippers open, arms to the start pose) and the same prompt got past it. At most this many a run.
 RESET_ERRORS = ("SVD did not converge", "LinAlgError")
 AUTO_RESET_MAX = 2
+# Dream overwrites its run record (last-run.csv, last-run_inputs/) on every /start; the station's archiver copies it
+# when it sees the station not running, polling every 3 s. Run 2 (8 Nov) restarted faster and lost 9 min of record.
+ARCHIVE_WAIT_S = 4.0
 
 
 @dataclass
@@ -274,6 +277,7 @@ class Runner:
         if st.get("state") == "error":
             self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
             self._maybe_reset(st.get("last_error"))
+            self._nap(ARCHIVE_WAIT_S)
             return self._start_run(self._prompt)
         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
         if dead:
@@ -322,6 +326,7 @@ class Runner:
                 return st
             self._on_station_error(st.get("last_error"))   # a refusal or fault on the way up: retry or raise
             self._maybe_reset(st.get("last_error"))
+            self._nap(ARCHIVE_WAIT_S)
 
     def _reset_and_wait(self, why: str) -> None:
         reset = getattr(self.station, "reset", None)
@@ -499,6 +504,7 @@ class Runner:
                 return _Attempt(False, "operator ended the stage", max_p, hint, operator=True)
             for prompt in prompts:
                 self._issue(prompt, "operator")
+                rewrites = REWRITE_MAX   # the operator's prompt stands: no monitor rewrite undoes it (run 3)
                 last_prompt_t, consec_done, consec_fail, consec_stalled = elapsed, 0, 0, 0
                 gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
             if st.get("state") == "idle":
@@ -527,8 +533,10 @@ class Runner:
                     take = getattr(verifier, "take_guard_alert", None)
                     if answer is not True and take is not None and take():
                         answer = True   # a yes from a call that was in flight across a stage or prompt change
-                    if isinstance(answer, bool):
-                        self._guard_answer_t = self._clock()
+                    n = getattr(verifier, "guard_answers", None)
+                    if isinstance(answer, bool) or (isinstance(n, int) and n != getattr(self, "_guard_n", n)):
+                        self._guard_answer_t = self._clock()   # an answer dropped by a prompt change still saw
+                    self._guard_n = n                           # the scene: the guard is not blind
                     if answer is True:
                         consec_guard += 1
                         self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
@@ -657,7 +665,7 @@ class Runner:
 
     def _reset_scene(self, stage: Stage, rec: Recovery, verifier: Verifier) -> tuple[bool, str]:
         """kind reset: run the recovery prompt, then wait (up to the cap) for the verifier's scene_ok."""
-        cap = min(stage.timeout_s / 2, 20.0)
+        cap = min(stage.timeout_s / 2, 12.0)
         settle = min(rec.settle_s, cap)
         t0 = self._clock()
         scene: bool | None = None
