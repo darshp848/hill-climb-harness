@@ -41,7 +41,8 @@ def push(_args) -> None:
     src = f"{BASE}/src-{rev}"
     archive = subprocess.run(["git", "archive", "--format=tar", "HEAD", *SOURCES], cwd=ROOT, capture_output=True,
                              check=True).stdout
-    ssh(f"mkdir -p {src} && tar -x -C {src}", stdin=archive)
+    # Readable by everyone: the containers run as the node's user, and COPY keeps the files' modes.
+    ssh(f"mkdir -p {src} && tar -x -C {src} && chmod -R a+rX {src}", stdin=archive)
     print(f"sources at {HOST}:{src}; building hill-climb-sim:{rev} (first build pulls the base images)", flush=True)
     out = ssh(f"cd {src} && docker build -q -f cloud/Dockerfile --build-arg SOURCE_REVISION={rev} "
               f"-t hill-climb-sim:{rev} -t hill-climb-sim:latest .")
@@ -49,11 +50,13 @@ def push(_args) -> None:
 
 
 def keys(args) -> None:
-    gcloud = args.gcloud
+    import shutil
+
+    gcloud = shutil.which(args.gcloud) or args.gcloud      # gcloud.cmd on Windows: run directly, no shell quoting
     lines = []
     for env, secret in (("DREAM_API_KEY", "dream-api-key"), ("OPENROUTER_API_KEY", "openrouter-api-key")):
         value = subprocess.run([gcloud, "secrets", "versions", "access", "latest", f"--secret={secret}",
-                                f"--project={args.project}"], capture_output=True, text=True, shell=sys.platform == "win32")
+                                f"--project={args.project}"], capture_output=True, text=True)
         if value.returncode or not value.stdout.strip():
             raise SystemExit(f"could not read secret {secret} (is gcloud logged in?)")
         lines.append(f"{env}={value.stdout.strip()}")
@@ -71,9 +74,10 @@ def run(args) -> None:
     for i, (start, n) in enumerate(starts):
         name = f"hc-{args.job}-{i}"
         lines.append(f"docker run -d --name {name} --cpus 2 --memory 2g --env-file ~/.hill-climb/keys.env "
+                     f"--user $(id -u):$(id -g) -e HOME=/tmp "
                      f"-e OUTPUT_PREFIX=/results/{args.job} -e RUN_ID={args.job} -v {BASE}/results:/results "
                      f"--label hill-climb-job={args.job} hill-climb-sim:{args.tag} "
-                     f"--config {args.config} --seed-start {start} --matches {n} {extra}")
+                     f"--config {args.config} --seed-start {start} --matches {n} --out /tmp/out {extra}")
     print(ssh(" && ".join(lines)).strip())
     print(f"{len(starts)} containers on {HOST}; results in {out}")
 
@@ -108,10 +112,10 @@ def main() -> None:
     p.add_argument("--tag", default="latest")
     p.add_argument("--project", default="hill-climb-sims")
     p.add_argument("--gcloud", default="gcloud")
-    p.add_argument("entrypoint_args", nargs=argparse.REMAINDER, help="after --: passed to cloud.entrypoint")
-    args = p.parse_args()
-    if args.entrypoint_args and args.entrypoint_args[0] == "--":
-        args.entrypoint_args = args.entrypoint_args[1:]
+    argv = sys.argv[1:]
+    passthrough = argv[argv.index("--") + 1:] if "--" in argv else []     # after --: for cloud.entrypoint
+    args = p.parse_args(argv[:argv.index("--")] if "--" in argv else argv)
+    args.entrypoint_args = passthrough
     if args.op in ("run", "status", "pull", "stop") and not args.job:
         p.error("--job is required")
     globals()[args.op](args)
