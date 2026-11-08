@@ -493,6 +493,9 @@ class Runner:
             elapsed = self._clock() - t0
             end_now, prompts = self._apply_operator()
             if end_now:
+                if prompts and self.operator is not None:   # "skip this, do the balls": the prompt is for the next stage
+                    with self.operator._lock:
+                        self.operator._actions.prompts[:0] = prompts
                 return _Attempt(False, "operator ended the stage", max_p, hint, operator=True)
             for prompt in prompts:
                 self._issue(prompt, "operator")

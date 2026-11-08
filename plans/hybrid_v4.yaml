@@ -257,27 +257,25 @@ stages:
     name: higher_2
 
   # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. ----
+  # Each ball stage asks for ONE more ball than at its own start (8 Nov run 2: with cumulative counts, a missed first
+  # ball made every later stage impossible). 40 s each: 25 s cut zero-shot picks short.
   - &ball
     name: ball_1
     prompt: "pick up one {ball} that is away from the tower and drop it into the white bin"
-    success: "Is at least 1 {ball} resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+    success: "Compared with the stage-start images, is there one more {ball} resting inside the bin than at the start of this stage, with no white or black ball in the bin and the tower (if any) still standing?"
     expect: "An arm picks up one {ball}, staying clear of the white ball, any black ball and the tower, and releases it over the bin."
-    timeout_s: 25
+    timeout_s: 40
     min_run_s: 3
+    stall_s: 30
     confirm: 1
     on_fail: skip
   - <<: *ball
     name: ball_2
-    success: "Are at least 2 {ball}s resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_3
-    success: "Are at least 3 {ball}s resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_4
-    success: "Are at least 4 {ball}s resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_5
-    success: "Are at least 5 {ball}s resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_6
-    success: "Are at least 6 {ball}s resting inside the bin, with no white or black ball in the bin and the tower still standing?"
