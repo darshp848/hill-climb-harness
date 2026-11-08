@@ -29,7 +29,7 @@ def test_white_ball_push_stage_is_inserted_once_before_the_balls_and_guarded():
 
 def test_last_cube_hole_up_and_technique_and_error_detection_attached():
     plan = load_plan(ROOT / "plans/hill_climb_v4.yaml")
-    assert plan.tower_target[2] == "blue cube, hole facing up" and plan.tower_target[0].endswith("sideways")
+    assert plan.tower_target[2] == "cube, hole facing up" and plan.tower_target[0].endswith("sideways")
     stack3 = next(s for s in plan.stages if s.name == "stack_3")
     assert "hole faces straight up" in stack3.technique and "overhangs" in stack3.watch_for
 

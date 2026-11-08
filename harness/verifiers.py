@@ -647,7 +647,8 @@ class MonitorVerifier:
         if self.plan.tower_target and stage.name.startswith(TOWER_STAGES):
             target = "; ".join(f"{i}. {p}" for i, p in enumerate(self.plan.tower_target, 1))
             lines.append(f"Target tower, bottom to top: {target}. Report the tower you see as `tower`: a list of its "
-                         "pieces bottom to top, worded like the target (empty list if there is no tower).")
+                         "pieces bottom to top, worded like the target (empty list if there is no tower). Colours don't "
+                         "matter, only the shapes.")
             schema = schema.rstrip()[:-1] + ', "tower": [str]}'
         if self.plan.rewrite_prompts:
             schema = schema.rstrip()[:-1] + ', "next_prompt": str|null}\n' + NEXT_PROMPT_RULE

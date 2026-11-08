@@ -1,4 +1,4 @@
-"""tower_target: the v4 plan's target tower (Drive IMG_2697) reaches the monitor and the log, never gates a stage."""
+"""tower_target: the v4 plan's target shapes reach the monitor and the log, never gates a stage."""
 
 from pathlib import Path
 
@@ -11,14 +11,11 @@ from harness.verifiers import MonitorVerifier, parse_monitor_reply
 V4 = Path(__file__).resolve().parents[1] / "plans" / "hill_climb_v4.yaml"
 
 
-def test_v4_target_is_the_photo_tower():
-    t = load_plan(V4).tower_target
-    assert [p.split(",")[0] for p in t] == ["blue cube", "pink cube", "blue cube", "yellow square stick",
-                                           "pink round stick"]
-    assert "upright" in t[3] and "upright" in t[4] and all("sideways" in p for p in t[:2])
-    # Darsh's decisions (docs/decisions.pdf): the last block's hole faces up so the stick goes through it.
-    assert t[2] == "blue cube, hole facing up"
-    assert all("sideways" in p for p in load_plan(V4, operator_notes=False).tower_target[:3])   # the photo
+def test_v4_target_is_shapes_only():
+    target = load_plan(V4).tower_target
+    assert [p.split(",")[0] for p in target] == ["cube", "cube", "cube", "stick", "stick"]
+    assert not any(c in p for p in target for c in ("blue", "pink", "yellow"))
+    assert "upright" in target[3] and "upright" in target[4]
 
 
 def test_target_goes_to_stacking_stages_only():
@@ -34,10 +31,11 @@ def test_target_goes_to_stacking_stages_only():
 @pytest.mark.parametrize("seen, ok", [
     ([], True),
     (["blue cube"], True),
-    (["Blue cube (hole to the side)", "pink cube", "blue cube", "yellow stick standing up"], True),
-    (["blue cube", "blue cube"], False),           # wrong second piece
-    (["pink cube"], False),
-    (["blue cube", "pink cube", "blue cube", "pink stick", "yellow stick"], False),   # sticks swapped
+    (["pink cube"], True),                         # any colour
+    (["Blue cube (hole to the side)", "pink block", "blue cube", "yellow stick standing up"], True),
+    (["pink cube", "blue cube", "blue cube", "pink cylinder", "yellow stick"], True),   # the IMG_2699 tower
+    (["blue cube", "yellow stick"], False),        # a stick before the third cube
+    (["yellow stick"], False),
     (["blue cube"] * 6, False),                    # taller than the target
 ])
 def test_tower_matches(seen, ok):
@@ -83,10 +81,10 @@ def _prompt_for(tower, tmp_path):
 
 
 @pytest.mark.parametrize("tower, prompt", [
-    (["blue cube"], "put the pink cube on top of the stack"),
-    ([], "put the pink cube on top of the stack"),
-    (["blue cube", "pink cube", "blue cube"], "stand the yellow square stick upright on top of the stack"),
-    (["blue cube", "pink cube", "blue cube", "yellow square stick"], "stand the pink round stick upright on top of the stack"),
+    (["blue cube"], "put a block on top of the stack"),            # the recorded text
+    ([], "put a block on top of the stack"),
+    (["pink cube", "blue cube", "blue cube"], "stand a stick upright on top of the stack"),
+    (["blue cube", "pink cube", "blue cube", "yellow square stick"], "stand a stick upright on top of the stack"),
     (["blue cube"] * 5, "put a block on top of the stack"),       # target complete: the generic prompt
     (None, "put a block on top of the stack"),                    # no tower reported
 ])

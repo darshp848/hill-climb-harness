@@ -60,16 +60,16 @@ guard:
 
 # Darsh's photo (Drive IMG_2697), bottom to top.
 tower_target:
-  - "blue cube, hole facing sideways"
-  - "pink cube, hole facing sideways"
-  - "blue cube, hole facing sideways"
-  - "yellow square stick, standing upright"
-  - "pink round stick, standing upright"
+  - "cube, hole facing sideways"
+  - "cube, hole facing sideways"
+  - "cube, hole facing sideways"
+  - "stick, standing upright"
+  - "stick, standing upright"
 # The next piece by name, on top of the piece it goes on. Gentle: Dream knocked the 2-block tower over twice on 7 Nov
 # reaching across it for a third block, so the block is carried high and lowered straight down.
 tower_prompts:
-  cube: "pick up the <piece> from the table, lift it high above the tower and lower it gently straight down onto the <top>, then open the gripper and lift the arm straight up"
-  stick: "pick up the <piece> from the table, lift it high above the tower and stand it upright gently on the <top>, then open the gripper and lift the arm straight up"
+  cube: "pick up a <piece> from the table, lift it high above the tower and lower it gently straight down onto the <top>, then open the gripper and lift the arm straight up"
+  stick: "pick up a <piece> from the table, lift it high above the tower and stand it upright gently on the <top>, then open the gripper and lift the arm straight up"
 
 system_prompt: |-
   You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. You may also write the robot's next instruction. Rules and lessons from testing on this station:
@@ -89,7 +89,7 @@ system_prompt: |-
 
   STACKING
   - Touching a block before at least one cable is unplugged is a disqualification.
-  - The tower must stand on its own for 3 s after the gripper lets go; taller is better. Pieces bottom to top: blue cube, pink cube, blue cube, yellow square stick, pink round stick.
+  - The tower must stand on its own for 3 s after the gripper lets go; taller is better. Pieces bottom to top: three cubes, then two sticks, colours in any order.
   - Dream knocked the tower over by reaching across it for the next block. Good instructions carry the block high above the tower and lower it straight down, slowly. If the arm is moving low next to the tower, say so in next_prompt.
 
   BALLS
@@ -197,7 +197,7 @@ stages:
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release) ----
   # The prompt below is the fallback; with tower_prompts the runner names the next piece from the tower it sees.
   - name: stack_2
-    prompt: "pick up the pink cube from the table, lift it high and lower it gently straight down onto the blue cube, then open the gripper and lift the arm straight up"
+    prompt: "pick up a cube from the table, lift it high and lower it gently straight down onto the tower, then open the gripper and lift the arm straight up"
     success: "Is one block resting on top of another block, standing on its own, with no gripper touching either?"
     expect: "The right arm picks up the next piece, carries it high, lowers it straight down onto the top piece, opens and lifts clear."
     camera_notes:
@@ -213,7 +213,7 @@ stages:
     on_fail: retry_in_place
 
   - name: stack_3
-    prompt: "pick up the blue cube from the table, lift it high above the tower and lower it gently straight down onto the pink cube, then open the gripper and lift the arm straight up"
+    prompt: "pick up a cube from the table, lift it high above the tower and lower it gently straight down onto the tower, then open the gripper and lift the arm straight up"
     success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
     expect: "The arm carries the third piece high above the two-block tower and lowers it straight down without brushing the tower, opens and lifts clear."
     camera_notes:
@@ -229,7 +229,7 @@ stages:
     on_fail: retry_in_place
 
   - name: tower_pass
-    prompt: "pick up the yellow square stick from the table, lift it high above the tower and stand it upright gently on the blue cube, then open the gripper and lift the arm straight up"
+    prompt: "pick up a stick from the table, lift it high above the tower and stand it upright gently on the tower, then open the gripper and lift the arm straight up"
     success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
     expect: "The arm adds pieces to the tower until it is over 4 inches tall, lowering each straight down, then lifts clear; the tower stays standing."
     camera_notes:
@@ -248,7 +248,7 @@ stages:
   # ---- After the pass bar: +3 per full inch, then balls ----
   - &higher
     name: higher_1
-    prompt: "pick up the pink round stick from the table, lift it high above the tower and stand it upright gently on the top piece, then open the gripper and lift the arm straight up"
+    prompt: "pick up a stick from the table, lift it high above the tower and stand it upright gently on the top piece, then open the gripper and lift the arm straight up"
     success: "Does the tower have one more piece on top than in the first image of this stage, standing on its own with no gripper touching it?"
     expect: "The arm adds one piece to the top, lowering it straight down without knocking the tower, opens and lifts clear."
     camera_notes:

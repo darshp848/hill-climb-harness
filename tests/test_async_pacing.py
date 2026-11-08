@@ -37,7 +37,7 @@ def test_async_pacing_calls_at_2hz_and_physics_keeps_running(latency, pipeline):
         wall = time.monotonic() - wall0
         s = sim.dream_summary()
         assert s["mode"] == ("async" if pipeline == 1 else "pipelined") and s["errors"] == 0
-        assert 1.6 <= s["call_hz"] <= 2.4, s                # a new chunk every ~0.5 s
+        assert 1.5 <= s["call_hz"] <= 2.6, s                # a new chunk every ~0.5 s; about 12 gaps in the window
         assert (sim_t1 - sim_t0) / wall > 0.85, (sim_t1 - sim_t0, wall)   # physics never paused for a reply
         assert s.get("dry_rows", 0) < 10, s                  # the next chunk lands before the current runs out
     finally:
