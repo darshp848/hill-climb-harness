@@ -215,3 +215,29 @@ def test_oracle_precondition_does_not_claim_plug_completed():
     assert oracle.check(stage, {}, 0, snapshot=snap).done is None
     unknown = Stage("unrecognized", "move", "done?")
     assert oracle.check(unknown, {}, 0, snapshot=snap).confidence == 0
+
+
+def test_one_arm_job_runs_a_config_on_task_indexed_seeds_with_run_args():
+    a = job_args("openrouter")
+    a.config, a.seed_start, a.run_args = "hybrid_v4", 100, "--execution-horizon 10 --dream-pipeline 2"
+    entries = [{"name": "hybrid_v4", "seed": 100 + i, "plan": "plans/hybrid_v4.yaml", "args": []} for i in range(8)]
+    job = control.job_config(a, entries)
+    cmd = job["taskGroups"][0]["taskSpec"]["runnables"][0]["container"]["commands"]
+    assert cmd[cmd.index("--config") + 1] == "hybrid_v4" and cmd[cmd.index("--seed-start") + 1] == "100"
+    assert cmd[-4:] == ["--execution-horizon", "10", "--dream-pipeline", "2"]
+    assert job["taskGroups"][0]["taskCount"] == 8
+    b = job_args("openrouter")
+    b.config, b.seed_start, b.run_args = "hybrid_v4", 100, "--execution-horizon 0"
+    assert control.job_config(b, entries)["labels"] != job["labels"]
+
+
+def test_entrypoint_arm_mode_offsets_seeds_by_task_and_forwards_run_args(monkeypatch, tmp_path, capsys):
+    from cloud import entrypoint
+    monkeypatch.setenv("BATCH_TASK_INDEX", "3")
+    monkeypatch.delenv("MATRIX_SHA256", raising=False)
+    monkeypatch.setattr("sys.argv", ["entrypoint", "--matrix", str(ROOT / "cloud/matrix.yaml"), "--config",
+                                     "hybrid_v4", "--seed-start", "100", "--matches", "2", "--dry-run",
+                                     "--execution-horizon", "10"])
+    entrypoint.main()
+    out = capsys.readouterr().out
+    assert '"seed": 106' in out and '"seed": 107' in out

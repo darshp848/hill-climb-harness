@@ -111,7 +111,7 @@ def main():
     p.add_argument("--matches", type=int, default=1)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--preflight-only", action="store_true", help="check uploads from this VM, run no match")
-    args = p.parse_args()
+    args, run_args = p.parse_known_args()    # anything else goes to every cloud.run (an experiment arm's settings)
     if min(args.matches_per_task, args.matches) < 1:
         p.error("match counts must be positive")
     entries = tasks(args.matrix)
@@ -122,7 +122,9 @@ def main():
         config = next((x for x in entries if x["name"] == args.config), None)
         if config is None:
             p.error("unknown --config")
-        entries = [{**config, "seed": seed} for seed in range(args.seed_start, args.seed_start + args.matches)]
+        # In Batch each task takes the next seed range: task i runs seeds start + i*matches ... (one arm per job).
+        start = args.seed_start + int(os.environ.get("BATCH_TASK_INDEX", "0")) * args.matches
+        entries = [{**config, "seed": seed} for seed in range(start, start + args.matches)]
     else:
         entries = entries[:args.limit]
         index = int(os.environ.get("BATCH_TASK_INDEX", "0"))
@@ -154,7 +156,8 @@ def main():
         command = [sys.executable, "-m", "cloud.run", "--policy", "dream", "--judge", args.judge,
                    "--plan", entry["plan"], "--seed", str(entry["seed"]), "--label", entry["name"],
                    "--out", str(folder), "--judge-models", args.judge_models, "--judge-mode", args.judge_mode,
-                   "--judge-hedge", str(args.judge_hedge), "--dream-hedge", str(args.dream_hedge), *entry["args"]]
+                   "--judge-hedge", str(args.judge_hedge), "--dream-hedge", str(args.dream_hedge), *entry["args"],
+                   *run_args]
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         signal.signal(signal.SIGTERM, lambda *_: child.terminate())
         # Live view of the running match (cloud.run writes live/): upload it every 30 s so jobs can be watched.

@@ -157,11 +157,21 @@ def tasks(matrix, pilot=False):
     return result[:10] if pilot else result
 
 
+def arm_commands(args, entries):
+    """Matrix mode (task i -> matrix entries), or one arm: --config C seeds from --seed-start, --run-args for cloud.run."""
+    if getattr(args, "config", None):
+        return ["--config", args.config, "--seed-start", str(args.seed_start), "--matches", str(args.matches_per_task),
+                *shlex.split(getattr(args, "run_args", "") or "")]
+    return ["--matches-per-task", str(args.matches_per_task), "--limit", str(len(entries))]
+
+
 def job_config(args, entries):
     identity = hashlib.sha256(json.dumps({"tasks": entries, "judge": args.judge, "image": args.image,
                                          "group": args.matches_per_task, "judge_models": args.judge_models,
                                          "judge_mode": args.judge_mode, "judge_hedge": args.judge_hedge,
                                          "dream_hedge": args.dream_hedge, "machine": args.machine_type,
+                                         "arm": [getattr(args, "config", None), getattr(args, "run_args", ""),
+                                                 getattr(args, "seed_start", 0)],
                                          "reasoning": getattr(args, "judge_reasoning", "low")},
                                         sort_keys=True).encode()).hexdigest()[:32]
     count = (len(entries) + args.matches_per_task - 1) // args.matches_per_task
@@ -186,8 +196,7 @@ def job_config(args, entries):
                                              "--judge-models", args.judge_models, "--judge-mode", args.judge_mode,
                                              "--judge-hedge", str(args.judge_hedge),
                                              "--dream-hedge", str(args.dream_hedge),
-                                             "--matches-per-task", str(args.matches_per_task),
-                                             "--limit", str(len(entries))]}}],
+                                             *arm_commands(args, entries)]}}],
                                 "environment": {"variables": {"OUTPUT_PREFIX": f"gs://{args.bucket}/runs/{args.job}",
                                                                 "RUN_ID": args.job,
                                                                 "MATRIX_SHA256": hashlib.sha256((ROOT / "cloud/matrix.yaml").read_bytes()).hexdigest(),
@@ -235,6 +244,11 @@ def build(args, gc):
 
 def submit(args, gc):
     entries = tasks(ROOT / "cloud/matrix.yaml", args.pilot)
+    if args.config:
+        config = next((x for x in tasks(ROOT / "cloud/matrix.yaml") if x["name"] == args.config), None)
+        if config is None:
+            raise ValueError(f"--config {args.config} is not in cloud/matrix.yaml")
+        entries = [{**config, "seed": args.seed_start + i} for i in range(args.seeds)]
     config = job_config(args, entries)
     print(f"Will submit Spot job {args.job}: {len(entries)} matches, "
           f"{config['taskGroups'][0]['taskCount']} tasks, parallelism {args.parallelism}, judge {args.judge}.")
@@ -282,6 +296,10 @@ def main():
     p.add_argument("--private", action="store_true", help="no external IPs (needs Cloud NAT; lifts the IP quota)")
     p.add_argument("--parallelism", type=int, default=8)
     p.add_argument("--matches-per-task", type=int, default=1)
+    p.add_argument("--config", help="one experiment arm: a matrix config name (with --seeds, --seed-start)")
+    p.add_argument("--seeds", type=int, default=8, help="matches in the arm, seeds seed-start .. +seeds-1")
+    p.add_argument("--seed-start", type=int, default=0)
+    p.add_argument("--run-args", default="", help="extra cloud.run flags for every match of the arm, one string")
     p.add_argument("--machine-type", default="e2-highcpu-2")
     p.add_argument("--output", default="cloud/generated/job.json")
     args = p.parse_args()
