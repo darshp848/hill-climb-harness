@@ -15,7 +15,7 @@ from cloud.control import tasks
 
 
 def redact(text):
-    for name in ("DREAM_API_KEY", "ANTHROPIC_API_KEY"):
+    for name in ("DREAM_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
         value = os.environ.get(name)
         if value:
             text = text.replace(value, "[REDACTED]")
@@ -25,7 +25,11 @@ def redact(text):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--matrix", default="/app/cloud/matrix.yaml")
-    p.add_argument("--judge", choices=["oracle", "api"], default="oracle")
+    p.add_argument("--judge", choices=["oracle", "api", "openrouter"], default="oracle")
+    p.add_argument("--judge-models", default="google/gemini-3.1-flash-lite")
+    p.add_argument("--judge-mode", choices=["race", "alternate"], default="race")
+    p.add_argument("--judge-hedge", type=int, default=1)
+    p.add_argument("--dream-hedge", type=int, default=1)
     p.add_argument("--matches-per-task", type=int, default=1)
     p.add_argument("--limit", type=int)
     p.add_argument("--out", type=Path, default=Path("/out"))
@@ -62,6 +66,8 @@ def main():
         raise SystemExit("USER ACTION NEEDED: set OUTPUT_PREFIX and provide DREAM_API_KEY from Secret Manager.")
     if args.judge == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("USER ACTION NEEDED: upload anthropic-api-key and submit with --judge api.")
+    if args.judge == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
+        raise SystemExit("USER ACTION NEEDED: upload openrouter-api-key and submit with --judge openrouter.")
     failed = False
     for entry in entries:
         key = f"{entry['name']}-{entry['seed']}"
@@ -69,7 +75,8 @@ def main():
         folder.mkdir(parents=True)
         command = [sys.executable, "-m", "cloud.run", "--policy", "dream", "--judge", args.judge,
                    "--plan", entry["plan"], "--seed", str(entry["seed"]), "--label", entry["name"],
-                   "--out", str(folder), *entry["args"]]
+                   "--out", str(folder), "--judge-models", args.judge_models, "--judge-mode", args.judge_mode,
+                   "--judge-hedge", str(args.judge_hedge), "--dream-hedge", str(args.dream_hedge), *entry["args"]]
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         signal.signal(signal.SIGTERM, lambda *_: child.terminate())
         with (folder / "worker.log").open("w", encoding="utf-8") as log:

@@ -94,7 +94,7 @@ def setup(args, gc):
              ["roles/storage.objectCreator"])
     bindings(gc, ["storage", "buckets", "add-iam-policy-binding", bucket], builder,
              ["roles/storage.objectViewer"])
-    for secret in ("dream-api-key", "anthropic-api-key"):
+    for secret in ("dream-api-key", "anthropic-api-key", "openrouter-api-key"):
         gc.ensure(["secrets", "describe", secret],
                   ["secrets", "create", secret, "--replication-policy=automatic"])
         bindings(gc, ["secrets", "add-iam-policy-binding", secret], worker, ["roles/secretmanager.secretAccessor"])
@@ -159,15 +159,32 @@ def tasks(matrix, pilot=False):
 
 def job_config(args, entries):
     identity = hashlib.sha256(json.dumps({"tasks": entries, "judge": args.judge, "image": args.image,
-                                         "group": args.matches_per_task}, sort_keys=True).encode()).hexdigest()[:32]
+                                         "group": args.matches_per_task, "judge_models": args.judge_models,
+                                         "judge_mode": args.judge_mode, "judge_hedge": args.judge_hedge,
+                                         "dream_hedge": args.dream_hedge, "machine": args.machine_type},
+                                        sort_keys=True).encode()).hexdigest()[:32]
     count = (len(entries) + args.matches_per_task - 1) // args.matches_per_task
     secret = {"DREAM_API_KEY": f"projects/{args.project}/secrets/dream-api-key/versions/latest"}
     if args.judge == "api":
         secret["ANTHROPIC_API_KEY"] = f"projects/{args.project}/secrets/anthropic-api-key/versions/latest"
+    if args.judge == "openrouter":
+        secret["OPENROUTER_API_KEY"] = f"projects/{args.project}/secrets/openrouter-api-key/versions/latest"
+    network = ({"networkInterfaces": [{"network": "global/networks/default",
+                                       "subnetwork": f"regions/{args.region}/subnetworks/default",
+                                       "noExternalIpAddress": True}]} if args.private else None)
+    policy = {"instances": [{"policy": {"machineType": args.machine_type,
+              "provisioningModel": "SPOT", "bootDisk": {"sizeGb": 30, "type": "pd-standard"}}}],
+              "location": {"allowedLocations": ["regions/" + args.region]},
+              "serviceAccount": {"email": f"hill-climb-worker@{args.project}.iam.gserviceaccount.com"}}
+    if network:
+        policy["network"] = network
     return {"taskGroups": [{"taskCount": count, "parallelism": min(args.parallelism, count),
                             "taskCountPerNode": 1,
                             "taskSpec": {"runnables": [{"container": {"imageUri": args.image,
                                 "commands": ["--matrix", "/app/cloud/matrix.yaml", "--judge", args.judge,
+                                             "--judge-models", args.judge_models, "--judge-mode", args.judge_mode,
+                                             "--judge-hedge", str(args.judge_hedge),
+                                             "--dream-hedge", str(args.dream_hedge),
                                              "--matches-per-task", str(args.matches_per_task),
                                              "--limit", str(len(entries))]}}],
                                 "environment": {"variables": {"OUTPUT_PREFIX": f"gs://{args.bucket}/runs/{args.job}",
@@ -178,10 +195,7 @@ def job_config(args, entries):
                                 "computeResource": {"cpuMilli": 2000, "memoryMib": 1280},
                                 "maxRetryCount": 2,
                                 "maxRunDuration": str(900 * args.matches_per_task) + "s"}}],
-            "allocationPolicy": {"instances": [{"policy": {"machineType": args.machine_type,
-                "provisioningModel": "SPOT", "bootDisk": {"sizeGb": 30, "type": "pd-standard"}}}],
-                "location": {"allowedLocations": ["regions/" + args.region]},
-                "serviceAccount": {"email": f"hill-climb-worker@{args.project}.iam.gserviceaccount.com"}},
+            "allocationPolicy": policy,
             "logsPolicy": {"destination": "CLOUD_LOGGING"}, "labels": {"manifest": identity}}
 
 
@@ -227,7 +241,8 @@ def submit(args, gc):
                 action("Job name exists with a different matrix/image/judge. Choose another --job name.")
             print("Job already exists with this manifest; nothing submitted.")
             return
-        for key in ["dream-api-key"] + (["anthropic-api-key"] if args.judge == "api" else []):
+        for key in ["dream-api-key"] + (["anthropic-api-key"] if args.judge == "api" else []) + (
+                ["openrouter-api-key"] if args.judge == "openrouter" else []):
             if not gc.call("secrets", "versions", "list", key, "--filter=state:ENABLED", "--format=value(name)", "--limit=1"):
                 action(f"Upload {key} through Secret Manager in your own console before submitting.")
         gc.call("artifacts", "docker", "images", "describe", args.image)
@@ -250,7 +265,12 @@ def main():
     p.add_argument("--tag", default="cloud-v1")
     p.add_argument("--job", default="hill-climb-pilot-v1")
     p.add_argument("--pilot", action="store_true")
-    p.add_argument("--judge", choices=["oracle", "api"], default="oracle")
+    p.add_argument("--judge", choices=["oracle", "api", "openrouter"], default="oracle")
+    p.add_argument("--judge-models", default="google/gemini-3.1-flash-lite")
+    p.add_argument("--judge-mode", choices=["race", "alternate"], default="race")
+    p.add_argument("--judge-hedge", type=int, default=1)
+    p.add_argument("--dream-hedge", type=int, default=1)
+    p.add_argument("--private", action="store_true", help="no external IPs (needs Cloud NAT; lifts the IP quota)")
     p.add_argument("--parallelism", type=int, default=8)
     p.add_argument("--matches-per-task", type=int, default=1)
     p.add_argument("--machine-type", default="e2-highcpu-2")

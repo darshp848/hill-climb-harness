@@ -29,7 +29,9 @@ def test_matrix_pilot_balanced_and_full_unique():
 def job_args(judge="oracle"):
     return argparse.Namespace(project="hill-climb-sims", region="us-central1", bucket="example",
                               judge=judge, image="example/image:tag", job="pilot-v1", parallelism=8,
-                              matches_per_task=1, machine_type="e2-standard-2")
+                              matches_per_task=1, machine_type="e2-standard-2",
+                              judge_models="google/gemini-3.1-flash-lite", judge_mode="race", judge_hedge=1,
+                              dream_hedge=1, private=False)
 
 
 def test_batch_limits_and_runtime_secret_references():
@@ -45,6 +47,19 @@ def test_batch_limits_and_runtime_secret_references():
     grouped = job_args()
     grouped.matches_per_task = 3
     assert control.job_config(grouped, entries)["taskGroups"][0]["taskCount"] == 4
+
+
+def test_openrouter_judge_and_private_network():
+    entries = control.tasks(ROOT / "cloud/matrix.yaml", True)
+    a = job_args("openrouter")
+    a.judge_models, a.judge_mode, a.judge_hedge, a.private = "m1,m2", "alternate", 2, True
+    job = control.job_config(a, entries)
+    env = job["taskGroups"][0]["taskSpec"]["environment"]
+    assert "OPENROUTER_API_KEY" in env["secretVariables"]
+    cmd = job["taskGroups"][0]["taskSpec"]["runnables"][0]["container"]["commands"]
+    assert cmd[cmd.index("--judge-models") + 1] == "m1,m2" and cmd[cmd.index("--judge-mode") + 1] == "alternate"
+    assert job["allocationPolicy"]["network"]["networkInterfaces"][0]["noExternalIpAddress"] is True
+    assert job["labels"] != control.job_config(job_args("openrouter"), entries)["labels"]
 
 
 def test_dry_run_never_calls_gcloud_or_reads_keys(monkeypatch, capsys, tmp_path):

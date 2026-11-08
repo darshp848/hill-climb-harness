@@ -99,8 +99,16 @@ def run_match(args):
         sim = sim.start()
         station = StationClient(sim.api_url)
         station.reset()
-        mon = (DelayedOracle(plan, sim.api_url, args.seed) if args.judge == "oracle" else
-               MonitorVerifier(plan, transport=anthropic_transport(os.environ["ANTHROPIC_API_KEY"])))
+        if args.judge == "oracle":
+            mon = DelayedOracle(plan, sim.api_url, args.seed)
+        elif args.judge == "openrouter":
+            from harness.verifiers import openrouter_transport
+            plan.claude_user["hedge"] = args.judge_hedge          # identical copies per call, first good reply wins
+            models = [m.strip() for m in args.judge_models.split(",") if m.strip()]
+            mon = MonitorVerifier(plan, model=models[0],
+                                  transport=openrouter_transport(models, mode=args.judge_mode))
+        else:
+            mon = MonitorVerifier(plan, transport=anthropic_transport(os.environ["ANTHROPIC_API_KEY"]))
         mon.annotator, mon.legend = detector.annotate_frames, detector.legend()
         frames = FrameSource(sim.view_url, station_url=sim.api_url)
         runner = Runner(plan, station, frames, {"monitor": mon}, log)
@@ -120,6 +128,8 @@ def run_match(args):
             runner.start_poses = StartPoses.load(ROOT / "plans" / plan.start_pose.reference)
         plan_data = dataclasses.asdict(plan)
         log.update_manifest(match=True, policy=args.policy, judge=args.judge, seed=args.seed,
+                            judge_models=args.judge_models, judge_mode=args.judge_mode,
+                            judge_hedge=args.judge_hedge, dream_hedge=args.dream_hedge,
                             label=args.label, scene="hill_climb", scene_randomisation="none",
                             detector=args.detect, live_guard=True, operator=False,
                             plan_sha256=hashlib.sha256(plan_path.read_bytes()).hexdigest(),
@@ -166,7 +176,11 @@ def run_match(args):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--policy", choices=["dream", "scripted"], default="dream")
-    p.add_argument("--judge", choices=["oracle", "api"], default="oracle")
+    p.add_argument("--judge", choices=["oracle", "api", "openrouter"], default="oracle")
+    p.add_argument("--judge-models", default="google/gemini-3.1-flash-lite",
+                   help="OpenRouter model ids, comma-separated (--judge openrouter)")
+    p.add_argument("--judge-mode", choices=["race", "alternate"], default="race")
+    p.add_argument("--judge-hedge", type=int, default=1)
     p.add_argument("--dream-hedge", type=int, default=1, help="Dream sessions raced per chunk (N x Dream usage)")
     p.add_argument("--plan", default="plans/hill_climb_v4.yaml")
     p.add_argument("--skip", action="append", default=[])

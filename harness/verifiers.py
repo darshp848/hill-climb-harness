@@ -345,7 +345,8 @@ def openrouter_request_body(model: str, payload: dict[str, Any]) -> dict[str, An
 
 def openrouter_transport(models: list[str] | None = None, api_key: str | None = None,
                          timeout_s: float = 60.0,
-                         on_attempt: Callable[[dict[str, Any]], None] | None = None) -> Transport:
+                         on_attempt: Callable[[dict[str, Any]], None] | None = None,
+                         mode: str = "race") -> Transport:
     """The same monitor request sent to other multimodal models through OpenRouter (OPENROUTER_API_KEY).
 
     Models: `models`, else $HARNESS_OPENROUTER_MODELS (comma-separated OpenRouter ids). With more than one model,
@@ -391,9 +392,21 @@ def openrouter_transport(models: list[str] | None = None, api_key: str | None = 
                             "provider": reply.get("provider"), "latency_s": time.monotonic() - started,
                             "error_type": error})
 
+    if mode not in ("race", "alternate"):
+        raise ValueError("openrouter mode: race or alternate")
+    turn = {"k": 0}
+    turn_lock = threading.Lock()
+
     def send(payload: dict[str, Any]) -> dict[str, Any]:
         if len(names) == 1:
             return one(names[0], payload)
+        if mode == "alternate":
+            # Each call goes to the next model in turn. With claude.parallel 2 and confirm 2, two "done" verdicts in
+            # a row then come from two different models: a fast model proposes, the other one confirms.
+            with turn_lock:
+                k = turn["k"] % len(names)
+                turn["k"] += 1
+            return one(names[k], payload)
         from .hedge import first_of  # noqa: PLC0415
         it = iter(range(len(names)))
         lock = threading.Lock()
