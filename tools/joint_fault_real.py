@@ -52,7 +52,10 @@ FAULT_KINDS = tuple(k for k in T.FAULT_KINDS if k != "overload")
 
 # Add designs to compare here, as (family, config) in train_joint_fault.build_model's terms. Families: mlp, tcn, gru,
 # transformer (the encoder). Example: ("transformer", {"d_model": 64, "heads": 4, "layers": 2, "ff": 128}).
-EXTRA_CANDIDATES: list[tuple[str, dict]] = []
+EXTRA_CANDIDATES: list[tuple[str, dict]] = [
+    ("transformer", {"d_model": 64, "heads": 4, "layers": 2, "ff": 128}),     # bigger encoders than the sim search
+    ("transformer", {"d_model": 64, "heads": 4, "layers": 4, "ff": 128}),
+]
 
 
 # ------------------------------------------------------------------------------------------------------------ data

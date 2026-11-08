@@ -34,6 +34,22 @@ To compare a new design (the 4-output encoder, say), add it to `EXTRA_CANDIDATES
 | encoder d32 x2 | 0.63 | 2.4 |
 | rule observer | | 99.6 (limit_approach 94.3, tracking_divergence 5.9) |
 
+## Encoder size sweep (8 Nov, 3000 steps, 1 seed)
+
+| model | weights | val timely | blocked | overspeed | alarms / joint-hour, untouched real runs |
+|---|---:|---:|---:|---:|---:|
+| TCN 32x4 (the sim winner) | 10,530 | 0.89 | 0.61 | 1.00 | 1.2 |
+| encoder d16 x1 | 2,690 | 0.74 | 0.44 | 0.55 | 0.0 |
+| encoder d32 x1 | 9,474 | 0.92 | 0.73 | 0.98 | 0.6 |
+| **encoder d32 x2** | **18,018** | **0.96** | **0.87** | **0.99** | **1.8** |
+| encoder d64 x2 | 68,802 | 0.96 | 0.87 | 0.99 | 2.4 |
+| encoder d64 x4 | 135,746 | 0.97 | 0.92 | 0.99 | 1.8 |
+
+Limit run and oscillation are 0.96-1.00 for every model. Without torque the TCN loses most on blocked joints, and
+the encoder d32 x2 beats it there. d16 is too small; 4x to 7x more weights than d32 x2 buys 0.01. The real-run alarm
+rates are 0 to 4 alarms in 1.7 joint-hours, too few to rank models on; all are near the 2 per joint-hour budget. One
+seed, and val and test are 3 runs each, so retrain with more seeds and the teleop data before choosing.
+
 The rule observer's `limit_approach` fires on real arms as it did in sim: `shoulder_lift` and `elbow_flex` rest at
 their 0 deg soft limit at home, so every move back home projects past it. Not in the 8 Nov demo build (the NUC runs
 `ee-pull-force`, which has no joint telemetry), but fix the margin or the home pose before turning the rules on.
