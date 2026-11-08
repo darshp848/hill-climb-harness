@@ -16,9 +16,9 @@ import pah_tuning  # noqa: E402
 
 
 def _clear(monkeypatch):
-    for name in ("PAH_METAL_TICK_HZ", "PAH_TORQUE_CAP_NM", "PAH_GRAVITY_SCALE", "PAH_IK_TRAJ", "PAH_TICK_LOG",
-                 "PAH_FF_TAU_S"):
-        monkeypatch.delenv(name, raising=False)
+    for name in list(os.environ):
+        if name.startswith("PAH_"):
+            monkeypatch.delenv(name, raising=False)
 
 
 def test_off_by_default(monkeypatch):
@@ -54,7 +54,125 @@ def test_cap_goal():
     assert pah_tuning.cap_goal_deg(1.0, 0.0, 100.0, 5.0) == 1.0  # inside the cap: untouched
 
 
+def test_pull_settings_parse_and_refuse(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("PAH_PULL_FORCE_N", "r:20")
+    with pytest.raises(ValueError):
+        pah_tuning.Settings.from_env()  # a force needs a direction
+    monkeypatch.setenv("PAH_PULL_DIR", "r:0,-2,0;l:tool")
+    s = pah_tuning.Settings.from_env()
+    assert s.pull_force_n == {"right": 20.0}
+    assert s.pull_dir == {"right": [0.0, -1.0, 0.0], "left": "tool"}  # normalised
+    assert (s.pull_max_s, s.pull_travel_m) == (3.0, 0.012)
+    assert s.pull_tau_cap_nm == list(pah_tuning.PULL_TAU_CAP_NM)
+    for bad in (("PAH_PULL_FORCE_N", "r:60"), ("PAH_PULL_DIR", "r:0,0,0"), ("PAH_PULL_MAX_S", "30"),
+                ("PAH_PULL_TRAVEL_M", "0.2"), ("PAH_PULL_TAU_CAP_NM", "20")):
+        monkeypatch.setenv(*bad)
+        with pytest.raises(ValueError):
+            pah_tuning.Settings.from_env()
+        monkeypatch.delenv(bad[0])
+        monkeypatch.setenv("PAH_PULL_FORCE_N", "r:20")
+        monkeypatch.setenv("PAH_PULL_DIR", "r:0,-2,0;l:tool")
+    monkeypatch.setenv("PAH_PULL_FORCE_N", "l:20")
+    monkeypatch.setenv("PAH_PULL_DIR", "r:0,-1,0")
+    with pytest.raises(ValueError):
+        pah_tuning.Settings.from_env()  # the left arm has a force and no direction
+
+
+# A planar test arm: six z-axis joints, 0.1 m apart along x (not the Metal; its own maths is checked below).
+_TEST_LINKS = tuple(((0.1 if i else 0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, (0.0, 0.0, 0.0))
+                    for i in range(6))
+
+
+def _pull(monkeypatch, **env):
+    _clear(monkeypatch)
+    monkeypatch.setenv("PAH_PULL_FORCE_N", "r:20")
+    monkeypatch.setenv("PAH_PULL_DIR", "r:0,1,0")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    events = []
+    return pah_tuning.PullController("right", pah_tuning.Settings.from_env(), _TEST_LINKS, events.append), events
+
+
+def test_pull_state_machine(monkeypatch):
+    pull, events = _pull(monkeypatch)
+    q = (0.0,) * 6
+    assert pull.torques(q, False, 0.0) == [0.0] * 6 and pull.state == "idle"
+    assert pull.torques(q, True, 0.0) == [0.0] * 6 and pull.state == "wait"  # holding, not yet PULL_DELAY_S
+    tau = pull.torques(q, True, pah_tuning.PULL_DELAY_S)
+    assert pull.state == "pull" and tau == [0.0] * 6  # ramp starts at 0
+    tau = pull.torques(q, True, pah_tuning.PULL_DELAY_S + pah_tuning.PULL_RAMP_S / 2)
+    assert math.isclose(pull.last_force_n, 10.0)
+    # planar arm along x, tool point at x = 0.5 + 0.136: joint i's torque for +y force is F * (lever arm)
+    assert math.isclose(tau[0], 10.0 * (0.5 + 0.136), rel_tol=1e-3) or tau[0] == pull.tau_cap[0]
+    assert all(abs(t) <= c + 1e-9 for t, c in zip(tau, pull.tau_cap))
+    # the gripper lets go: nothing added at once, back to idle, and a new grasp waits again
+    assert pull.torques(q, False, 1.0) == [0.0] * 6 and pull.state == "idle"
+    assert any("let go" in e for e in events)
+    pull.torques(q, True, 2.0)
+    assert pull.state == "wait"
+
+
+def test_pull_stops_on_travel_and_time(monkeypatch):
+    pull, events = _pull(monkeypatch, PAH_PULL_TRAVEL_M="0.01", PAH_PULL_MAX_S="1")
+    q = [0.0] * 6
+    pull.torques(q, True, 0.0)
+    pull.torques(q, True, 0.3)
+    assert pull.state == "pull"
+    q[0] = math.degrees(0.02 / 0.636)  # base turns: the tool point moves ~2 cm along +y, the pull axis
+    assert pull.torques(q, True, 0.4) == [0.0] * 6 and pull.state == "spent"
+    assert pull.torques(q, True, 5.0) == [0.0] * 6 and pull.state == "spent"  # spent until the gripper lets go
+    pull.torques(q, False, 5.1)
+    pull.torques(q, True, 6.0)
+    pull.torques(q, True, 6.5)
+    assert pull.state == "pull"
+    assert pull.torques(q, True, 7.6) == [0.0] * 6 and pull.state == "spent"  # PAH_PULL_MAX_S
+    assert any("time limit" in e for e in events) and any("moved" in e for e in events)
+
+
+def test_pull_off_by_default(monkeypatch):
+    _clear(monkeypatch)
+    s = pah_tuning.Settings.from_env()
+    assert s.pull_force_n is None and not s.active()
+
+
 dreamlabs = pytest.importorskip("robots.metal", reason="needs dreamlabs 1.0.37 (the station's env)")
+
+
+def test_pull_kinematics_match_dream_and_mujoco():
+    import numpy as np
+
+    metal_plant = pytest.importorskip("metal_plant")
+    from robots import metal
+
+    rng = np.random.default_rng(1)
+    for _ in range(10):
+        q_deg = np.array([rng.uniform(*j.limits_deg) for j in metal.JOINTS[:6]])
+        p, rot, axes, pivots = pah_tuning.arm_kinematics(metal.LINKS, q_deg, pah_tuning.PULL_TCP_M)
+        for a, b in ((1.0, 0.3), (-0.4, 2.0)):
+            assert np.allclose(pah_tuning._rpy(a, b, 0.7), metal._rpy(a, b, 0.7))
+        plant = metal_plant.MetalPlant(np.radians(q_deg))
+        assert np.allclose(p, plant.tool_point(pah_tuning.PULL_TCP_M), atol=1e-6)
+        force = rng.normal(size=3) * 10
+        tau = pah_tuning.wrench_torques(axes, pivots, p, force)
+        assert np.allclose(tau, plant.point_jacobian(p).T @ force, atol=1e-6)  # J^T F, MuJoCo's own Jacobian
+
+
+def _bench_pull(env_extra, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PAH_")} | env_extra
+    out = subprocess.run([sys.executable, str(ADDONS / "bench_pull.py"), *args],
+                         env=env, capture_output=True, text=True, timeout=180)
+    assert out.returncode == 0, out.stderr[-2000:]
+    return json.loads([ln for ln in out.stdout.splitlines() if ln.startswith("{")][-1])
+
+
+def test_pull_gets_a_plug_out_that_dreams_driver_leaves_in():
+    args = ("--withdraw", "15", "--stiffness", "20000", "--seconds", "3")
+    base = _bench_pull({}, *args)
+    assert not base["plug_out"] and base["peak_plug_force_n"] < 2.0
+    pulled = _bench_pull({"PAH_PULL_FORCE_N": "r:20", "PAH_PULL_DIR": "r:0,-1,0"}, *args)
+    assert pulled["plug_out"], pulled
+    assert any("moved" in e for e in pulled["events"]), pulled  # it stopped itself once the plug gave
 
 
 def _run_bench(env_extra, seconds=2.0):

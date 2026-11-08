@@ -65,6 +65,19 @@ class MetalPlant:
         self.data = mujoco.MjData(self.model)
         self.data.qpos[:] = q0_rad
         mujoco.mj_forward(self.model, self.data)
+        # Optional: called each step as external(plant) -> 6 joint torques from forces the world puts on the arm
+        # (e.g. a seated plug in the jaws, see bench_pull.py); None leaves the arm free.
+        self.external = None
+
+    def point_jacobian(self, point: np.ndarray) -> np.ndarray:
+        """3x6 linear Jacobian of a point fixed to the last link (base frame), MuJoCo's own (mj_jac)."""
+        jacp, jacr = np.zeros((3, 6)), np.zeros((3, 6))
+        mujoco.mj_jac(self.model, self.data, jacp, jacr, point, self.model.nbody - 1)
+        return jacp
+
+    def tool_point(self, tcp_m) -> np.ndarray:
+        """A point fixed in the last link's frame (e.g. the tool point), in the base frame, at the present state."""
+        return self.data.xpos[-1] + self.data.xmat[-1].reshape(3, 3) @ np.asarray(tcp_m)
 
     @property
     def q(self) -> np.ndarray:
@@ -90,6 +103,7 @@ class MetalPlant:
 
     def step(self, tau: np.ndarray) -> None:
         self.data.ctrl[:] = tau
+        self.data.qfrc_applied[:] = 0.0 if self.external is None else self.external(self)
         mujoco.mj_step(self.model, self.data)
 
 

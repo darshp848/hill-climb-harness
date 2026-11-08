@@ -77,7 +77,8 @@ class FakeMetalBus:
     """python-can's send/recv/shutdown over a simulated Metal arm."""
 
     def __init__(self, q0_deg: tuple[float, ...], *, gripper_late: float = 0.5, seed: int = 0,
-                 external_nm: tuple[float, ...] | None = None, plant: Any = None) -> None:
+                 external_nm: tuple[float, ...] | None = None, plant: Any = None,
+                 gripper_block_deg: float | None = None) -> None:
         self.motors = {j.motor_id: FakeMotor(j.motor_id, j.model, q) for j, q in zip(metal.JOINTS, q0_deg)}
         self.pending: deque[tuple[float, int, bytes]] = deque()
         self.held: list[tuple[int, bytes]] = []  # gripper replies waiting for the next frame
@@ -90,6 +91,9 @@ class FakeMetalBus:
         self.log: list[tuple[float, tuple[float, ...], tuple[float, ...]]] = []  # (t, q, q_cmd)
         self.plant = plant  # metal_plant.MetalPlant for joints 1-6 (coupled rigid-body arm), or None
         self.tau_log: list[tuple[float, tuple[float, ...]]] = []
+        # An object in the jaws (plant path only): the gripper cannot close past this angle, so a close command
+        # leaves a position error and the motor reports closing torque, which is what Dream's holding law detects.
+        self.gripper_block_deg = gripper_block_deg
 
     # physics
     def _advance(self, now: float) -> None:
@@ -142,6 +146,8 @@ class FakeMetalBus:
                 grip.tau = max(-20.0, min(20.0, kp * (qs - grip.q) + kd * (dqs - grip.dq) + tff))
                 grip.dq += (grip.tau - FRICTION[6] * grip.dq) / INERTIA[6] * dt
                 grip.q += grip.dq * dt
+                if self.gripper_block_deg is not None and grip.q < math.radians(self.gripper_block_deg):
+                    grip.q, grip.dq = math.radians(self.gripper_block_deg), 0.0
             self.t_sim += dt
 
     def _reply(self, motor: FakeMotor, data: bytes, now: float) -> None:
