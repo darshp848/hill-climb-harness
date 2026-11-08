@@ -260,3 +260,78 @@ def choose(plan: Plan, i: int, left_s: float, actions: Sequence[Action], risk_we
 def with_weights(obj, **kw):
     """Copy of a weights dataclass with some fields changed (for hill climbing)."""
     return replace(obj, **kw)
+
+
+# ------------------------------------------------------------------------------------------ 4. shadow mode
+def weights_from(raw: dict | None) -> tuple[DoneWeights, FailWeights]:
+    """plan `decide: {done: {...}, fail: {...}}` -> weights. Unknown keys are an error (a typo must not pass)."""
+    raw = raw or {}
+    extra = set(raw) - {"done", "fail"}
+    if extra:
+        raise ValueError(f"plan.decide: unknown key(s): {', '.join(sorted(extra))}")
+    out = []
+    for key, cls in (("done", DoneWeights), ("fail", FailWeights)):
+        part = raw.get(key) or {}
+        if not isinstance(part, dict):
+            raise ValueError(f"plan.decide.{key}: must be a mapping")
+        names = set(cls.__dataclass_fields__)
+        bad = set(part) - names
+        if bad:
+            raise ValueError(f"plan.decide.{key}: unknown weight(s): {', '.join(sorted(bad))}")
+        if key == "fail" and part.get("combine", "max") not in ("max", "sum"):
+            raise ValueError("plan.decide.fail.combine: max or sum")
+        out.append(cls(**part))
+    return out[0], out[1]
+
+
+class Shadow:
+    """Runs the equations next to the runner on every look and reports what they would decide. It never acts.
+
+    The runner calls start() at each attempt and look() once per verdict, with the inputs it already computed
+    (`failing` includes the regression rule). Counts follow the runner's: a failing look right after a done (within
+    the window) is not counted, a done resets the failing count."""
+
+    def __init__(self, done: DoneWeights = DoneWeights(), fail: FailWeights = FailWeights(), *,
+                 fixed: set[str] = frozenset()):
+        self.base_done, self.base_fail = done, fail
+        self.done_w, self.fail_w = done, fail
+        self._fixed = set(fixed)        # "done.theta", "fail.confirm": set by the plan, not taken from the stage
+        self._st = DoneState()
+        self._consec_fail = 0
+        self._timeout = 1.0
+        self._stall: float | None = None
+
+    @classmethod
+    def from_plan(cls, raw: dict | None) -> "Shadow":
+        done, fail = weights_from(raw)
+        raw = raw or {}
+        fixed = {f"{k}.{n}" for k in ("done", "fail") for n in (raw.get(k) or {})}
+        return cls(done, fail, fixed=fixed)
+
+    def start(self, timeout_s: float, stall_s: float | None, confirm: int = CONFIRM) -> None:
+        """Per attempt. The stage's confirm sets the done threshold and the failing-look count unless the plan fixed them."""
+        self.done_w = self.base_done if "done.theta" in self._fixed else replace(self.base_done, theta=float(confirm))
+        self.fail_w = self.base_fail if "fail.confirm" in self._fixed else replace(self.base_fail, confirm=int(confirm))
+        self._st, self._consec_fail = DoneState(), 0
+        self._timeout, self._stall = timeout_s, stall_s
+
+    def look(self, elapsed: float, done: bool | None, failing: bool, *, same_frames: bool, monitor: bool,
+             consec_stalled: int, since_rise_s: float | None, sensor_release: float = 0.0, goal_box: float = 0.0,
+             plug_count: float = 0.0) -> dict:
+        lk = Look(elapsed, done, failing=failing and done is not False, same_frames=same_frames, monitor=monitor,
+                  sensor_release=sensor_release, goal_box=goal_box, plug_count=plug_count)
+        in_window = self._st.last_done_t is not None and elapsed - self._st.last_done_t <= self.done_w.window_s
+        self._st, passes = done_step(self._st, lk, self.done_w)
+        if done is True and not same_frames:
+            self._consec_fail = 0
+        elif (failing or done is False) and not in_window:
+            self._consec_fail += 1
+        elif not (failing or done is False) and (done is not None or monitor):
+            self._consec_fail = 0
+        a = AttemptState(elapsed=elapsed, timeout_s=self._timeout, consec_fail=self._consec_fail,
+                         consec_stalled=consec_stalled, since_rise_s=since_rise_s, stall_s=self._stall, monitor=monitor)
+        terms = fail_terms(a, self.fail_w)
+        score = fail_score(a, self.fail_w)
+        return {"done_score": round(self._st.score, 3), "would_pass": bool(passes),
+                "fail_score": round(score, 3), "would_fail": bool(not passes and score >= self.fail_w.theta - 1e-9),
+                "terms": {k: round(v, 3) for k, v in terms.items()}}

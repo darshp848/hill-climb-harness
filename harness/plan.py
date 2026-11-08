@@ -14,7 +14,7 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
@@ -149,6 +149,9 @@ class Plan:
     # tower the monitor last reported. Off (empty) for a fine-tune that only knows its recorded texts.
     tower_prompts: dict[str, str] = field(default_factory=dict)
     start_pose: StartPose | None = None
+    # Optional weights for harness.decide's shadow run ({done: {...}, fail: {...}}); None = today's rules as weights.
+    # The shadow only logs `decide` events next to the runner's own calls; it never decides anything.
+    decide: dict[str, Any] | None = None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -351,6 +354,7 @@ def parse_plan(data: Any) -> Plan:
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
         start_pose=_start_pose(data.get("start_pose"), [st.name for st in stages]),
+        decide=_decide(data.get("decide")),
         done_message=done_message,
         stages=stages,
         checkpoint=checkpoint,
@@ -379,6 +383,16 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
         prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name)
         _prompt(prompt, "plan.tower_prompts")
     return {k: v.strip() for k, v in raw.items()}
+
+
+def _decide(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("plan.decide: must be a mapping")
+    from .decide import weights_from  # noqa: PLC0415
+    weights_from(raw)                 # validate now: a typo in a weight name fails at load, not mid-match
+    return raw
 
 
 def _start_pose(raw: Any, names: list[str]) -> StartPose | None:

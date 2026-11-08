@@ -159,6 +159,13 @@ class Runner:
         self.start_poses: StartPoses | None = None
         self._homes: dict[str, int] = {}
         self._fast_sig: dict[str, str] = {}   # per camera: the image the per-poll local guard judged last
+        # harness.decide.Shadow: the decision equations run next to the rules below and log what they would do
+        self.shadow: Any = None
+        try:
+            from .decide import Shadow  # noqa: PLC0415
+            self.shadow = Shadow.from_plan(plan.decide)
+        except Exception as exc:  # noqa: BLE001 (the shadow must never stop a run)
+            log.event("warning", message=f"decide shadow off: {exc}")
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -446,6 +453,8 @@ class Runner:
         rise_ref = last_rise = None
         hint: int | None = None
         consec_unwatched, watch_fixes = 0, 0
+        if self.shadow is not None:
+            self.shadow.start(stage.timeout_s, stage.stall_s, confirm)
         while True:
             self._nap(self.plan.check_every_s)
             st = self._poll_health()
@@ -536,6 +545,9 @@ class Runner:
                             rise_ref = last_rise = None
                             continue
                 sig = getattr(verdict, "frames_sig", None)
+                self._shadow_look(stage, attempt, elapsed, verdict, failing, monitor, consec_stalled, last_rise,
+                                  same=verdict.done is True and sig is not None and sig == last_done_sig
+                                  and not verdict.immediate)
                 if verdict.done is True and sig is not None and sig == last_done_sig and not verdict.immediate:
                     # the same camera images judged twice are one look, not two: a frozen view must not confirm
                     self.log.event("same_frames", stage=stage.name, attempt=attempt,
@@ -581,6 +593,20 @@ class Runner:
                     t0 += EXTEND_S                 # the gripper is on the target and pulling: let it finish
                     continue
                 return _Attempt(False, f"timeout after {stage.timeout_s:g} s", max_p, hint)
+
+    def _shadow_look(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, failing: bool, monitor: bool,
+                     consec_stalled: int, last_rise: float | None, *, same: bool) -> None:
+        """Logs what harness.decide would decide on this look (event `decide`). Never acts, never raises."""
+        if self.shadow is None:
+            return
+        try:
+            out = self.shadow.look(elapsed, verdict.done, failing, same_frames=same, monitor=monitor,
+                                   consec_stalled=consec_stalled,
+                                   since_rise_s=None if last_rise is None else elapsed - last_rise)
+            self.log.event("decide", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 2), **out)
+        except Exception as exc:  # noqa: BLE001
+            self.log.event("warning", message=f"decide shadow failed, off for this run: {exc}")
+            self.shadow = None
 
     def _on_target(self, stage: Stage) -> bool:
         """The last monitor verdict says a gripper holds the stage's object and progress is at least half."""
