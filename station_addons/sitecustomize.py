@@ -1,5 +1,16 @@
 """Adds a read-only GET /frame/<camera>.jpg to Dream station API (the controller latest frame), for our Jev judge.
 Loaded only when PYTHONPATH includes this folder; Dream files are untouched."""
+# Opt-in Metal tuning (pah_tuning.py): bus tick rate, torque cap, IK weights, tick log. Off unless PAH_* env vars are
+# set; must run before the frame route below imports robots.*.
+try:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    import pah_tuning as _pah_tuning
+    _pah_tuning.install()
+except Exception as _e:  # never stop Dream station over this
+    import sys as _sys
+    print(f"pah_tuning: not installed: {_e}", file=_sys.stderr)
+
 try:
     import re as _re
     import cv2 as _cv2
