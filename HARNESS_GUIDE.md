@@ -248,6 +248,48 @@ guard:
 - The log gets `guard_yes` events (with the count) and one `guard_tripped` event. `summary.json` has `guard_tripped: true`.
 - It only sees what the monitor sees, at the monitor's pace: one answer per `check_every_s`, none during `settle_s` after a prompt change. It is a backstop, not a reflex. A team member still watches, ready to call "stop".
 
+## 6e. Keep a watcher arm watching (`watch:`)
+
+If one arm's wrist camera should keep watching while the other arm works (for example, a side view for depth while plugging a cable in), add `watch:` to the stage:
+
+```yaml
+    watch:
+      camera: wrist_l                  # the watcher's camera role; its frame history goes to the monitor
+      check: "Does wrist_l still show the hub ports and the plug from the side, with the left arm still?"
+      prompt: "move the left arm back beside the hub so its camera looks at the ports, and hold it still"
+      settle_s: 5                      # how long the put-it-back prompt runs
+      max_fixes: 2                     # per attempt; a fix is not a failed attempt
+```
+
+Every monitor check then also answers `watch_ok`. After `confirm` "no" answers in a row, the harness:
+1. sends the `prompt` and runs it for `settle_s`,
+2. re-sends the stage prompt,
+3. logs a `watch_lost` event.
+
+**This needs a trained text.** The v4 plan's prompts must be the task texts you recorded, so `watch.prompt` only works if you also recorded teleop demos of that text. In the sim, base Dream-1 ignored the arm roles. That's why `hill_climb_v4.yaml` doesn't use `watch` yet.
+
+## 6f. The harness as DimOS skills (`integrations/dimos_skills.py`)
+
+Dimensional's DimOS can drive the run through the harness's primitives. An agent or any MCP client composes the run from:
+- `list_stages`, `start_stage`, `check_stage`, `recover`,
+- `stop_robot`, `status`,
+- `run_plan`, `plan_status`.
+
+Every skill goes through Dream's station API (`integrations/station_tools.py`), so:
+- Dream-1 still drives the arms, and Dream's speed and force limits stay in charge;
+- there is no skill that homes, resets or moves a joint;
+- free-text prompts are off unless you pass `--allow-free-prompts`.
+
+```bash
+pip install dimos                     # Linux / macOS / WSL; tested with dimos 0.0.15
+python -m integrations.dimos_skills plans/hill_climb_v4.yaml      # serves the skills over MCP; Ctrl+C stops
+dimos mcp list-tools                  # in another terminal
+```
+
+`tests/test_dimos_skills.py` builds the module with a real DimOS coordinator against `fake_station.py`. It's skipped when dimos isn't installed.
+
+**Rules:** an agent choosing stages live is not a human input. Still, check with the organizers before letting any model other than Dream-1 decide prompts in a match.
+
 ## 7. Test in simulation (before the robot)
 
 `sim_station.py` serves the same API (8091) and debug view (8093), driven by Dream's MuJoCo YAM simulator (`dream_examples/yam_mujoco`). The harness can't tell it apart from a real station, and nothing physical moves, so `--live` is safe here. Note that the Hill Climb uses Metal arms, while the sim is YAM only. That makes it a test of the harness logic and prompts, not of the real task.

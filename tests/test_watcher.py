@@ -72,3 +72,50 @@ def test_v4_plan_has_no_plug_in_and_notes_the_stacking_camera():
     assert not any(s.prompt.startswith("plug") for s in plan.stages)
     assert names.index("unplug_cable") < names.index("stack_2")
     assert "wrist_r" in plan.stages[names.index("stack_2")].camera_notes
+
+
+# -- the watcher is kept watching -----------------------------------------------------------------------------
+WATCH = {"camera": "wrist_l", "check": "Does wrist_l show the hub ports from the side?",
+         "prompt": "move the left arm back beside the hub and hold it still", "settle_s": 0.1, "max_fixes": 1}
+
+
+def test_watch_field_parses_and_adds_history():
+    _, s = _st(watch=WATCH)
+    assert s.watch.camera == "wrist_l" and s.watch.max_fixes == 1 and "wrist_l" in s.history_cameras
+    with pytest.raises(ValueError, match="watch"):
+        _st(watch={"camera": "wrist_l"})
+
+
+def test_monitor_asks_for_watch_ok_and_parses_it():
+    plan, st = _st(watch=WATCH)
+    t = Transport(reply_text(watch_ok=False))
+    v = MonitorVerifier(plan, transport=t).check_now(st, {"video.scene": JPEG, "video.wrist_l": JPEG}, 5.0)
+    text = t.payloads[0]["messages"][0]["content"][-1]["text"]
+    assert "Watcher check" in text and '"watch_ok": bool' in text and v.watch_ok is False
+
+
+def test_runner_puts_the_watcher_back_then_resumes_the_stage(write_plan, tmp_path):
+    from conftest import make_station
+    from test_v2 import Script, build, events, mv, prompts
+
+    fake = make_station()
+    try:
+        lost = mv(None, status="ok", watch_ok=False)
+        ok = mv(None, status="ok", watch_ok=True)
+        script = Script([lost, lost, ok, mv(True, watch_ok=True), mv(True, watch_ok=True)])
+        plan = write_plan([dict(name="plug", prompt="plug it in", success="in?", timeout_s=10, min_run_s=0.05,
+                                verifier="monitor", watch=WATCH)], confirm=2)
+        result = build(fake, plan, tmp_path, script).run()
+        assert result.ok, result.reason
+        assert prompts(fake)[:3] == ["plug it in", WATCH["prompt"], "plug it in"]
+        assert len(events(_last_log(tmp_path), "watch_lost")) == 1
+    finally:
+        fake.close()
+
+
+def _last_log(tmp_path):
+    runs = sorted((tmp_path / "runs").iterdir())
+
+    class L:
+        path = runs[-1]
+    return L

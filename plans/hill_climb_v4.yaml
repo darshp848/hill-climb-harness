@@ -56,7 +56,7 @@ stages:
     success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
     expect: "The right gripper closes fully on the plug at the end of the hub nearest it and pulls it straight out along the port until the plug is clear."
     timeout_s: 60
-    max_attempts: 8
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
     min_run_s: 4
     settle_s: 4
     stall_s: 20
@@ -108,7 +108,7 @@ stages:
     camera_notes:
       "{stack_cam}": "view from the gripper doing the stacking"
     timeout_s: 40
-    max_attempts: 6
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
     min_run_s: 4
     stall_s: 20
     recovery:
@@ -124,7 +124,7 @@ stages:
     camera_notes:
       "{stack_cam}": "view from the gripper doing the stacking"
     timeout_s: 40
-    max_attempts: 6
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
     min_run_s: 4
     stall_s: 20
     recovery:
@@ -140,7 +140,7 @@ stages:
     camera_notes:
       "{stack_cam}": "view from the gripper doing the stacking"
     timeout_s: 40
-    max_attempts: 6
+    max_attempts: 99    # pass bar: nothing later may be touched, so keep trying until the clock runs out
     min_run_s: 4
     stall_s: 20
     skip_if_done: true        # stack_3 may already be over 4 in: then no extra block is risked here

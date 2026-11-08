@@ -17,7 +17,7 @@ MAX_PROMPT_CHARS = 512
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "expect",
-               "cameras", "camera_notes", "history_cameras"}
+               "cameras", "camera_notes", "history_cameras", "watch"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -52,6 +52,7 @@ class Stage:
     cameras: list[str] = field(default_factory=list)          # roles this stage's checks see; empty = plan's
     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
+    watch: Watch | None = None
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -80,6 +81,21 @@ class Guard:
 
     def covers(self, stage_name: str) -> bool:
         return not self.stages or any(stage_name.startswith(p) for p in self.stages)
+
+
+@dataclass
+class Watch:
+    """A watcher arm whose wrist camera must keep looking at the work while another arm does the stage.
+
+    Each monitor check also answers `check`; after `confirm` "no" answers in a row the runner sends `prompt`
+    (put the watcher back), holds `settle_s`, then re-sends the stage prompt. At most `max_fixes` per attempt;
+    a fix does not count as a failed attempt."""
+
+    camera: str
+    check: str
+    prompt: str
+    settle_s: float = 5.0
+    max_fixes: int = 2
 
 
 @dataclass
@@ -226,6 +242,18 @@ def parse_plan(data: Any) -> Plan:
         if not isinstance(notes, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.strip()
                                                   for k, v in notes.items()):
             raise ValueError(f"{label}.camera_notes: must map camera role names to non-empty text")
+        watch = None
+        if raw.get("watch") is not None:
+            w = raw["watch"]
+            if not isinstance(w, dict) or set(w) - {"camera", "check", "prompt", "settle_s", "max_fixes"}:
+                raise ValueError(f"{label}.watch: must be a mapping of camera, check, prompt[, settle_s, max_fixes]")
+            watch = Watch(camera=_text(w.get("camera"), f"{label}.watch.camera"),
+                          check=_text(w.get("check"), f"{label}.watch.check"),
+                          prompt=_prompt(w.get("prompt"), f"{label}.watch.prompt"),
+                          settle_s=float(_num(w.get("settle_s", 5.0), f"{label}.watch.settle_s")),
+                          max_fixes=int(_num(w.get("max_fixes", 2), f"{label}.watch.max_fixes", integer=True)))
+            if not any(watch.camera in h for h in hist):
+                hist.append(watch.camera)   # the monitor needs the watcher's frame history to judge it
         stages.append(
             Stage(
                 name=name,
@@ -244,6 +272,7 @@ def parse_plan(data: Any) -> Plan:
                 cameras=cams,
                 camera_notes={k: v.strip() for k, v in notes.items()},
                 history_cameras=hist,
+                watch=watch,
             )
         )
 
