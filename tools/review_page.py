@@ -74,7 +74,22 @@ def make_preview(src: Path, dst: Path) -> None:
     tmp.replace(dst)
 
 
-def collect(datasets: list[Path], root: Path, previews: Path | None = None) -> list[dict]:
+def parse_dataset(arg: str) -> tuple[Path, set[int] | None]:
+    """`FOLDER` or `FOLDER:A-B` (episodes A to B) or `FOLDER:A-` (A onwards) or `FOLDER:A,B,C`."""
+    path, _, sel = arg.rpartition(":") if ":" in arg else (arg, "", "")
+    path = Path(path or arg).expanduser().resolve()
+    if not sel:
+        return path, None
+    eps: set[int] = set()
+    for part in sel.split(","):
+        a, dash, b = part.partition("-")
+        last = int(b) if b else (10**6 if dash else int(a))
+        eps |= set(range(int(a), last + 1))
+    return path, eps
+
+
+def collect(datasets: list[Path], root: Path, previews: Path | None = None,
+            only: dict[Path, set[int]] | None = None) -> list[dict]:
     """Video paths are relative to the page: `data/...` (the originals, through the `data` link to `root`) or, with
     `previews`, `previews/...` (small copies, built once and reused)."""
     rows = []
@@ -83,6 +98,8 @@ def collect(datasets: list[Path], root: Path, previews: Path | None = None) -> l
         video_keys = {k.rsplit(".", 1)[-1]: k for k, v in info["features"].items() if v.get("dtype") == "video"}
         with (dataset / "meta" / "episodes.jsonl").open() as f:
             episodes = [json.loads(line) for line in f if line.strip()]
+        if only and dataset in only:
+            episodes = [e for e in episodes if e["episode_index"] in only[dataset]]
         for ep in episodes:
             chunk = ep["episode_index"] // info.get("chunks_size", 1000)
             videos = {}
@@ -119,7 +136,8 @@ def carry_pairs(spec: dict) -> list[list[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("datasets", nargs="+", type=Path)
+    parser.add_argument("datasets", nargs="+", metavar="FOLDER[:EPISODES]",
+                        help="a dataset folder, optionally only some episodes: FOLDER:39-41, FOLDER:39-, FOLDER:3,7")
     parser.add_argument("--out", type=Path, default=Path("~/hackathon_review/review.html"),
                         help="the page; its folder gets a `data` link to the datasets' parent (default: %(default)s)")
     parser.add_argument("--serve", type=int, metavar="PORT", help="then serve the page on 127.0.0.1:PORT")
@@ -129,7 +147,9 @@ def main() -> None:
     parser.add_argument("--full-size", action="store_true",
                         help="play the original videos instead of 480x270 previews (slow over a tunnel)")
     args = parser.parse_args()
-    datasets =[d.expanduser().resolve() for d in args.datasets]
+    parsed = [parse_dataset(a) for a in args.datasets]
+    datasets = [p for p, _ in parsed]
+    only = {p: eps for p, eps in parsed if eps is not None}
     root = datasets[0].parent
     if any(d.parent != root for d in datasets):
         parser.error("all datasets must be in the same folder")
@@ -145,7 +165,7 @@ def main() -> None:
     if not args.full_size:
         previews = out.parent / "previews"
         os.nice(19)  # the station may be running the robot: encode at the lowest priority
-    rows = collect(datasets, root, previews)
+    rows = collect(datasets, root, previews, only)
     carry = []
     for spec_path in args.carry_marks:
         carry += carry_pairs(json.loads(Path(spec_path).expanduser().read_text()))
