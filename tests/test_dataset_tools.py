@@ -156,3 +156,30 @@ def test_auto_split_classifies_unplug_put_down_and_plug_in(monkeypatch):
     assert plug["start"] == down["end"] and plug["task"] == auto_split.T3
     assert any("never lifted" in n for n in notes)
     assert [(a, b) for a, b in auto_split.grasps(action[:, 13], fps)][0] == (int(5 * fps), int(9.5 * fps))
+
+
+def test_auto_split_left_arm_picks_and_working_arm(monkeypatch):
+    import auto_split
+    monkeypatch.setattr(auto_split, "tool_point", lambda q, tcp: [q[0], q[1], q[2]])
+    fps, n = 30.0, 300
+    state, action = np.zeros((n, 14)), np.zeros((n, 14))
+    t = np.arange(n) / fps
+    state[:, 0] = 0.2 + 0.1 * np.sin(t)          # left arm moves
+    state[:, 7] = 0.3 * np.sin(t)                # right arm moves more, but never grasps
+    action[:, 13] = 100.0
+    action[:, 6] = np.where((t > 3) & (t < 6), 0.0, 100.0)      # left grasps once
+    assert auto_split.working_arm(state, action, fps) == "left"
+    assert auto_split.working_arm(state) == "right"              # by joint range alone
+    segs, _ = auto_split.plan_episode(state, action, fps, np.array([0.38, 0.13]), near=0.06, far=0.08, lift=0.06,
+                                      tail_s=0.7, max_approach_s=10.0, arm="left", picks=True)
+    assert [s["task"] for s in segs] == [auto_split.LABEL]
+    segs, notes = auto_split.plan_episode(state, action, fps, np.array([0.38, 0.13]), near=0.06, far=0.08,
+                                          lift=0.06, tail_s=0.7, max_approach_s=10.0, arm="left", picks=False)
+    assert segs == [] and notes
+
+
+def test_split_refuses_unlabelled_segments(tmp_path):
+    src = _make_dataset(tmp_path / "src", lengths=(90,))
+    with pytest.raises(SystemExit, match="LABEL ME"):
+        split_episodes.split({"source": str(src), "out": str(tmp_path / "o"),
+                              "segments": [{"episode": 0, "start_s": 0, "end_s": 2.0, "task": "LABEL ME"}]})
