@@ -102,9 +102,13 @@ def load_config(path: str | Path) -> DetectConfig:
                         table_roi=tuple(raw["table_roi"]) if raw.get("table_roi") else None)
 
 
-def _load(jpeg: bytes) -> Image.Image | None:
+def _load(jpeg: bytes, min_w: int | None = None) -> Image.Image | None:
+    """Decoded RGB image, or None for a bad frame. With min_w, a JPEG is decoded at the smallest 1/2, 1/4 or 1/8
+    scale that is still at least min_w wide (libjpeg's draft mode): a 1280 px station frame decodes at 640."""
     try:
         im = Image.open(io.BytesIO(jpeg))
+        if min_w and im.format == "JPEG" and im.width > min_w:
+            im.draft("RGB", (min_w, max(1, im.height * min_w // im.width)))
         im.load()
         return im.convert("RGB")
     except Exception:   # noqa: BLE001 - a bad frame is simply not looked at
@@ -166,14 +170,18 @@ def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
 
 
 def detect(jpeg: bytes, cfg: DetectConfig, *, overhead: bool = False) -> list[Box]:
-    im = _load(jpeg)
-    if im is None:
-        return []
+    im = _load(jpeg, WORK_W)
+    return [] if im is None else detect_image(im, cfg, overhead=overhead)
+
+
+def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
+                 classes: list[ClassSpec] | None = None) -> list[Box]:
+    """detect() on a decoded image; `classes` limits the colours looked for (default: all of cfg's)."""
     hsv = _hsv(im)
     H, W = hsv.shape[:2]
     total = float(H * W)
     out: list[Box] = []
-    for spec in cfg.classes:
+    for spec in cfg.classes if classes is None else classes:
         mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
         if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
             mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
@@ -249,14 +257,15 @@ class TableDetector:
         """(True, why) if a wrist camera shows the guard class between the fingers; (False, ...) if the wrist views
         were readable and showed none; (None, ...) if no wrist view could be read."""
         looked = False
+        avoid = [c for c in self.cfg.classes if "avoid" in c.kinds.values()]   # only the colours that can trip it
         for role, jpeg in frames.items():
             if not any(w in role for w in self.cfg.wrist_roles):
                 continue
-            boxes = detect(jpeg, self.cfg)
-            if _load(jpeg) is None:
+            im = _load(jpeg, WORK_W)
+            if im is None:
                 continue
             looked = True
-            b = held(boxes, self.cfg)
+            b = held(detect_image(im, self.cfg, classes=avoid), self.cfg)
             if b is not None:
                 return True, f"local detector: {b.cls} between the fingers in {role} ({b.frac:.1%} of the view)"
         return (False, "local detector: none held") if looked else (None, "local detector: no wrist view")

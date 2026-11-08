@@ -14,7 +14,7 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
@@ -106,6 +106,26 @@ class Watch:
     max_fixes: int = 2
 
 
+_START_POSE_KEYS = {"reference", "tolerance_rad", "home_before", "home_pose", "max_homes"}
+
+
+@dataclass
+class StartPose:
+    """Compare the arms' joints with the starts in the teleop data before a stage's prompt (harness.start_pose).
+    Every check is logged. On stages matching `home_before` (name prefixes), a start farther than `tolerance_rad`
+    from every reference start sends the arms home first, if `home_pose` is itself a reference start for that
+    prompt, at most `max_homes` times per stage. Only for stages where a homing path can't knock anything over."""
+
+    reference: str
+    tolerance_rad: float = 0.35
+    home_before: list[str] = field(default_factory=list)
+    home_pose: dict[str, list[float]] = field(default_factory=lambda: {"left": [0.0] * 6, "right": [0.0] * 6})
+    max_homes: int = 1
+
+    def homes(self, stage_name: str) -> bool:
+        return any(stage_name.startswith(p) for p in self.home_before)
+
+
 @dataclass
 class Plan:
     task: str
@@ -128,6 +148,7 @@ class Plan:
     # <piece>, e.g. {"cube": "put the <piece> on top of the stack"}. The piece is the target's next entry after the
     # tower the monitor last reported. Off (empty) for a fine-tune that only knows its recorded texts.
     tower_prompts: dict[str, str] = field(default_factory=dict)
+    start_pose: StartPose | None = None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -329,6 +350,7 @@ def parse_plan(data: Any) -> Plan:
         guard=guard,
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
+        start_pose=_start_pose(data.get("start_pose"), [st.name for st in stages]),
         done_message=done_message,
         stages=stages,
         checkpoint=checkpoint,
@@ -357,6 +379,34 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
         prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name)
         _prompt(prompt, "plan.tower_prompts")
     return {k: v.strip() for k, v in raw.items()}
+
+
+def _start_pose(raw: Any, names: list[str]) -> StartPose | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("plan.start_pose: must be a mapping")
+    extra = set(raw) - _START_POSE_KEYS
+    if extra:
+        raise ValueError(f"plan.start_pose: unknown key(s): {', '.join(sorted(extra))}")
+    ref = _text(raw.get("reference"), "plan.start_pose.reference")
+    home_before = raw.get("home_before") or []
+    if not isinstance(home_before, list) or not all(isinstance(x, str) and x.strip() for x in home_before):
+        raise ValueError("plan.start_pose.home_before: must be a list of stage-name prefixes")
+    for prefix in home_before:
+        if not any(n.startswith(prefix) for n in names):
+            raise ValueError(f"plan.start_pose.home_before: {prefix!r} matches no stage name")
+    home = raw.get("home_pose")
+    if home is None:
+        home = {"left": [0.0] * 6, "right": [0.0] * 6}
+    if not isinstance(home, dict) or set(home) != {"left", "right"} or not all(
+            isinstance(v, list) and len(v) == 6 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
+            for v in home.values()):
+        raise ValueError("plan.start_pose.home_pose: must map left and right to 6 joint angles (rad)")
+    return StartPose(reference=ref, tolerance_rad=float(_num(raw.get("tolerance_rad", 0.35), "plan.start_pose.tolerance_rad")),
+                     home_before=[x.strip() for x in home_before],
+                     home_pose={k: [float(x) for x in v] for k, v in home.items()},
+                     max_homes=int(_num(raw.get("max_homes", 1), "plan.start_pose.max_homes", integer=True)))
 
 
 def _guard(raw: Any) -> Guard | None:

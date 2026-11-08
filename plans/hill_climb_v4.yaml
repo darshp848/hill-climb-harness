@@ -52,6 +52,20 @@ guard:
   # each, a black ball in the bin loses the match, and nobody would be looking for one.
   max_blind_s: 20
 
+# Start pose (harness/start_pose.py). VLAs lose most to an unfamiliar start pose (LIBERO-Plus: -60 points vs -16 for
+# reworded instructions). start_poses.json holds the first frame of every task segment in the NUC teleop sets
+# (tools/start_poses.py), keyed by the exact task text, so only unplug and put-down have references so far.
+# Every stage start and retry logs the distance (`start_pose` events). Before unplug_cable only, a start farther
+# than tolerance_rad from every recorded start sends the arms home first (once per stage): every recorded unplug
+# set includes home starts, and nothing is built yet that a homing path could knock over.
+# Joint angles come from GET /arms positions_rad (station add-on, needs the new sitecustomize.py) or, while a run
+# is going, from the newest debug-view trip.
+start_pose:
+  reference: start_poses.json
+  tolerance_rad: 0.35
+  home_before: [unplug_cable]
+  max_homes: 1
+
 # The tower to build (Darsh's photo, Drive IMG_2697, 7 Nov 20:30), bottom to top. The monitor gets it as the expected
 # result on stack_* / tower_* / higher_* stages and reports the tower it sees; events.jsonl logs `tower` and
 # `tower_order_ok` on every check. It does NOT gate a stage: the stack prompt is one recorded text, so Dream can't be

@@ -38,6 +38,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--detect", default=None, metavar="COLORS.yaml",
                    help="local ball/block detector (e.g. plans/table_colors.yaml): fast black-ball guard + boxes on "
                         "the monitor's frames")
+    p.add_argument("--live-guard", action="store_true",
+                   help="with --detect: run the guard on live GET /frame/<wrist>.jpg images (station add-on) in its own "
+                        "thread, which sends /stop itself; replaces the per-poll guard on debug-view trips")
+    p.add_argument("--live-guard-hz", type=float, default=10.0, help="live guard looks per second (default 10)")
+    p.add_argument("--live-guard-frames", type=int, default=3,
+                   help="yes answers on distinct live frames in a row that trip the live guard (default 3)")
     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
                    help="override every stage's verifier")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
@@ -68,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
 
     fake = None
+    runner: Runner | None = None
     station_url, view_url = args.station, args.view
     if args.mock:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -118,6 +125,29 @@ def main(argv: list[str] | None = None) -> int:
                     if hasattr(m, "annotator"):
                         m.annotator, m.legend = det.annotate_frames, det.legend()
             log.event("detector", config=str(args.detect))
+            if args.live_guard and plan.guard is not None:
+                from .live_guard import LiveFrames, LiveGuard  # noqa: PLC0415
+                wrists = ("wrist_l", "wrist_r")   # station camera names (GET /status cameras)
+                runner.live_guard = LiveGuard(LiveFrames(station_url, wrists).grab, det.guard, station.stop,
+                                              rate_hz=args.live_guard_hz, confirm_frames=args.live_guard_frames,
+                                              log=log.event)
+                runner.live_guard.start()
+                log.event("live_guard", station=station_url, roles=list(wrists), rate_hz=args.live_guard_hz,
+                          confirm_frames=args.live_guard_frames)
+        elif args.live_guard:
+            print("--live-guard needs --detect (the colour detector judges the live frames)", file=sys.stderr)
+            return 2
+        if plan.start_pose is not None:
+            from .start_pose import StartPoses  # noqa: PLC0415
+            ref = Path(plan.start_pose.reference)
+            if not ref.is_absolute() and not ref.exists():
+                ref = plan_path.parent / ref            # relative to the plan file
+            try:
+                runner.start_poses = StartPoses.load(ref)
+                log.event("start_pose_reference", path=str(ref), prompts=len(runner.start_poses.by_prompt))
+            except (OSError, ValueError) as exc:
+                print(f"start_pose: {exc}; start-pose checks are off", file=sys.stderr)
+                log.event("warning", message=f"start_pose reference not loaded: {exc}")
         holder["r"] = runner
         # Turn SIGTERM into the same clean stop as Ctrl+C.
         try:
@@ -144,5 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             print("The arms hold where they are. Home them with: dreamcli robot down")
         return 0 if result.ok else 1
     finally:
+        if runner is not None and runner.live_guard is not None:
+            runner.live_guard.close()
         if fake is not None:
             fake.close()
