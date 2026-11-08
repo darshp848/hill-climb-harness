@@ -137,7 +137,7 @@ stages:
   # Kaushik, 8 Nov: one well-defined stage instead of "stack a cube" + "tower > 4 in": every stage boundary (lock, arms
   # up, camera check, new prompt) cost time and the re-prompt knocked finished towers over. Goal, not motion.
   - name: tower
-    prompt: "stack the three foam cubes on top of each other to make a tower"
+    prompt: "stack one blue cube on top of the other blue cube, then put the pink cube on top of them"   # Kaushik, 8 Nov: blue on blue, pink last, one instruction
     write_prompt: false
     success: "Are three cubes stacked on top of each other in one tower, standing on its own, with no gripper holding or touching it?"
     expect: "The arms pick up the cubes one at a time and stack them into a single tower of three, then lift clear; the tower stays standing."
@@ -149,6 +149,7 @@ stages:
     stall_s: 45
     confirm: 2             # two fast looks in a row before the lock, then Sonnet decides
     confirm_check: "In the NOW images, are three cubes stacked on top of each other in a single tower, standing on its own, with no gripper holding or touching it?"
+    resume_on_no: true     # one-stage tower: a lock on a half-built tower must let Dream finish it
     on_fail: retry_in_place
 
   # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. One named ball per call. ----
