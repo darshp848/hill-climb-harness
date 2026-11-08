@@ -110,12 +110,22 @@ def collect(datasets: list[Path], root: Path, previews: Path | None = None) -> l
     return rows
 
 
+def carry_pairs(spec: dict) -> list[list[str]]:
+    """[old mark id, new mark id] for every segment of a split spec: segment k of `out` came from `episode` of
+    `source`, so an episode cut in two passes its mark to both halves."""
+    src, out = Path(spec["source"]).name, Path(spec["out"]).name
+    return [[f"{src}:{seg['episode']}", f"{out}:{k}"] for k, seg in enumerate(spec["segments"])]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("datasets", nargs="+", type=Path)
     parser.add_argument("--out", type=Path, default=Path("~/hackathon_review/review.html"),
                         help="the page; its folder gets a `data` link to the datasets' parent (default: %(default)s)")
     parser.add_argument("--serve", type=int, metavar="PORT", help="then serve the page on 127.0.0.1:PORT")
+    parser.add_argument("--carry-marks", action="append", default=[], metavar="SPEC.json",
+                        help="a split spec (tools/splits/*.json): marks made on its source folder's episodes are copied "
+                             "to the episodes cut from them in its out folder, when the page loads (repeatable)")
     parser.add_argument("--full-size", action="store_true",
                         help="play the original videos instead of 480x270 previews (slow over a tunnel)")
     args = parser.parse_args()
@@ -136,7 +146,11 @@ def main() -> None:
         previews = out.parent / "previews"
         os.nice(19)  # the station may be running the robot: encode at the lowest priority
     rows = collect(datasets, root, previews)
-    page = PAGE.replace("/*DATA*/null", json.dumps(rows, separators=(",", ":")))
+    carry = []
+    for spec_path in args.carry_marks:
+        carry += carry_pairs(json.loads(Path(spec_path).expanduser().read_text()))
+    page = (PAGE.replace("/*DATA*/null", json.dumps(rows, separators=(",", ":")))
+                .replace("/*CARRY*/[]", json.dumps(carry, separators=(",", ":"))))
     out.write_text(page)
     print(f"wrote {out} ({len(rows)} episodes); serve its folder and open {out.name}", file=sys.stderr)
     if args.serve:
@@ -296,6 +310,11 @@ let marks = {};
 try { marks = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) {}
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(marks)); } catch (e) {} };
 const id = r => r.folder + ":" + r.ep;
+// Marks made before a folder was re-split: copy each to the episodes cut from it, unless already marked there.
+const CARRY = /*CARRY*/[];
+let carried = 0;
+CARRY.forEach(([from, to]) => { if (marks[from] && !marks[to]) { marks[to] = marks[from]; carried++; } });
+if (carried) save();
 const $ = s => document.getElementById(s);
 const shortTask = t => t.length > 48 ? t.slice(0, 46) + "…" : t;
 
@@ -312,7 +331,8 @@ function filter() {
     (!m || (m === "none" ? !marks[id(r)] : marks[id(r)] === m)));
   const all = ROWS.map(r => marks[id(r)]).filter(Boolean);   // marks for folders not on this page don't count
   $("counts").textContent = `${shown.length} shown of ${ROWS.length} · ${all.filter(x => x === "keep").length} keep · ` +
-    `${all.filter(x => x === "drop").length} drop · ${ROWS.length - all.length} unmarked`;
+    `${all.filter(x => x === "drop").length} drop · ${ROWS.length - all.length} unmarked` +
+    (carried ? ` · ${carried} carried over from before a re-split` : "");
   $("list").innerHTML = shown.map((r, i) => {
     const mk = marks[id(r)];
     return `<li data-i="${i}"><span class="name">${r.folder} #${r.ep}</span>` +
