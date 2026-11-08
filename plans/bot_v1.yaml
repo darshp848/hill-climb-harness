@@ -46,6 +46,7 @@ vars:
 # go to the OpenRouter model instead. confirm_model and writer_model are in $HARNESS_ANTHROPIC_MODELS: Anthropic API.
 claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 3, hedge: 2, writer_model: claude-sonnet-5-5, confirm_model: claude-sonnet-5-5}
 reset_first: true
+reset_last: true       # Kaushik, 8 Nov: end every run at the start pose too
 stop_on_pass: true
 lock_prompt: "open both grippers and move the arms up"   # lock without /stop: Dream stays warm, arms lift clear
 hands_off: true        # attempts end only on a pass, a guard or the timeout (no drop-the-cube recoveries)
@@ -113,7 +114,7 @@ stages:
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
-      loop_until_s: 120    # Kaushik, 8 Nov: 2 min for cables, 1 min tower, 2 min balls
+      loop_until_s: 105    # Kaushik, 8 Nov: 15 s moved from cables to stacking
     success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
     camera_notes:
@@ -133,23 +134,53 @@ stages:
     on_fail: retry_in_place
 
   # Only when Dream unplugged without the assist and still holds the cable: the assist puts it down itself.
-  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One stage, one goal prompt, no arm named. ----
-  # Kaushik, 8 Nov: one well-defined stage instead of "stack a cube" + "tower > 4 in": every stage boundary (lock, arms
-  # up, camera check, new prompt) cost time and the re-prompt knocked finished towers over. Goal, not motion.
-  - name: tower
-    prompt: "stack one blue cube on top of the other blue cube, then put the pink cube on top of them"   # Kaushik, 8 Nov: blue on blue, pink last, one instruction
+  # ---- Stage 2: tower of 4 cubes (2 blue, pink, green), one cube per step, each step flowing into the next ----
+  - name: stack_2
+    prompt: "put one blue cube on top of the other blue cube"
     write_prompt: false
-    success: "Are three cubes stacked on top of each other in one tower, standing on its own, with no gripper holding or touching it?"
-    expect: "The arms pick up the cubes one at a time and stack them into a single tower of three, then lift clear; the tower stays standing."
+    lock_prompt: "put the pink cube on top of the two stacked blue cubes"   # flow straight into the next cube: no arms-up, no restart
+    success: "Is one blue cube resting on top of the other blue cube, standing on its own, with no gripper holding it?"
     camera_notes:
-      scene: "top view of the table: the cubes and the tower"
-    timeout_s: 60          # Kaushik, 8 Nov: 1 min for stacking, then the balls
-    max_attempts: 1        # RUBRIC RISK: balls before the tower passes can be a DQ (Kaushik's call, 8 Nov)
+      scene: "top view of the table: the cubes and the stack"
+    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
+    max_attempts: 1
     min_run_s: 4
-    stall_s: 45
-    confirm: 2             # two fast looks in a row before the lock, then Sonnet decides
-    confirm_check: "In the NOW images, are three cubes stacked on top of each other in a single tower, standing on its own, with no gripper holding or touching it?"
-    resume_on_no: true     # one-stage tower: a lock on a half-built tower must let Dream finish it
+    stall_s: 30
+    confirm: 2
+    confirm_check: "In the NOW images, is one blue cube resting on top of the other blue cube, standing on its own, with no gripper holding or touching either?"
+    resume_on_no: true
+    on_fail: skip
+
+  - name: stack_3
+    prompt: "put the pink cube on top of the two stacked blue cubes"
+    write_prompt: false
+    lock_prompt: "put the green cube on top of the pink cube"   # flow straight into the next cube: no arms-up, no restart
+    success: "Is the pink cube resting on top of the two stacked blue cubes, standing on its own, with no gripper holding it?"
+    camera_notes:
+      scene: "top view of the table: the cubes and the stack"
+    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
+    max_attempts: 1
+    min_run_s: 4
+    stall_s: 30
+    confirm: 2
+    confirm_check: "In the NOW images, is there a stack of three cubes (two blue at the bottom, the pink cube on top), standing on its own, with no gripper holding or touching it?"
+    resume_on_no: true
+    on_fail: skip
+
+  - name: tower
+    prompt: "put the green cube on top of the pink cube"
+    write_prompt: false
+    lock_prompt: "open both grippers and move the arms up"   # tower done: lift clear
+    success: "Are four cubes stacked in one tower (two blue, then pink, then green on top), standing on its own, with no gripper holding or touching it?"
+    camera_notes:
+      scene: "top view of the table: the cubes and the stack"
+    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
+    max_attempts: 1
+    min_run_s: 4
+    stall_s: 30
+    confirm: 2
+    confirm_check: "In the NOW images, is there a single tower of four stacked cubes with the green cube on top, standing on its own, with no gripper holding or touching it?"
+    resume_on_no: true
     on_fail: skip
 
   # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. One named ball per call. ----

@@ -195,7 +195,7 @@ def test_monitor_model_flag(monkeypatch):
 def test_bot_v1_plan():
     plan = load_plan(ROOT / "plans/bot_v1.yaml")
     names = [s.name for s in plan.stages]
-    first_stack, first_ball = names.index("tower"), names.index("ball_1")
+    first_stack, first_ball = names.index("stack_2"), names.index("ball_1")
     assert all(n.startswith(("cable_", "arms_")) for n in names[:first_stack])
     assert all(n.startswith(("stack", "tower")) for n in names[first_stack:first_ball])
     assert all(n.startswith("ball_") for n in names[first_ball:])
@@ -203,16 +203,19 @@ def test_bot_v1_plan():
     assert plan.claude_user["confirm_model"] == plan.claude_user["writer_model"] == "claude-sonnet-5-5"
     unplugs = [s for s in plan.stages if s.name.startswith("cable_unplug")]
     assert len(unplugs) == 1 and all(s.grip_assist and s.confirm_check and not s.write_prompt for s in unplugs)
-    assert unplugs[0].grip_assist.loop_until_s == 120
+    assert unplugs[0].grip_assist.loop_until_s == 105
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.10], 4.0, 0, (0.062, 0.20))
     assert ga.put_down_prompt and unplugs[0].prompt.endswith(ga.put_down_prompt)   # one prompt: unplug + place
     assert "white basket" in ga.put_down_prompt
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
-    assert [x.name for x in stacks] == ["tower"]
-    assert stacks[0].prompt == "stack one blue cube on top of the other blue cube, then put the pink cube on top of them" and stacks[0].resume_on_no
-    assert stacks[0].confirm == 2 and stacks[0].confirm_check and not stacks[0].write_prompt
+    assert [x.name for x in stacks] == ["stack_2", "stack_3", "tower"]
+    assert [x.prompt for x in stacks] == ["put one blue cube on top of the other blue cube",
+                                          "put the pink cube on top of the two stacked blue cubes",
+                                          "put the green cube on top of the pink cube"]
+    assert stacks[0].lock_prompt == stacks[1].prompt and stacks[1].lock_prompt == stacks[2].prompt
+    assert all(x.confirm == 2 and x.confirm_check and not x.write_prompt and x.timeout_s == 45 for x in stacks)
     assert not plan.tower_prompts
     balls = plan.stages[first_ball:]
     assert all(s.write_prompt and "nearest" in s.prompt and "white basket" in s.prompt and s.writer_notes
@@ -505,3 +508,12 @@ def test_a_plug_reading_005_after_the_lift_is_held_and_counts_the_cable(fake, wr
     res = r.run()
     assert events(r.log, "grip_pull")[0]["outcome"] == "pulled" and not events(r.log, "grip_slipped")
     assert events(r.log, "pull_counted") and res.stages[0].ok
+
+
+def test_reset_last_sends_reset_when_the_run_ends(fake, write_plan, tmp_path):
+    fake.reset_s = 0.05
+    path = write_plan([stage("a", confirm=1)], reset_first=True, reset_last=True)
+    r = build(fake, path, tmp_path, Script([mv(True, progress=1.0)]))
+    r.run()
+    rs = routes(fake)
+    assert rs[0] == "/reset" and rs[-1] == "/reset" and rs.count("/reset") == 2

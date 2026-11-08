@@ -57,7 +57,7 @@ class Run:
                    "--detect", "plans/table_colors.yaml", "--live-guard"]
             # anthropic: the plan's claude.model (Haiku) on the Anthropic API; openrouter: the fast OpenRouter model
             # (8 Nov: the OpenRouter key hit its $40 limit and every look came back HTTP 403)
-            cmd += ["--monitor-model", monitor_model] if monitor == "openrouter" else ["--claude-backend", "api"]
+            cmd += ["--claude-backend", "api"]   # OpenRouter key over its limit (8 Nov): Haiku on the Anthropic API only
             for group, prefixes in GROUPS.items():
                 if group not in stages:
                     for p in prefixes:
@@ -292,13 +292,13 @@ function controls(){const c=$("controls");
  <button class="choice ${model==="engine"?"sel":""}" onclick="model='engine';controls()"><b>Prompt engine (Darsh)</b><span>base Dream-1, templates + slots picked from the cameras</span></button></div>
  <div class="toggles"><label><input type="checkbox" class="g" value="cable" checked> Cables</label><label><input type="checkbox" class="g" value="stack" checked> Stack</label>
  <label><input type="checkbox" class="g" value="ball" checked> Balls</label><label title="no typing allowed during the run"><input type="checkbox" id="m"> Match mode</label></div>
- <div class="toggles">Monitor: <label><input type="radio" name="mon" value="anthropic" checked> Claude Haiku (Anthropic)</label><label><input type="radio" name="mon" value="openrouter"> Flash-Lite (OpenRouter)</label></div>
+ <div class="toggles">Monitor: Claude Haiku (Anthropic API). <span class="hint">The OpenRouter key is over its limit (every look was HTTP 403), so Flash-Lite is off.</span><input type="hidden" name="mon" value="anthropic"></div>
  <button class="big go" onclick="go()">▶ Start (someone at the e-stop)</button>`}
 function sp(){const t=$("p").value.trim();if(t)post("/api/prompt",{text:t}).then(j=>j.ok&&($("p").value=""))}
 function ss(){const t=$("s").value.trim();if(t)post("/api/say",{text:t}).then(j=>j.ok&&($("s").value=""))}
 function go(){const st=[...document.querySelectorAll(".g:checked")].map(x=>x.value);if(!st.length)return alert("pick at least one stage");
  if(!confirm(`LIVE run: ${{ft:"fine-tune",engine:"prompt engine",base:"base Dream-1"}[model]}, ${st.join(" + ")}. Someone at the e-stop?`))return;
- run=null;next=0;$("tl").innerHTML="";post("/api/start",{model,stages:st,match:$("m").checked,monitor:document.querySelector("input[name=mon]:checked").value})}
+ run=null;next=0;$("tl").innerHTML="";post("/api/start",{model,stages:st,match:$("m").checked,monitor:"anthropic"})}
 function steps(){$("steps").innerHTML=stageOrder.map(s=>`<span class="step ${stageState[s]||""}">${esc(nice(s))}</span>`).join("")}
 function story(e){const v=e.event,S=nice(e.stage);
  switch(v){
