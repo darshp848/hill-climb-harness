@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -40,12 +41,58 @@ class MonitorVerdict(Verdict):
     watch_ok: bool | None = None  # only for stages with a watcher arm
     frames_sig: str | None = None  # digest of the newest frames this verdict was computed on
     tower: list[str] | None = None  # the tower the monitor sees, bottom to top (stacking stages with a tower_target)
+    next_prompt: str | None = None  # the monitor's own instruction for the robot (plan.rewrite_prompts)
+    latency_s: float | None = None  # how long the Claude call took
 
 
 def valid_jpeg(data: bytes) -> bool:
     """SOI at the start and EOI near the end. A truncated or garbage frame makes the API answer 400 for the whole
     request, and the stage-start frame is in every request of the stage, so one bad frame would blind a stage."""
     return isinstance(data, (bytes, bytearray)) and len(data) > 4 and data[:2] == b"\xff\xd8" and b"\xff\xd9" in data[-32:]
+
+
+STITCH_TILE_W = 384     # 4 tiles a row: 1536 px wide, under the API's 1568 px long edge, so nothing is rescaled
+STITCH_COLS = 4
+
+
+def stitch(images: list[tuple[str, bytes]]) -> bytes | None:
+    """All the check's frames as one labelled grid JPEG (tile n shows "n. label"), in order. One mid-size image costs
+    the model far fewer tokens than ~10 separate ones, so the answer comes sooner. None when Pillow can't decode."""
+    try:
+        import io
+
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+    tiles = []
+    for label, jpeg in images:
+        try:
+            im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+        except Exception:  # noqa: BLE001 - a bad frame is left out, not fatal
+            continue
+        h = max(1, round(im.height * STITCH_TILE_W / im.width))
+        tiles.append((label, im.resize((STITCH_TILE_W, h))))
+    if not tiles:
+        return None
+    th = max(t.height for _, t in tiles)
+    rows = (len(tiles) + STITCH_COLS - 1) // STITCH_COLS
+    cols = min(STITCH_COLS, len(tiles))
+    sheet = Image.new("RGB", (cols * STITCH_TILE_W + (cols - 1) * 4, rows * th + (rows - 1) * 4), "white")
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.load_default(size=15)
+    except TypeError:
+        font = ImageFont.load_default()
+    for i, (label, im) in enumerate(tiles):
+        x, y = (i % STITCH_COLS) * (STITCH_TILE_W + 4), (i // STITCH_COLS) * (th + 4)
+        sheet.paste(im, (x, y))
+        text = f"{i + 1}. {label}"
+        box = draw.textbbox((x + 4, y + 3), text, font=font)
+        draw.rectangle((box[0] - 3, box[1] - 2, box[2] + 3, box[3] + 2), fill="black")
+        draw.text((x + 4, y + 3), text, fill="white", font=font)
+    out = io.BytesIO()
+    sheet.save(out, "JPEG", quality=85)
+    return out.getvalue()
 
 
 def frames_digest(frames: dict[str, bytes]) -> str:
@@ -73,6 +120,7 @@ class ManualVerifier:
         self._lock = threading.Lock()
         self._pending: str | None = None
         self._announced: set[str] = set()
+        self.on_text: Callable[[str], None] | None = None
         self._thread = threading.Thread(target=self._read_loop, name="manual-verifier", daemon=True)
         self._thread.start()
 
@@ -85,6 +133,8 @@ class ManualVerifier:
                         self._pending = key
                 elif key == "s" and self._on_stop is not None:
                     self._on_stop()
+                elif key and self.on_text is not None:
+                    self.on_text(line.strip())   # anything else is the operator talking (harness.operator)
         except (ValueError, OSError):
             return
 
@@ -172,6 +222,16 @@ MONITOR_SCHEMA = (
     '"holding": {"left": str, "right": str}, "recovery": <index into the recovery menu or null>, '
     '"scene_ok": bool, "confidence": 0..1, "reason": str}')
 GUARD_SCHEMA = MONITOR_SCHEMA[:-1] + ', "guard": bool}'
+# plan.rewrite_prompts: the monitor's diagnosis becomes the robot's next instruction. Base Dream-1 follows a change of
+# object or step well and ignores fine adjustments ("1 cm higher"), so it is asked for a whole short instruction.
+NEXT_PROMPT_RULE = (
+    'next_prompt: only with status "stalled" or "failing", when the robot is on the wrong object or wrong step, '
+    'plainly stuck, or about to fail (e.g. its arm is about to hit the tower), write ONE short instruction for the '
+    'robot that replaces the last prompt: max 200 characters, plain words, one action, naming objects by colour and '
+    'position, e.g. "pick up the yellow block and place it gently on top of the pink block". It must ask for something '
+    'different from the last prompt (another object, another step), never the same request reworded: every new prompt '
+    'makes the robot start its motion over. Follow the system rules and any operator feedback. Otherwise null.')
+NEXT_PROMPT_MAX_CHARS = 300
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -292,6 +352,8 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
     watch_ok = obj.get("watch_ok") if isinstance(obj.get("watch_ok"), bool) else None
     tower = obj.get("tower")
     tower = [str(x) for x in tower] if isinstance(tower, list) else None
+    nxt = obj.get("next_prompt")
+    nxt = " ".join(nxt.split())[:NEXT_PROMPT_MAX_CHARS] if isinstance(nxt, str) and nxt.strip() else None
     holding = obj.get("holding")
     if isinstance(holding, dict):
         holding = {str(k): str(v) for k, v in holding.items()}
@@ -306,7 +368,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
             reason = f"low confidence: {reason}"
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
                           recovery=rec, scene_ok=scene, holding=holding, guard=guard, watch_ok=watch_ok,
-                          tower=tower)
+                          tower=tower, next_prompt=nxt)
 
 
 class MonitorVerifier:
@@ -325,20 +387,29 @@ class MonitorVerifier:
         self.model = model or plan.claude.get("model", "claude-haiku-5-5")
         self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 4000))
         self.grip_note = ""   # set by the runner from /arms before each check (station_addons)
+        self.operator_notes: list[str] = []   # feedback typed by the operator during the run (harness.operator)
         self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
         if transport is None:
             transport = default_transport(timeout_s, api_key, "MonitorVerifier")
         self._transport = transport
         self._lock = threading.Lock()
         self._gen = 0
-        self._busy = False
+        # claude.parallel: calls in flight at once, launched at least latency/parallel apart, so with 2 a verdict
+        # lands about twice as often (a call took ~10 s on the station on 8 Nov). The newest launched result wins.
+        self.max_inflight = max(1, int(user.get("parallel", 1)))
+        self.stitch = bool(user.get("stitch", False))   # claude.stitch: one labelled grid image per check
+        self._inflight = 0
+        self._seq = self._result_seq = 0
+        self._last_launch = 0.0
+        self._latency: float | None = None
+        self._threads: list[threading.Thread] = []
         self._result: MonitorVerdict | None = None
         self._stage: str | None = None
         self._first: dict[str, tuple[float, bytes]] = {}
         self._history: dict[str, list[tuple[float, bytes]]] = {}
         self._last_prompt: str | None = None
-        self._thread: threading.Thread | None = None
         self._guard_alert = False   # a guard "yes" whose verdict was dropped (stage or prompt changed in flight)
+        self.guard_answers = 0      # every yes/no guard answer, kept or dropped: the runner's "not blind" signal
         # Optional local detector (harness.detect.TableDetector): draws labelled boxes on the frames sent to Claude
         self.annotator: Callable[[dict[str, bytes]], dict[str, bytes]] | None = None
         self.legend = ""
@@ -346,6 +417,10 @@ class MonitorVerifier:
 
     def __repr__(self) -> str:
         return f"MonitorVerifier(model={self.model!r})"
+
+    @property
+    def _busy(self) -> bool:   # experiments/stress_match.py reads it
+        return self._inflight > 0
 
     # -- hooks the runner calls -----------------------------------------------------------------
     def notify_prompt_change(self, prompt: str) -> None:
@@ -362,10 +437,9 @@ class MonitorVerifier:
 
     def wait_idle(self, timeout_s: float = 5.0) -> bool:
         """Tests: wait for the call in flight (if any)."""
-        t = self._thread
-        if t is not None:
+        for t in list(self._threads):
             t.join(timeout_s)
-        return not self._busy
+        return self._inflight == 0
 
     # -- frames and payload ---------------------------------------------------------------------
     @staticmethod
@@ -390,6 +464,9 @@ class MonitorVerifier:
             lines.append(self.legend)
         if getattr(self, "grip_note", ""):
             lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
+        if self.operator_notes:
+            lines.append("Operator feedback during this run (newest last; follow it):")
+            lines += [f"  - {n}" for n in self.operator_notes[-8:]]
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
         lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
         menu = stage.menu()
@@ -409,6 +486,8 @@ class MonitorVerifier:
             lines.append(f"Target tower, bottom to top: {target}. Report the tower you see as `tower`: a list of its "
                          "pieces bottom to top, worded like the target (empty list if there is no tower).")
             schema = schema.rstrip()[:-1] + ', "tower": [str]}'
+        if self.plan.rewrite_prompts:
+            schema = schema.rstrip()[:-1] + ', "next_prompt": str|null}\n' + NEXT_PROMPT_RULE
         if stage.watch is not None:
             lines.append(f"Watcher check (answer it as watch_ok, from the {stage.watch.camera} images): "
                          f"{stage.watch.check}")
@@ -457,13 +536,24 @@ class MonitorVerifier:
                 self._history[role] = (self._history.get(role, []) + [(elapsed_s, frames[role])])[-self.history_frames:]
         images += [(label(elapsed_s, r, "newest"), j) for r, j in wrists.items() if r not in tracked_roles]
         content: list[dict[str, Any]] = []
+        # Stitch the history (stage start and earlier frames) into one grid; the newest frames stay full size,
+        # since the small details that decide a stage (a plug in its port) are in them.
+        old = [(lb, j) for lb, j in images if "(newest)" not in lb]
+        sheet = stitch(old) if self.stitch and len(old) > 1 else None
+        if sheet is not None:
+            listing = "; ".join(f"{i}. {label}" for i, (label, _) in enumerate(old, 1))
+            images = [(f"Earlier frames in ONE image, a grid of numbered tiles read left to right, top to bottom: "
+                       f"{listing}", sheet)] + [(lb, j) for lb, j in images if "(newest)" in lb]
         for label, jpeg in images:
             content.append({"type": "text", "text": label})
             content.append({"type": "image", "source": {
                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
-        return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
+        payload = {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
+                   "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
+        if self.plan.system_prompt:
+            payload["system"] = self.plan.system_prompt
+        return payload
 
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         payload = dict(payload)
@@ -479,29 +569,40 @@ class MonitorVerifier:
         except Exception as exc:  # any failure means "can't tell"
             return MonitorVerdict(None, 0.0, f"monitor error: {type(exc).__name__}: {str(exc)[:200]}")
 
-    def _run_async(self, gen: int, payload: dict[str, Any], menu_len: int) -> None:
+    def _run_async(self, gen: int, seq: int, payload: dict[str, Any], menu_len: int) -> None:
+        t0 = time.monotonic()
         verdict = self._call(payload, menu_len)
+        verdict.latency_s = round(time.monotonic() - t0, 2)
         with self._lock:
-            if gen == self._gen:
-                self._result = verdict
+            self._latency = verdict.latency_s
+            if isinstance(verdict.guard, bool):
+                self.guard_answers += 1
+            if gen == self._gen and seq > self._result_seq:
+                self._result, self._result_seq = verdict, seq
             elif verdict.guard is True:
-                self._guard_alert = True
-            self._busy = False
+                self._guard_alert = True   # dropped (stale, or older than a delivered one), but a yes still counts
+            self._inflight -= 1
 
     # -- Verifier protocol ----------------------------------------------------------------------
     def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
         with self._lock:
-            payload = None if self._busy else self._build(stage, frames, elapsed_s)
+            now = time.monotonic()
+            gap = (self._latency or 0.0) / self.max_inflight if self.max_inflight > 1 else 0.0
+            launch = self._inflight < self.max_inflight and (self._inflight == 0 or now - self._last_launch >= gap)
+            payload = self._build(stage, frames, elapsed_s) if launch else None
             if self._stage != stage.name:  # busy, so _build did not run
                 self._stage, self._first, self._history = stage.name, {}, {}
                 self._gen += 1
                 self._result = None
             verdict, self._result = self._result, None
             if payload is not None:
-                self._busy = True
-                self._thread = threading.Thread(target=self._run_async, args=(self._gen, payload, len(stage.menu())),
-                                                name="monitor-call", daemon=True)
-                self._thread.start()
+                self._inflight += 1
+                self._seq += 1
+                self._last_launch = now
+                t = threading.Thread(target=self._run_async, args=(self._gen, self._seq, payload, len(stage.menu())),
+                                     name="monitor-call", daemon=True)
+                self._threads = [x for x in self._threads if x.is_alive()] + [t]
+                t.start()
         if verdict is not None:
             return verdict
         if not frames:

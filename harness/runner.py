@@ -32,6 +32,15 @@ MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-s
 REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
 HOME_RESERVE_S = 30.0      # /home can't be cancelled (the station refuses /stop while homing): need this much left
 CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
+REWRITE_COOLDOWN_S = 15.0  # no monitor-written prompt sooner than this after any prompt change
+REWRITE_MAX = 3            # monitor-written prompts per attempt
+# Dream's eef IK fails now and then ("SVD did not converge"); a plain /start after it often failed again on the
+# station, a /reset (grippers open, arms to the start pose) and the same prompt got past it. At most this many a run.
+RESET_ERRORS = ("SVD did not converge", "LinAlgError")
+AUTO_RESET_MAX = 2
+# Dream overwrites its run record (last-run.csv, last-run_inputs/) on every /start; the station's archiver copies it
+# when it sees the station not running, polling every 3 s. Run 2 (8 Nov) restarted faster and lost 9 min of record.
+ARCHIVE_WAIT_S = 4.0
 
 
 @dataclass
@@ -49,6 +58,7 @@ class _Attempt:
     reason: str
     max_progress: float | None = None
     recovery_hint: int | None = None   # the monitor's chosen recovery index, if any
+    operator: bool = False             # the operator ended it: no recovery, no retry
 
 
 @dataclass
@@ -166,6 +176,11 @@ class Runner:
             self.shadow = Shadow.from_plan(plan.decide)
         except Exception as exc:  # noqa: BLE001 (the shadow must never stop a run)
             log.event("warning", message=f"decide shadow off: {exc}")
+        self._auto_resets = 0
+        self._done_in_recovery: str | None = None
+        self.operator: Any = None   # harness.operator.Operator: the operator's typed words, turned into actions
+        self._skip: set[str] = set()   # later stages the operator asked to skip
+        self._stage_name = ""
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -180,8 +195,25 @@ class Runner:
         self.log.event("run_start", task=self.plan.task, dry_run=dry, stages=[s.name for s in self.plan.stages])
         try:
             self._preflight()
-            for i, stage in enumerate(self.plan.stages):
-                results.append(self._run_stage(stage, first=(i == 0)))
+            if self.operator is not None:
+                self.operator.status = self._status_line
+                self.operator.frames = self.frames.latest
+            first = True
+            if self.plan.reset_first:
+                self._reset_and_wait("before the first stage: both grippers open")
+            for stage in self.plan.stages:
+                self._apply_operator()
+                if stage.requires_stage and not any(r.name == stage.requires_stage and r.ok for r in results):
+                    reason = f"{stage.requires_stage} did not pass"   # e.g. no cable came out: nothing to put down
+                    self.log.event("stage_skipped", stage=stage.name, reason=reason)
+                    results.append(StageResult(stage.name, False, 0, 0.0, reason))
+                    continue
+                if stage.name in self._skip:
+                    self.log.event("stage_skipped", stage=stage.name, reason="operator asked to skip it")
+                    results.append(StageResult(stage.name, False, 0, 0.0, "skipped by operator"))
+                    continue
+                results.append(self._run_stage(stage, first=first))
+                first = False
             failed = [r.name for r in results if not r.ok]
             ok, reason = (not failed), ("completed" if not failed else f"completed with failed stages: {', '.join(failed)}")
             self._safe_stop("end of plan")
@@ -265,6 +297,8 @@ class Runner:
         st = self.station.status()
         if st.get("state") == "error":
             self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
+            self._maybe_reset(st.get("last_error"))
+            self._nap(ARCHIVE_WAIT_S)
             return self._start_run(self._prompt)
         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
         if dead:
@@ -337,6 +371,49 @@ class Runner:
             if st.get("state") != "error":
                 return st
             self._on_station_error(st.get("last_error"))   # a refusal or fault on the way up: retry or raise
+            self._maybe_reset(st.get("last_error"))
+            self._nap(ARCHIVE_WAIT_S)
+
+    def _reset_and_wait(self, why: str) -> None:
+        reset = getattr(self.station, "reset", None)
+        if reset is None:   # a stand-in station without /reset (experiments.stress SimStation)
+            self.log.event("reset_unavailable", why=why)
+            return
+        self.log.event("reset", why=why)
+        reset()
+        self._nap(1.0)   # let the station leave idle before waiting for it to come back
+        self._wait({"idle"}, START_TIMEOUT_S, "idle after reset")
+
+    def _maybe_reset(self, error: Any) -> None:
+        """Before restarting after Dream's transient IK error: /reset and wait for idle (at most AUTO_RESET_MAX)."""
+        text = _error_text(error)
+        if self._auto_resets < AUTO_RESET_MAX and any(k in text for k in RESET_ERRORS):
+            self._auto_resets += 1
+            self.log.event("auto_reset", error=_err(error), n=self._auto_resets, prompt=self._prompt)
+            self._reset_and_wait(f"auto reset {self._auto_resets} after: {_err(error)}")
+
+    def _status_line(self) -> str:
+        return f"stage {self._stage_name or '(none yet)'}, robot prompt: {self._prompt or '(none)'}, " \
+               f"{self._clock() - self._t0:.0f} s into the run of {self.plan.time_budget_s:g} s"
+
+    def _apply_operator(self) -> tuple[bool, list[str]]:
+        """Takes the operator's queued actions: notes go to the monitor, skips are kept. Returns (end the current
+        stage, prompts to send now)."""
+        if self.operator is None:
+            return False, []
+        acts = self.operator.take()
+        if acts.skip_stages:
+            self._skip |= acts.skip_stages
+            self.log.event("operator_action", action="skip_stages", stages=sorted(acts.skip_stages))
+        monitors = {id(m): m for v in self.verifiers.values() for m in (v, getattr(v, "second", None))
+                    if hasattr(m, "operator_notes")}
+        for note in acts.notes:
+            self.log.event("operator_action", action="note", note=note)
+            for m in monitors.values():
+                m.operator_notes.append(note)
+        if acts.end_current_stage:
+            self.log.event("operator_action", action="end_current_stage", stage=self._stage_name)
+        return acts.end_current_stage, acts.prompts
 
     def _issue(self, prompt: str, why: str, *, force_start: bool = False) -> None:
         """Gets `prompt` to the robot: set_prompt on a running station, else a fresh start. Logs a prompt_change
@@ -383,15 +460,22 @@ class Runner:
         """Grip by feel from /arms: commanded closed and stopped partway -> holding; closed fully -> empty."""
         getter = getattr(self.station, "grippers", None)
         arms = getter() if getter else {}
+        # Readings on this station (8 Nov run): right shut on nothing 0.03-0.06, right on a USB plug 0.07-0.09 (a
+        # plug is thin), left idle and shut 0.09-0.14. So only <= 0.06 means empty for sure; up to 0.15 it is a thin
+        # object or nothing, and the wrist image decides. commanded_gripper is null until a run commands it.
         notes = []
         for side, g in sorted((arms or {}).items()):
             cmd, got = g.get("commanded_gripper"), g.get("gripper")
-            if cmd is None or got is None:
+            if got is None:
                 continue
-            if cmd > 0.15:
-                notes.append(f"{side} gripper open ({got:.2f})")
+            if cmd is not None and cmd > 0.15:
+                notes.append(f"{side} gripper commanded open ({got:.2f})")
             elif got <= 0.06:
-                notes.append(f"{side} gripper closed fully on nothing ({got:.2f}): it is NOT holding anything")
+                notes.append(f"{side} gripper shut on nothing ({got:.2f}): it is NOT holding anything")
+            elif got <= 0.15:
+                notes.append(f"{side} gripper nearly shut ({got:.2f}): a thin plug or nothing, judge from its wrist image")
+            elif cmd is None:
+                notes.append(f"{side} gripper opening {got:.2f}")
             else:
                 notes.append(f"{side} gripper commanded closed but stopped at {got:.2f}: it is holding something")
         return "; ".join(notes)
@@ -402,9 +486,10 @@ class Runner:
             verifier.grip_note = self._grip_note()
         fn = getattr(verifier, "check_now", verifier.check) if sync else verifier.check
         try:
-            return fn(stage, frames, elapsed)
+            verdict = fn(stage, frames, elapsed)
         except Exception as exc:
             return Verdict(None, 0.0, f"verifier raised {type(exc).__name__}: {exc}")
+        return verdict
 
     def _note_progress(self, stage: Stage, verdict: Verdict, st: dict[str, Any]) -> None:
         """Tracks monitor progress; logs the first check after a prompt change where it moved."""
@@ -424,7 +509,7 @@ class Runner:
     def _log_verdict(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, saved: list[str],
                      st: dict[str, Any]) -> None:
         extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding", "guard",
-                                                   "tower")
+                                                   "tower", "next_prompt", "latency_s")
                  if getattr(verdict, k, None) is not None}
         tower = getattr(verdict, "tower", None)
         if tower is not None:
@@ -455,10 +540,22 @@ class Runner:
         consec_unwatched, watch_fixes = 0, 0
         if self.shadow is not None:
             self.shadow.start(stage.timeout_s, stage.stall_s, confirm)
+        rewrites, last_prompt_t = 0, 0.0
         while True:
             self._nap(self.plan.check_every_s)
             st = self._poll_health()
             elapsed = self._clock() - t0
+            end_now, prompts = self._apply_operator()
+            if end_now:
+                if prompts and self.operator is not None:   # "skip this, do the balls": the prompt is for the next stage
+                    with self.operator._lock:
+                        self.operator._actions.prompts[:0] = prompts
+                return _Attempt(False, "operator ended the stage", max_p, hint, operator=True)
+            for prompt in prompts:
+                self._issue(prompt, "operator")
+                rewrites = REWRITE_MAX   # the operator's prompt stands: no monitor rewrite undoes it (run 3)
+                last_prompt_t, consec_done, consec_fail, consec_stalled = elapsed, 0, 0, 0
+                gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
             if st.get("state") == "idle":
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
             if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
@@ -496,8 +593,10 @@ class Runner:
                     take = getattr(verifier, "take_guard_alert", None)
                     if answer is not True and take is not None and take():
                         answer = True   # a yes from a call that was in flight across a stage or prompt change
-                    if isinstance(answer, bool):
-                        self._guard_answer_t = self._clock()
+                    n = getattr(verifier, "guard_answers", None)
+                    if isinstance(answer, bool) or (isinstance(n, int) and n != getattr(self, "_guard_n", n)):
+                        self._guard_answer_t = self._clock()   # an answer dropped by a prompt change still saw
+                    self._guard_n = n                           # the scene: the guard is not blind
                     if answer is True:
                         consec_guard += 1
                         self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
@@ -515,6 +614,24 @@ class Runner:
                     raise _Guard(f"guard blind in stage {stage.name!r}: no answer for {guard.max_blind_s:g} s")
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
+                nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts else None
+                if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
+                        and last_done_t is None and rewrites < REWRITE_MAX
+                        and elapsed - last_prompt_t >= REWRITE_COOLDOWN_S and nxt != self._prompt):
+                    # The monitor's diagnosis as the robot's next instruction. Its verdict was on the old prompt,
+                    # so the counters and the stall clock start over, after the stage's settle time.
+                    prefix = self.plan.prompt_prefix
+                    if prefix and stage.prompt.startswith(prefix) and not nxt.startswith(prefix):
+                        nxt = f"{prefix} {nxt}"
+                    rewrites, last_prompt_t = rewrites + 1, elapsed
+                    self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, n=rewrites, prompt=nxt,
+                                   previous=self._prompt, reason=verdict.reason)
+                    refused = self._try_issue(nxt, f"monitor next_prompt ({verdict.reason[:120]})")
+                    if refused:
+                        self._issue(stage.prompt, "back to the stage prompt after a refused rewrite")
+                    consec_done = consec_fail = consec_stalled = 0
+                    gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
+                    continue
                 if monitor:
                     self._note_progress(stage, verdict, st)
                     if verdict.recovery is not None:
@@ -575,10 +692,11 @@ class Runner:
                         return _Attempt(False, why, max_p, hint)
                 elif verdict.done is not None or monitor:
                     consec_done = consec_fail = 0
-                if stage.stall_s is not None and consec_stalled >= confirm:
+                if stage.stall_s is not None and consec_stalled >= confirm and last_done_t is None:
                     return _Attempt(False, "stalled: monitor says stalled", max_p, hint)
-            if (stage.stall_s is not None and last_rise is not None and elapsed >= gate
-                    and elapsed - last_rise >= stage.stall_s):
+            # No stall once done was seen or progress is at the top: a finished stage cannot "rise" any further.
+            if (stage.stall_s is not None and last_rise is not None and elapsed >= gate and last_done_t is None
+                    and (max_p or 0) < 0.95 and elapsed - last_rise >= stage.stall_s):
                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
                                 max_p, hint)
             if elapsed >= stage.timeout_s:
@@ -624,7 +742,7 @@ class Runner:
 
     def _reset_scene(self, stage: Stage, rec: Recovery, verifier: Verifier) -> tuple[bool, str]:
         """kind reset: run the recovery prompt, then wait (up to the cap) for the verifier's scene_ok."""
-        cap = min(stage.timeout_s / 2, 20.0)
+        cap = min(stage.timeout_s / 2, 12.0)
         settle = min(rec.settle_s, cap)
         t0 = self._clock()
         scene: bool | None = None
@@ -636,6 +754,8 @@ class Runner:
                 frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 self._note_progress(stage, verdict, st)
+                if verdict.done is True and verdict.confidence >= SKIP_MIN_CONFIDENCE:
+                    self._done_in_recovery = verdict.reason   # 8 Nov: the plug was out here and nobody looked
                 ok = getattr(verdict, "scene_ok", None)
                 if ok is not None:
                     scene = ok
@@ -716,6 +836,15 @@ class Runner:
                        confidence=verdict.confidence, reason=verdict.reason, run=bool(ok))
         return bool(ok)
 
+    def _confirm_done(self, stage: Stage, verifier: Verifier) -> bool:
+        """A second, synchronous look after a recovery's scene check saw the stage done (the two-look rule)."""
+        frames = self._frames_for_check(stage)
+        verdict = self._ask(verifier, stage, frames, 0.0, sync=True)
+        ok = verdict.done is True and bool(frames) and verdict.confidence >= SKIP_MIN_CONFIDENCE
+        self.log.event("recovery_done_check", stage=stage.name, done=verdict.done, confidence=verdict.confidence,
+                       reason=verdict.reason, passed=ok)
+        return ok
+
     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
         """skip_if_done: one synchronous look before the prompt is sent."""
         frames = self._frames_for_check(stage)
@@ -743,7 +872,9 @@ class Runner:
         if n == 0:
             n = 1   # an empty tower: the first target piece is the base, so the next to place is the second
         name = plan.tower_target[n].split(",")[0].strip()
+        top = plan.tower_target[n - 1].split(",")[0].strip()
         prompt = next(v for k, v in plan.tower_prompts.items() if name.endswith(k)).replace("<piece>", name)
+        prompt = prompt.replace("<top>", top)
         self.log.event("tower_prompt", stage=stage.name, tower=self._tower, next=name, prompt=prompt,
                        order_ok=tower_matches(self._tower, plan.tower_target))
         return prompt
@@ -808,6 +939,7 @@ class Runner:
             raise _Fail(f"stage {stage.name!r}: no {stage.verifier!r} verifier configured")
         self._check_global()
         self._last_progress = None
+        self._stage_name = stage.name
         self.log.event("stage_start", stage=stage.name, prompt=stage.prompt)
         lg = self.live_guard
         if lg is not None:
@@ -837,6 +969,9 @@ class Runner:
                 out = self._attempt(stage, verifier, attempts, self._prompt or stage.prompt)
             if out.ok:
                 return StageResult(stage.name, True, attempts, self._clock() - t0, out.reason)
+            if out.operator:
+                self.log.event("stage_skipped", stage=stage.name, reason=out.reason)
+                return StageResult(stage.name, False, attempts, self._clock() - t0, out.reason)
             reason, hint = out.reason, out.recovery_hint
             if stage.on_fail == "abort":
                 raise _Fail(f"stage {stage.name!r} failed (on_fail abort): {reason}")
@@ -851,7 +986,11 @@ class Runner:
                     break
                 uses[idx] = uses.get(idx, 0) + 1
                 last_rec = idx
+                self._done_in_recovery = None
                 scene_ok, rreason = self._recover(stage, verifier, attempts, idx)
+                if self._done_in_recovery and self._confirm_done(stage, verifier):
+                    return StageResult(stage.name, True, attempts, self._clock() - t0,
+                                       f"done during recovery: {self._done_in_recovery}")
                 if scene_ok:
                     break
                 attempts += 1

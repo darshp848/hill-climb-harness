@@ -14,11 +14,11 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -58,6 +58,7 @@ class Stage:
     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     watch: Watch | None = None
+    requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -146,12 +147,21 @@ class Plan:
     tower_target: list[str] = field(default_factory=list)
     # Optional: name the next piece in the prompt instead of the stage's generic one. Shape word -> template with
     # <piece>, e.g. {"cube": "put the <piece> on top of the stack"}. The piece is the target's next entry after the
-    # tower the monitor last reported. Off (empty) for a fine-tune that only knows its recorded texts.
+    # tower the monitor last reported; an optional <top> names the piece it goes on. Off (empty) for a fine-tune
+    # that only knows its recorded texts.
     tower_prompts: dict[str, str] = field(default_factory=dict)
     start_pose: StartPose | None = None
     # Optional weights for harness.decide's shadow run ({done: {...}, fail: {...}}); None = today's rules as weights.
     # The shadow only logs `decide` events next to the runner's own calls; it never decides anything.
     decide: dict[str, Any] | None = None
+    system_prompt: str = ""        # the monitor's system prompt: station rules and lessons from testing
+    # Let the monitor write the robot's next prompt (its `next_prompt`), with a cooldown and a cap per attempt.
+    # Base Dream-1 only: a fine-tune follows only its recorded task texts.
+    rewrite_prompts: bool = False
+    # A sentence a rewritten prompt must open with when the stage's own prompt opens with it (Dream refuses cable
+    # work without the "no power" sentence); added when the monitor drops it.
+    prompt_prefix: str = ""
+    reset_first: bool = False      # POST /reset and wait for idle before the first stage: both grippers start open
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -259,6 +269,9 @@ def parse_plan(data: Any) -> Plan:
         label = f"stage {name!r}"
         if name in seen:
             raise ValueError(f"{label}.name: duplicate stage name")
+        prerequisite = raw.get("requires_stage")
+        if prerequisite is not None and (not isinstance(prerequisite, str) or prerequisite not in seen):
+            raise ValueError(f"{label}.requires_stage: must name an earlier stage")
         seen.add(name)
         unknown = set(raw) - _STAGE_KEYS
         if unknown:
@@ -315,6 +328,7 @@ def parse_plan(data: Any) -> Plan:
                 camera_notes={k: v.strip() for k, v in notes.items()},
                 history_cameras=hist,
                 watch=watch,
+                requires_stage=prerequisite,
             )
         )
 
@@ -348,9 +362,19 @@ def parse_plan(data: Any) -> Plan:
     tower = data.get("tower_target") or []
     if not isinstance(tower, list) or not all(isinstance(x, str) and x.strip() for x in tower):
         raise ValueError("plan.tower_target: must be a list of pieces, bottom to top")
+    system_prompt = data.get("system_prompt", "") or ""
+    if not isinstance(system_prompt, str):
+        raise ValueError("plan.system_prompt: must be a string")
+    prefix = data.get("prompt_prefix", "") or ""
+    if not isinstance(prefix, str):
+        raise ValueError("plan.prompt_prefix: must be a string")
     return Plan(
         task=task,
         guard=guard,
+        system_prompt=system_prompt.strip(),
+        rewrite_prompts=_bool(data.get("rewrite_prompts", False), "plan.rewrite_prompts"),
+        prompt_prefix=prefix.strip(),
+        reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
         start_pose=_start_pose(data.get("start_pose"), [st.name for st in stages]),
@@ -380,7 +404,7 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
         name = piece.split(",")[0].strip()
         if not any(name.endswith(k) for k in raw):
             raise ValueError(f"plan.tower_prompts: no template for {name!r}")
-        prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name)
+        prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name).replace("<top>", name)
         _prompt(prompt, "plan.tower_prompts")
     return {k: v.strip() for k, v in raw.items()}
 

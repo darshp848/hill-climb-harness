@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import os
 import signal
@@ -13,10 +14,11 @@ from pathlib import Path
 from . import __version__
 from .frames import FrameSource
 from .log import RunLog
+from .operator import Operator, load_lessons
 from .plan import load_plan
 from .runner import Runner
 from .station_client import StationClient, StationError
-from .verifiers import ManualVerifier, Verifier, make_verifier
+from .verifiers import ManualVerifier, MonitorVerifier, Verifier, make_verifier
 
 SAFETY = """\
 LIVE RUN. This drives the real robot through the station agent.
@@ -52,6 +54,17 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--claude-backend", choices=["api", "subscription"], default=None,
                    help="how the claude/monitor verifiers reach Claude: api (ANTHROPIC_API_KEY, the default) or "
                         "subscription (the logged-in `claude` CLI); same as $HARNESS_CLAUDE_BACKEND")
+    p.add_argument("--skip", action="append", default=[], metavar="PREFIX",
+                   help="drop the stages whose names start with PREFIX, e.g. --skip cable_ (repeatable; practice)")
+    p.add_argument("--checkpoint", default=None, help="override the plan's checkpoint, e.g. a fine-tune")
+    p.add_argument("--no-rewrite", action="store_true",
+                   help="never send monitor-written prompts (a fine-tune only follows its recorded task texts)")
+    p.add_argument("--budget", type=float, default=None, metavar="S",
+                   help="override the plan's time_budget_s (practice; a match is 295 s)")
+    p.add_argument("--lessons", default="lessons/operator.md", metavar="FILE",
+                   help="operator lessons: read into the monitor's system prompt, and new ones appended")
+    p.add_argument("--no-operator", action="store_true",
+                   help="ignore typed lines other than s (stop). Use this in a match: any human input is a DQ")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
                    help="fill a {NAME} placeholder in the plan, e.g. --var color=orange (repeatable)")
     return p
@@ -73,6 +86,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.claude_backend:
         os.environ["HARNESS_CLAUDE_BACKEND"] = args.claude_backend
+    if args.skip:
+        plan.stages = [st for st in plan.stages if not any(st.name.startswith(x) for x in args.skip)]
+        if not plan.stages:
+            print("plan error: --skip removed every stage", file=sys.stderr)
+            return 2
+    if args.budget:
+        plan.time_budget_s = args.budget
+    if args.checkpoint:
+        plan.checkpoint = args.checkpoint
+    if args.no_rewrite:
+        plan.rewrite_prompts = False
+    lessons_path = None if args.no_operator else Path(args.lessons)
+    lessons = load_lessons(lessons_path)
+    if lessons:
+        plan.system_prompt = (plan.system_prompt + "\n\n" if plan.system_prompt else "") + \
+            "LESSONS FROM THE OPERATOR IN EARLIER TEST RUNS (follow them)\n" + lessons
     if args.verifier:
         for stage in plan.stages:
             stage.verifier = args.verifier
@@ -109,7 +138,13 @@ def main(argv: list[str] | None = None) -> int:
             host=socket.gethostname())
         dry = args.dry_run
         station = StationClient(station_url, dry_run=dry, log=lambda m: (print(m), log.event("dry_run", message=m))[0])
-        frames = FrameSource(view_url)
+        # Small single frames from the station's /frame add-on, not whole debug-view round trips: those carry every
+        # camera's 9-frame window (~2 MB a check) over the station's Wi-Fi and slowed Dream from ~0.8 s to 2-6 s.
+        # The debug view is the fallback (no add-on, or HARNESS_FRAMES=view; the mock station has only the view).
+        light = os.environ.get("HARNESS_FRAMES", "view" if args.mock else "station") == "station"
+        frames = FrameSource(view_url, station_url=station_url if light else None)
+        log.update_manifest(frames="station /frame (light)" if light else "debug view /trip",
+                            skipped_prefixes=args.skip, lessons=str(lessons_path) if lessons else None)
 
         holder: dict[str, Runner] = {}
         manual = None
@@ -124,6 +159,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         runner = Runner(plan, station, frames, verifiers, log)
+        if not args.no_operator:
+            monitor = next((m for v in verifiers.values() for m in (v, getattr(v, "second", None))
+                            if isinstance(m, MonitorVerifier)), None)
+            op = Operator(plan, log, transport=monitor._transport if monitor else None,
+                          model=monitor.model if monitor else "claude-haiku-5-5", lessons_path=lessons_path)
+            log.listeners.append(op.record)
+            manual.on_text = op.submit
+            runner.operator = op
         if args.detect:
             from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
             det = TableDetector.from_file(args.detect)
@@ -176,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
             pass
         mode = "DRY RUN" if dry else ("MOCK" if args.mock else "LIVE")
         print(f"{mode}: {plan.task or '(no task)'}  [{len(plan.stages)} stages]  type s + Enter to stop")
+        if runner.operator is not None:
+            print("Type anything else to talk to the harness (\"skip the next step\", \"why did it grab the pink one?\", "
+                  "\"approach the tower slower next time\"). Testing only: human input in a match is a DQ.")
         try:
             result = runner.run()
         except StationError as exc:

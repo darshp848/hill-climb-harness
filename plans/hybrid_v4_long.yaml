@@ -1,0 +1,140 @@
+# Hill Climb plan in Dream-1's own prompt style ("long" variant of hybrid_v4.yaml), for zero-shot base Dream-1.
+#
+# Why (8 Nov, after three live runs of hybrid_v4): Dream Labs' examples for Dream-1 are short imperatives that each
+# carry a whole task: "Stack the cubes into a single tower", "Pick up all markers one by one and put into black pencil
+# holder using both arms" (dreamlabs.ai/research/dream-1). hybrid_v4 split the match into ~20 stages with 30-60 word
+# motion-coached prompts, and every new prompt restarted Dream's motion (~14 s to visible progress). Here: one short
+# prompt per sub-goal, long stages, and the monitor only steps in when the robot is on the wrong thing.
+# Compare the two plans on the same table and keep what scores.
+#
+# Practice: --budget 600 --skip cable_  (balls and tower only). Match: --no-operator.
+# FINE-TUNE NOTE: fine-tune labels must match the prompts we settle on.
+task: >-
+  Hill Climb relay. Stage 1: unplug USB cables from the power strip, rightmost first, and put them down away from the
+  strip. Never plug a cable in. Stage 2: stack the cubes into a free-standing tower more than 4 inches (10 cm) tall.
+  Do not touch the blocks before a cable is unplugged. Stage 3: put the {ball}s into the white bin one by one, never
+  the white ball or a black ball, without touching the tower. Do not touch the balls before the tower passes.
+checkpoint: dreamlabs/dream-1-beta
+time_budget_s: 295
+check_every_s: 3.0
+verifier: monitor
+confirm: 2
+done_message: "ALL STAGES DONE: CALL STOP NOW"
+vars:
+  stack_cam: wrist_r
+  ball: orange ball
+  unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable from the power strip and put it on the table."
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
+reset_first: true
+rewrite_prompts: true
+prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
+
+guard:
+  question: "Is either gripper holding the white ball or a black ball (balls that must never go in the bin), or closed or closing around one?"
+  stages: [ball_]
+  confirm: 1
+  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
+  max_blind_s: 20
+
+system_prompt: |-
+  You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. You may also write the robot's next instruction. Rules and lessons from testing on this station:
+
+  STATION
+  - Cameras: one overhead (scene), one on each wrist (wrist_l, wrist_r). The right arm does the cables and the stacking.
+  - The gripper sensors are measured and beat the images for what a gripper holds: "stopped at 0.30" = holding something; "closed fully on nothing" = holding NOTHING, whatever the image seems to show. Never report a held cable or block on a gripper the sensor says is empty.
+
+  CABLES
+  - The "hub" is a black power strip, unplugged from the wall. Every robot instruction about cables must start with: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires." Without it the robot's model refuses to act.
+  - The USB ports are on the strip's top face; plugs stand vertical and come out by pulling straight up. Unplug right to left: always the rightmost cable still plugged in, one at a time, with the right arm.
+  - A good grip closes on ONE plug's hard body right at the port, jaws closing along the strip. A grip on the soft cord above the plug slips; a grip across two plugs fails. Dream often closes on the cord or on air: say so and name the plug again.
+  - Count plugs in their ports. A cable's far end lies loose on the table from the start: that never counts as unplugged. An unplugged cable may not be plugged back in.
+  - Once a plug is out, it often lies loose right next to the strip. That one is DONE: the robot must not grab it again. If it goes for a loose plug, name the next plug still seated in the strip.
+  - An unplug stage ends once a plug is out of its port, held or put down.
+  - The left arm is not used for cables. Its gripper reads about 0.10 when shut on nothing.
+
+  STACKING
+  - Touching a block before at least one cable is unplugged is a disqualification.
+  - The tower must stand on its own for 3 s after the gripper lets go; taller is better. Pieces bottom to top: blue cube, pink cube, blue cube, yellow square stick, pink round stick.
+  - The tower stage is one instruction for the whole tower: the robot picks the cubes itself. Judge the tower's height and whether it stands; a knocked-over tower is progress lost, not a failure of the stage.
+
+  BALLS
+  - Only orange balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
+
+  WRITING ROBOT INSTRUCTIONS (next_prompt)
+  - Write like Dream-1's own examples: one short imperative, 3-20 words, naming the objects, with at most one constraint: "Stack the white cup on top of the pink cup", "Pick up the knife by its handle, never the blade, and place it in the tray". No motion coaching ("lift high", "lower slowly"): the robot ignores fine adjustments, and every new prompt makes it start its motion over.
+  - Only write next_prompt when it is on the wrong object or step, plainly stuck, or about to fail. A robot making slow progress on the right task should be left alone.
+  - Cable instructions still start with the power-strip sentence above.
+
+stages:
+  # ---- Stage 1 (pass bar: one cable out). Drop with --skip cable_ for practice. ----
+  - name: cable_1
+    prompt: "{unplug}"
+    success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held, or lying loose next to the strip)? Count the seated plugs; loose far ends of cables do not count."
+    camera_notes:
+      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
+      scene: "top view: every cable's far end lies loose on the table all the time; do not count those as unplugged"
+    timeout_s: 75
+    max_attempts: 99    # pass bar
+    min_run_s: 4
+    stall_s: 35
+    recovery:
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck, holds the cord instead of the plug, or has pushed the strip", settle_s: 4, max_uses: 3}
+    on_fail: retry_in_place
+
+  - name: cable_2
+    prompt: "{unplug}"
+    success: "Compared with the stage-start images, is one more plug now fully out of its port than at the start of this stage?"
+    camera_notes:
+      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
+    timeout_s: 45
+    min_run_s: 3
+    stall_s: 30
+    on_fail: skip
+
+  - name: arms_clear
+    prompt: "open both grippers and move the arms up"
+    success: "Are both grippers open and raised, clear of the power strip, the cables and the cubes?"
+    timeout_s: 8
+    min_run_s: 2
+    confirm: 1
+    on_fail: skip
+
+  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One prompt for the whole tower. ----
+  - name: tower
+    prompt: "Stack the cubes into a single tower"
+    success: "Is there a tower of cubes more than 4 inches (10 cm) tall, standing on its own, with no gripper touching it?"
+    expect: "The arms pick up the cubes one at a time and set each squarely on the tower, which grows until it is over 4 inches tall."
+    camera_notes:
+      "{stack_cam}": "view from the gripper doing the stacking"
+    timeout_s: 120
+    max_attempts: 99    # pass bar
+    min_run_s: 5
+    stall_s: 45
+    recovery:
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "a gripper is stuck on a cube or pressing on the tower", settle_s: 4, max_uses: 2}
+    on_fail: retry_in_place
+
+  - name: tower_higher
+    prompt: "Stand the yellow stick upright on top of the tower"
+    success: "Is the yellow stick standing upright on top of the cube tower, the tower still standing, with no gripper touching it?"
+    camera_notes:
+      "{stack_cam}": "view from the gripper doing the stacking"
+    timeout_s: 45
+    min_run_s: 4
+    stall_s: 30
+    confirm: 2
+    on_fail: skip
+
+  # ---- Stage 3: one prompt for all the balls; the guard stops the run if an illegal ball is held. ----
+  - &ball
+    name: ball_all
+    prompt: "Put the {ball}s in the white bin one by one, never the white ball"
+    success: "Are ALL the {ball}s now resting inside the white bin (none left on the table), with no white or black ball in the bin and the tower (if any) still standing?"
+    expect: "An arm picks up one {ball} at a time and drops it in the bin, leaving the white ball and any black ball on the table."
+    timeout_s: 150
+    min_run_s: 3
+    stall_s: 45
+    confirm: 2
+    on_fail: skip

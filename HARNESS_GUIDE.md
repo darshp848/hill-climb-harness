@@ -301,6 +301,44 @@ dimos mcp list-tools                  # in another terminal
 
 **Rules:** an agent choosing stages live is not a human input. Still, check with the organizers before letting any model other than Dream-1 decide prompts in a match.
 
+## 6g. Zero-shot base Dream-1: `plans/hybrid_v4.yaml`
+
+Same match structure as `hill_climb_v4.yaml`, written for base Dream-1 instead of a fine-tune:
+
+- **Specific prompts** naming objects by colour and position ("pick up the pink cube ... onto the blue cube"),
+  and `tower_prompts` with `<piece>` and `<top>` so each stacking prompt names the next piece and the one below it.
+- **`rewrite_prompts: true`**: the monitor may answer `next_prompt`, and the runner sends it as the robot's next
+  instruction (at most `REWRITE_MAX` = 3 an attempt, `REWRITE_COOLDOWN_S` = 15 s apart). `prompt_prefix` is put back
+  on a rewrite when the stage's own prompt opens with it (Dream refuses cable work without the "no power" sentence).
+  `system_prompt` holds the station lessons the monitor follows. Logged as `prompt_rewrite`.
+- **`reset_first: true`**: `/reset` and wait for idle before the first stage, so both grippers start open.
+- After Dream's IK error (`SVD did not converge`) the restart is preceded by `/reset` + idle, at most
+  `AUTO_RESET_MAX` = 2 a run (`auto_reset` events).
+- Gripper sensors (`GET /arms`) overrule the monitor's `holding`: a gripper closed fully on nothing is reported as
+  holding nothing, whatever the images seem to show.
+- Frames come from the station's `/frame/<cam>.jpg?w=640` by default (~35 KB a camera, not the debug view's ~2 MB
+  round trips that slowed Dream to 2-6 s); `HARNESS_FRAMES=view` forces the debug view, which is also the fallback.
+- `--skip cable_` drops the cable section for stack + balls practice.
+- **Fine-tune labels must match the prompts we settle on** (stage prompts, tower prompts, logged rewrites).
+
+### `plans/hybrid_v4_long.yaml`: Dream-1's own prompt style
+
+Dream Labs' examples for Dream-1 are short imperatives that each carry a whole task ("Stack the cubes into a single
+tower", "Pick up all markers one by one and put into black pencil holder using both arms"; dreamlabs.ai/research/dream-1).
+This plan has 6 stages instead of 20: one short prompt each for a cable, the whole tower, the stick on top and all the
+balls, with long timeouts and the monitor stepping in only when the robot is on the wrong thing. Run both plans on the
+same table and keep what scores.
+
+### Talking to it while it runs (testing only)
+
+Type plain words and Enter at any time: "skip the next step", "why did it grab the pink one?", "lower the blocks
+more slowly next time". Claude reads each line with the run so far and the newest frames, answers in the terminal,
+and may end the current stage, skip later ones, send the robot a new instruction now, or keep a note that the monitor
+follows for the rest of the run. Notes are appended to `--lessons` (default `lessons/operator.md`) and read into the
+monitor's system prompt on later runs. Everything is in `events.jsonl` (`operator_input`, `operator_reply`,
+`operator_action`) and on the trace page (`python tools/trace_report.py`). `s` + Enter still stops. Any human input
+during a match is a DQ: run matches with `--no-operator`.
+
 ## 7. Test in simulation (before the robot)
 
 `sim_station.py` serves the same API (8091) and debug view (8093), driven by Dream's MuJoCo YAM simulator (`dream_examples/yam_mujoco`). The harness can't tell it apart from a real station, and nothing physical moves, so `--live` is safe here. Note that the Hill Climb uses Metal arms, while the sim is YAM only. That makes it a test of the harness logic and prompts, not of the real task.

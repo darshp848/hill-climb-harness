@@ -9,9 +9,17 @@ import urllib.request
 from typing import Any
 
 
+## Width of the frames read from the station's /frame add-on (station_url set): 640 px is ~35 KB a camera, where a
+## debug-view round trip carries every camera's whole 9-frame window (~2 MB) over the station's own uplink.
+FRAME_WIDTH = 640
+CAMERAS = ("scene", "wrist_l", "wrist_r")
+
+
 class FrameSource:
-    def __init__(self, base_url: str = "http://127.0.0.1:8093", *, timeout_s: float = 5.0):
+    def __init__(self, base_url: str = "http://127.0.0.1:8093", *, timeout_s: float = 5.0,
+                 station_url: str | None = None):
         self.base_url = base_url.rstrip("/")
+        self.station_url = station_url.rstrip("/") if station_url else None
         self.timeout_s = timeout_s
         self.last_error: str | None = None
         self._cache_n: int | None = None
@@ -46,6 +54,18 @@ class FrameSource:
 
     def latest(self) -> dict[str, bytes]:
         """role -> JPEG bytes: the newest frame of each camera in the newest round trip. {} if none."""
+        if self.station_url:
+            out: dict[str, bytes] = {}
+            for cam in CAMERAS:
+                try:
+                    with urllib.request.urlopen(f"{self.station_url}/frame/{cam}.jpg?w={FRAME_WIDTH}",
+                                                timeout=self.timeout_s) as resp:
+                        out[cam] = resp.read()
+                except (urllib.error.URLError, OSError) as exc:
+                    self.last_error = f"{type(exc).__name__}: {exc}"
+            if out:
+                self.last_error = None
+                return out
         try:
             trips = self._get_json("/trips")
             if not isinstance(trips, list) or not trips:
