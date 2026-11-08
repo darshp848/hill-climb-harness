@@ -206,7 +206,7 @@ def test_monitor_payload_contents_and_history():
     plan, st = _stage_obj()
     t = Transport(reply_text())
     mon = MonitorVerifier(plan, transport=t, history_frames=2)
-    frames = lambda n: {"video.scene": JPEG + bytes([n]), "video.wrist_l": b"w" + bytes([n])}  # noqa: E731
+    frames = lambda n: {"video.scene": JPEG + bytes([n]), "video.wrist_l": JPEG[:2] + b"w" + bytes([n]) + JPEG[-2:]}  # noqa: E731
     for i in range(5):
         v = mon.check_now(st, frames(i), 3.0 * i)
         assert v.done is None and v.status == "ok"

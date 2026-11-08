@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from .frames import FrameSource
@@ -27,6 +27,8 @@ EXTEND_S = 20.0            # one timeout extension while the monitor sees the gr
 SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-manual verifier
 MOVED_DELTA = 0.02         # progress change that counts as "moved" after a prompt change
 MAX_STATION_RESTARTS = 5   # restart the run after at most this many inference-service faults
+REFUSAL_RESTARTS = 1       # a prompt Dream refused (DA-4000 unsafe) is restarted this often, then the attempt fails
+CONFIRM_GRACE_S = 10.0     # at timeout, wait this long for the verdict that would confirm a pending "done"
 
 
 @dataclass
@@ -55,15 +57,36 @@ class RunResult:
     guard_tripped: bool = False
 
 
-def _inference_fault(last_error: Any) -> bool:
-    """A fault of the Dream inference service (gateway timeout, model call failed): restarting the run with the
-    same prompt is safe. Anything else (an arm, a motor, a safety stop) is not retried."""
+def _error_text(last_error: Any) -> str:
     if isinstance(last_error, dict):
-        text = f"{last_error.get('type', '')} {last_error.get('error_code', '')} {last_error.get('message', '')}"
-    else:
-        text = str(last_error or "")
-    return any(key in text for key in ("DreamAPI", "DreamServerError", "DreamProtocolError", "DA-5000", "DA-6000",
-                                       "GATEWAY_FAULT", "connection_timed_out"))
+        return f"{last_error.get('type', '')} {last_error.get('error_code', '')} {last_error.get('message', '')}"
+    return str(last_error or "")
+
+
+# Dream's safety filter refused the instruction in this scene (DA-4000 BAD_REQUEST "unsafe instruction"). Seen 4
+# times on the station on 7 Nov. Its message also says "DreamAPI refused", so it is matched before the faults below.
+_REFUSAL_KEYS = ("DA-4000", "DreamBadRequest", "unsafe instruction")
+# Faults of the inference path, not of the arms: the run can be restarted with the same prompt. From the NUC's
+# robots-inference.jsonl: gateway timeouts, the action buffer running dry for 12 s while chunks were late
+# (ControlLoopError), the eef IK's "SVD did not converge" on the first chunk (LinAlgError), and a server-side
+# session replacement.
+_TRANSIENT_KEYS = ("DreamAPI", "DreamServerError", "DreamProtocolError", "DreamSessionExpired", "DA-5000", "DA-6000",
+                   "DA-0001", "GATEWAY_FAULT", "connection_timed_out", "ControlLoopError", "action buffer empty",
+                   "LinAlgError", "SVD did not converge")
+
+
+def _fault_kind(last_error: Any) -> str | None:
+    """'refusal', 'transient' (restart is safe) or None (an arm, a motor, a safety stop: never retried)."""
+    text = _error_text(last_error)
+    if any(key in text for key in _REFUSAL_KEYS):
+        return "refusal"
+    if any(key in text for key in _TRANSIENT_KEYS):
+        return "transient"
+    return None
+
+
+def _inference_fault(last_error: Any) -> bool:
+    return _fault_kind(last_error) == "transient"
 
 
 def _err(last_error: Any) -> str:
@@ -89,6 +112,10 @@ class _Stop(Exception):
     """request_stop() was called."""
 
 
+class _Refused(Exception):
+    """Dream refused this prompt again: the attempt fails, the match goes on."""
+
+
 class Runner:
     def __init__(self, plan: Plan, station: StationClient, frames: FrameSource, verifiers: dict[str, Verifier],
                  log: RunLog, *, clock: Callable[[], float] = time.monotonic,
@@ -101,6 +128,8 @@ class Runner:
         self._change: dict[str, Any] | None = None   # the latest prompt change, for the progress_moved event
         self._prompt: str | None = None   # what the robot should be running, for a restart after a fault
         self._restarts = 0
+        self._refusals: dict[str, int] = {}
+        self._guard_answer_t: float | None = None   # last time the guard got a yes/no answer
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -127,6 +156,9 @@ class Runner:
             self._safe_stop(reason)
             tripped = True
         except _Fail as exc:
+            ok, reason = False, str(exc)
+            self._safe_stop(reason)
+        except _Refused as exc:           # only reachable from code that does not catch it itself
             ok, reason = False, str(exc)
             self._safe_stop(reason)
         except _Stop:
@@ -191,13 +223,8 @@ class Runner:
         self._check_global()
         st = self.station.status()
         if st.get("state") == "error":
-            error = st.get("last_error")
-            if self._prompt and _inference_fault(error) and self._restarts < MAX_STATION_RESTARTS:
-                # One gateway timeout must not end a 5-minute match: restart with the same prompt.
-                self._restarts += 1
-                self.log.event("station_restart", error=_err(error), restart=self._restarts, prompt=self._prompt)
-                return self._start_run(self._prompt)
-            raise _Fail(f"station error: {_err(error)}")
+            self._on_station_error(st.get("last_error"))   # raises unless a restart is allowed
+            return self._start_run(self._prompt)
         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
         if dead:
             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
@@ -219,15 +246,42 @@ class Runner:
             raise _Fail(f"station error: {_err(st.get('last_error'))}")
         return st
 
+    def _on_station_error(self, error: Any) -> None:
+        """The station is in state error. Returns if the run may be restarted with self._prompt, else raises."""
+        kind = _fault_kind(error) if self._prompt else None
+        if kind == "refusal":
+            n = self._refusals[self._prompt] = self._refusals.get(self._prompt, 0) + 1
+            if n > REFUSAL_RESTARTS:
+                self.log.event("prompt_refused", prompt=self._prompt, refusals=n, error=_err(error))
+                raise _Refused(f"Dream refused the prompt ({n}x): {_err(error)}")
+        elif kind == "transient" and self._restarts < MAX_STATION_RESTARTS:
+            self._restarts += 1   # one gateway timeout must not end a 5-minute match
+        else:
+            raise _Fail(f"station error: {_err(error)}")
+        self.log.event("station_restart", error=_err(error), kind=kind, restart=self._restarts, prompt=self._prompt)
+
     def _start_run(self, prompt: str) -> dict[str, Any]:
-        self.log.event("start", prompt=prompt, checkpoint=self.plan.checkpoint)
-        self.station.start(prompt, self.plan.checkpoint)
-        return self._wait({"running"}, START_TIMEOUT_S, "running")
+        self._prompt = prompt
+        while True:
+            self._check_global()
+            self.log.event("start", prompt=prompt, checkpoint=self.plan.checkpoint)
+            self.station.start(prompt, self.plan.checkpoint)
+            left = self.plan.time_budget_s - (self._clock() - self._t0)
+            st = self._wait({"running", "error"}, max(5.0, min(START_TIMEOUT_S, left)), "running")
+            if st.get("state") != "error":
+                return st
+            self._on_station_error(st.get("last_error"))   # a refusal or fault on the way up: retry or raise
 
     def _issue(self, prompt: str, why: str, *, force_start: bool = False) -> None:
         """Gets `prompt` to the robot: set_prompt on a running station, else a fresh start. Logs a prompt_change
         event with the chunk count and tells verifiers (a monitor drops answers computed on the old prompt)."""
-        if force_start or self.station.status().get("state") != "running":
+        st = self.station.status()
+        if st.get("state") == "error" and self._prompt is not None and _fault_kind(st.get("last_error")) != "refusal":
+            # The run died since the last poll (e.g. during an entry check). An arm or motor fault must end the
+            # match here, not be cleared by the fresh /start below. (Before the first prompt, preflight decided;
+            # a refusal was of the old prompt, not this one.)
+            self._on_station_error(st.get("last_error"))
+        if force_start or st.get("state") != "running":
             reply, how = self._start_run(prompt), "start"
         else:
             reply, how = self.station.set_prompt(prompt), "set_prompt"
@@ -242,6 +296,14 @@ class Runner:
             if fn is not None and id(v) not in seen:
                 seen.add(id(v))
                 fn(prompt)
+
+    def _try_issue(self, prompt: str, why: str, *, force_start: bool = False) -> str | None:
+        """_issue, but a prompt Dream keeps refusing returns the reason instead of ending the match."""
+        try:
+            self._issue(prompt, why, force_start=force_start)
+            return None
+        except _Refused as exc:
+            return str(exc)
 
     def _frames_for_check(self, stage: Stage | None = None) -> dict[str, bytes]:
         frames = self.frames.latest()
@@ -302,11 +364,16 @@ class Runner:
 
     def _watch(self, stage: Stage, verifier: Verifier, attempt: int) -> _Attempt:
         t0 = self._clock()
-        confirm = self.plan.confirm
+        confirm = stage.confirm or self.plan.confirm
+        self._last_verdict = None
+        last_done_sig: str | None = None
+        grace = False                      # one wait for the verdict that would confirm a pending done
         gate = max(stage.min_run_s, stage.effective_settle())   # no verifier and no stall clock before this
         consec_done = consec_fail = consec_stalled = 0
         guard = self.plan.guard if self.plan.guard is not None and self.plan.guard.covers(stage.name) else None
         consec_guard = 0
+        if guard is not None and self._guard_answer_t is None:
+            self._guard_answer_t = self._clock()
         last_done_t: float | None = None   # a done verdict sticks: a second one within DONE_WINDOW_S passes
         extended = False                   # one timeout extension while the gripper is on the target
         max_p: float | None = None
@@ -327,6 +394,11 @@ class Runner:
                 self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
                 if guard is not None:
                     answer = getattr(verdict, "guard", None)
+                    take = getattr(verifier, "take_guard_alert", None)
+                    if answer is not True and take is not None and take():
+                        answer = True   # a yes from a call that was in flight across a stage or prompt change
+                    if isinstance(answer, bool):
+                        self._guard_answer_t = self._clock()
                     if answer is True:
                         consec_guard += 1
                         self.log.event("guard_yes", stage=stage.name, attempt=attempt, count=consec_guard,
@@ -337,6 +409,11 @@ class Runner:
                             raise _Guard(f"guard tripped in stage {stage.name!r}: {guard.question}")
                     elif answer is False:
                         consec_guard = 0
+                if guard is not None and guard.max_blind_s is not None and \
+                        self._clock() - self._guard_answer_t > guard.max_blind_s:
+                    self.log.event("guard_blind", stage=stage.name, attempt=attempt, question=guard.question,
+                                   seconds=round(self._clock() - self._guard_answer_t, 1), message=guard.message)
+                    raise _Guard(f"guard blind in stage {stage.name!r}: no answer for {guard.max_blind_s:g} s")
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
                 if monitor:
@@ -368,12 +445,17 @@ class Runner:
                             gate = (self._clock() - t0) + stage.effective_settle()
                             rise_ref = last_rise = None
                             continue
-                if verdict.done is True:
+                sig = getattr(verdict, "frames_sig", None)
+                if verdict.done is True and sig is not None and sig == last_done_sig and not verdict.immediate:
+                    # the same camera images judged twice are one look, not two: a frozen view must not confirm
+                    self.log.event("same_frames", stage=stage.name, attempt=attempt,
+                                   note="done verdict on the frames of the previous done: not counted")
+                elif verdict.done is True:
                     consec_fail = 0
                     if verdict.immediate or frames:
                         consec_done += 1
                         recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
-                        last_done_t = elapsed
+                        last_done_t, last_done_sig = elapsed, sig
                         if verdict.immediate or consec_done >= confirm or recent:
                             return _Attempt(True, verdict.reason or "verified", max_p, hint)
                     else:
@@ -398,6 +480,11 @@ class Runner:
                 return _Attempt(False, f"stalled: progress {max_p:.2f} has not risen for {stage.stall_s:g} s",
                                 max_p, hint)
             if elapsed >= stage.timeout_s:
+                if not grace and last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S:
+                    grace = True           # a done is waiting for its confirming look: don't drop it at the bell
+                    self.log.event("timeout_grace", stage=stage.name, attempt=attempt, extra_s=CONFIRM_GRACE_S)
+                    t0 += CONFIRM_GRACE_S
+                    continue
                 if not extended and self._on_target(stage):
                     extended = True
                     self.log.event("timeout_extended", stage=stage.name, attempt=attempt, extra_s=EXTEND_S)
@@ -457,7 +544,10 @@ class Runner:
     def _attempt(self, stage: Stage, verifier: Verifier, attempt: int, prompt: str) -> _Attempt:
         t_start = time.time()
         try:
-            out = self._watch(stage, verifier, attempt)
+            try:
+                out = self._watch(stage, verifier, attempt)
+            except _Refused as exc:
+                out = _Attempt(False, str(exc))
         except BaseException as exc:
             self.log.segment(stage=stage.name, attempt=attempt, kind="stage", prompt=prompt, t_start=t_start,
                              t_end=time.time(), outcome="aborted", reason=f"{type(exc).__name__}: {exc}",
@@ -480,11 +570,16 @@ class Runner:
                 self._issue(rec.prompt, f"recovery {rec.name}")
                 self._hold(min(stage.timeout_s / 2, 20.0))
             elif rec.kind == "reset":
-                self._issue(rec.prompt, f"recovery {rec.name}")
-                ok, reason = self._reset_scene(stage, rec, verifier)
-                outcome = "ok" if ok else "scene_not_ok"
+                refused = self._try_issue(rec.prompt, f"recovery {rec.name}")
+                if refused:
+                    ok, reason, outcome = False, refused, "refused"
+                else:
+                    ok, reason = self._reset_scene(stage, rec, verifier)
+                    outcome = "ok" if ok else "scene_not_ok"
             else:
                 reason = "retry: stage prompt re-issued"
+        except _Refused as exc:            # refused while holding or checking the scene: the recovery failed
+            ok, reason, outcome = False, str(exc), "refused"
         except BaseException as exc:
             self.log.segment(stage=stage.name, attempt=attempt, kind="recovery", name=rec.name,
                              prompt=rec.prompt or stage.prompt, t_start=t_start, t_end=time.time(),
@@ -494,6 +589,16 @@ class Runner:
                          prompt=rec.prompt or stage.prompt, t_start=t_start, t_end=time.time(),
                          outcome=outcome, reason=reason, max_progress=None)
         return ok, reason
+
+    def _precondition(self, stage: Stage, verifier: Verifier) -> bool:
+        """skip_unless: one synchronous look before the prompt; the stage runs only on a confident yes."""
+        probe = replace(stage, success=stage.skip_unless, expect=None)
+        frames = self._frames_for_check(stage)
+        verdict = self._ask(verifier, probe, frames, 0.0, sync=True)
+        ok = verdict.done is True and (verdict.immediate or (bool(frames) and verdict.confidence >= SKIP_MIN_CONFIDENCE))
+        self.log.event("precondition", stage=stage.name, question=stage.skip_unless, done=verdict.done,
+                       confidence=verdict.confidence, reason=verdict.reason, run=bool(ok))
+        return bool(ok)
 
     def _entry_check(self, stage: Stage, verifier: Verifier) -> bool:
         """skip_if_done: one synchronous look before the prompt is sent."""
@@ -512,16 +617,24 @@ class Runner:
         self._check_global()
         self._last_progress = None
         self.log.event("stage_start", stage=stage.name, prompt=stage.prompt)
+        if stage.skip_unless and not self._precondition(stage, verifier):
+            self.log.event("stage_skipped", stage=stage.name, reason=f"precondition not met: {stage.skip_unless}")
+            return StageResult(stage.name, False, 0, self._clock() - t0, "precondition not met")
         if stage.skip_if_done and self._entry_check(stage, verifier):
             self.log.event("stage_already_done", stage=stage.name)
             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
-        self._issue(stage.prompt, "stage", force_start=first)
+        refused = self._try_issue(stage.prompt, "stage", force_start=first)
         attempts = 0
         uses: dict[int, int] = {}
         last_rec: int | None = None
         while True:
             attempts += 1
-            out = self._attempt(stage, verifier, attempts, stage.prompt)
+            if refused:
+                self.log.event("attempt_end", stage=stage.name, attempt=attempts, ok=False, reason=refused)
+                out = _Attempt(False, refused)
+                self._nap(min(self.plan.check_every_s, 3.0))   # don't spin on a prompt Dream keeps refusing
+            else:
+                out = self._attempt(stage, verifier, attempts, stage.prompt)
             if out.ok:
                 return StageResult(stage.name, True, attempts, self._clock() - t0, out.reason)
             reason, hint = out.reason, out.recovery_hint
@@ -550,7 +663,7 @@ class Runner:
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
                 self.station.home()
                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
-                self._issue(stage.prompt, "retry", force_start=True)
+                refused = self._try_issue(stage.prompt, "retry", force_start=True)
             else:
-                self._issue(stage.prompt, "retry")
+                refused = self._try_issue(stage.prompt, "retry")
                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="retry_in_place")
