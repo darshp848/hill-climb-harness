@@ -108,7 +108,7 @@ stages:
 
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One prompt for the whole tower. ----
   - name: tower
-    prompt: "With the right arm only, stack the cubes into a single tower; keep the left arm still"   # sim: the left gripper brushed a ball (DQ) in 4 of 5 runs
+    prompt: "With the right arm only, stack the cubes into a single tower; keep the left arm still"   # sim: ball-touch DQ 1 of 3 runs, was 4 of 5 without it
     success: "Is there a tower of cubes more than 4 inches (10 cm) tall, standing on its own, with no gripper touching it?"
     expect: "The arms pick up the cubes one at a time and set each squarely on the tower, which grows until it is over 4 inches tall."
     camera_notes:
