@@ -7,6 +7,12 @@ with the camera frames it looked at.
 
 Python 3.12+, stdlib + PyYAML only. The design contract is `DESIGN.md`.
 
+## Status (8 Nov 2026)
+
+Tougher in simulation, not yet proven on the real table. Read [last night's report](docs/LAST_NIGHT_2026-11-08.md) for
+the results, Dream errors, the open tower-order question, Darsh's strategy notes and the data still to collect. His
+notes are coded on branch `cloud-sims`, not on `main` yet.
+
 ## Safety model
 
 - **It never touches a motor.** It has no robot driver, no joint commands, no camera drivers. It only
