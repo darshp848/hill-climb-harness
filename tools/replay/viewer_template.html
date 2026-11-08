@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run replay</title>
+<style>
+:root{--bg:#f6f6f3;--panel:#ffffff;--ink:#1c1c1a;--muted:#6a6a64;--line:#e1e0da;--hold:rgba(214,58,46,.16);--holdline:#d63a2e;
+--wire:rgba(226,150,30,.17);--plug:rgba(52,150,84,.15);--accent:#2a63d4;--ok:#2f9a5a;--warn:#d68a12;--bad:#d63a2e}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#141413;--panel:#1d1d1b;--ink:#ecebe5;--muted:#a19f97;
+--line:#33322e;--hold:rgba(240,90,80,.22);--holdline:#f06a5a;--wire:rgba(240,170,60,.18);--plug:rgba(80,190,110,.16);--accent:#78a4ff;
+--ok:#5cc985;--warn:#f0b040;--bad:#f06a5a}}
+:root[data-theme="dark"]{--bg:#141413;--panel:#1d1d1b;--ink:#ecebe5;--muted:#a19f97;--line:#33322e;--hold:rgba(240,90,80,.22);
+--holdline:#f06a5a;--wire:rgba(240,170,60,.18);--plug:rgba(80,190,110,.16);--accent:#78a4ff;--ok:#5cc985;--warn:#f0b040;--bad:#f06a5a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0;font-weight:600}
+header .meta{color:var(--muted)}
+header .spacer{flex:1}
+button,label.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:4px 10px;cursor:pointer}
+button.on{border-color:var(--accent);color:var(--accent)}
+.top{display:grid;grid-template-columns:minmax(0,960px) minmax(260px,1fr);gap:16px;padding:16px}
+@media (max-width:1000px){.top{grid-template-columns:1fr}}
+video{width:100%;background:#000;border-radius:8px;display:block}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+#now h2{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+#now .row{margin:0 0 10px}
+#now .big{font-size:20px;font-variant-numeric:tabular-nums}
+#now .prompt{white-space:pre-wrap;font-size:13px;max-height:180px;overflow:auto;border-left:3px solid var(--accent);padding-left:8px}
+.pill{display:inline-block;border-radius:999px;padding:0 8px;font-size:12px;border:1px solid var(--line)}
+.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.bad{color:var(--bad);border-color:var(--bad)}
+#tlwrap{padding:0 16px}
+#tl{width:100%;display:block;background:var(--panel);border:1px solid var(--line);border-radius:8px;cursor:crosshair;user-select:none}
+#tl text{fill:var(--muted);font-size:11px}
+#tl .lab{fill:var(--ink);font-size:12px;font-weight:600}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px}
+@media (max-width:1000px){.grid{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+th{color:var(--muted);font-weight:600}
+#events{max-height:420px;overflow:auto}
+#events tr{cursor:pointer}#events tr.cur{background:var(--wire)}
+.t{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--muted)}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+#drop{color:var(--muted)}
+.note{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Run replay</h1><span class="meta" id="meta"></span><span class="spacer"></span>
+  <span>Speed</span><button data-r="1" class="on">1×</button><button data-r="2">2×</button><button data-r="4">4×</button>
+  <label class="btn">Load judge log (events.jsonl)<input type="file" id="jfile" accept=".jsonl,.json,.txt" hidden></label>
+  <span id="drop">or drop it anywhere</span>
+</header>
+<div class="top">
+  <video id="v" controls muted playsinline preload="auto" src="data:video/mp4;base64,__VIDEO__"></video>
+  <aside class="panel" id="now"></aside>
+</div>
+<div id="tlwrap"><svg id="tl" role="img" aria-label="Synchronised trace timeline"></svg>
+<p class="note">Click the timeline to seek. Space plays or pauses, ←/→ jump 5 s. Gripper gap: the amber band (2–4.5 mm) is a wire or nearly empty grip, the green band (4.5–10 mm) is a plug body. Red bands: the arms were frozen waiting for actions. ▼ marks when the station received a new prompt; the hatched part shows how long until the model acted on it.</p></div>
+<div class="grid">
+  <section class="panel"><h2 style="margin-top:0;font-size:15px">Prompts sent to Dream-1</h2><table id="ptable"></table></section>
+  <section class="panel"><h2 style="margin-top:0;font-size:15px">Events</h2><div id="events"><table id="etable"></table></div></section>
+</div>
+<script>
+const D = __DATA__;
+const v = document.getElementById('v'), svg = document.getElementById('tl'), NS = 'http://www.w3.org/2000/svg';
+let judge = [], jinfo = '';
+const hue = i => `hsl(${(i * 67 + 205) % 360} 62% 55%)`;
+const fmt = t => (t < 0 ? '-' : '') + Math.floor(Math.abs(t) / 60) + ':' + String(Math.floor(Math.abs(t) % 60)).padStart(2, '0') + '.' + Math.floor((Math.abs(t) * 10) % 10);
+const el = (n, a = {}, p = svg) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); p.appendChild(e); return e; };
+const tip = (e, s) => { const t = document.createElementNS(NS, 'title'); t.textContent = s; e.appendChild(t); return e; };
+const cls = g => g < 2 ? ['empty', 'bad'] : g < 4.5 ? ['wire / nearly empty', 'warn'] : g < 10 ? ['plug body', 'ok'] : g < 20 ? ['partly open', ''] : ['open', ''];
+const segEnd = i => i + 1 < D.segs.length ? D.segs[i + 1].t : D.duration;
+const at = (arr, t, key = 0) => { let lo = 0, hi = arr.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m][key] <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; };
+
+document.getElementById('title').textContent = 'Run replay · ' + D.run;
+document.getElementById('meta').textContent = `${fmt(D.duration)} · ${D.prompts.length} distinct prompts · ${D.segs.length} prompt switches · ${D.chunks.length} model replies · frozen ${D.holds.reduce((s, h) => s + h[1], 0).toFixed(0)} s`;
+
+// Prompt table
+const pt = document.getElementById('ptable');
+pt.innerHTML = '<tr><th>#</th><th>Used</th><th>Text</th></tr>';
+D.prompts.forEach(p => {
+  const tr = pt.insertRow(); const uses = D.segs.filter(s => s.p === p.id);
+  tr.insertCell().innerHTML = `<span class="swatch" style="background:${hue(p.id)}"></span>P${p.id + 1}`;
+  const c = tr.insertCell(); c.className = 't';
+  c.textContent = uses.map(s => fmt(s.t) + ' for ' + (segEnd(D.segs.indexOf(s)) - s.t).toFixed(0) + ' s').join(', ') + ` · ${p.chars} chars`;
+  tr.insertCell().textContent = p.full;
+});
+
+// Timeline
+const LW = 128, lanes = [['Prompts', 34], ['Judge (vision model)', 34], ['Dream replies', 44], ['Arms frozen', 16], ['Gripper gap (mm)', 96], ['Tool height (cm)', 96], ['', 22]];
+let W = 0, X = t => 0, laneY = {};
+function render() {
+  W = svg.clientWidth || 1200; svg.innerHTML = '';
+  const H = lanes.reduce((s, l) => s + l[1] + 6, 6); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  X = t => LW + Math.max(0, Math.min(1, t / D.duration)) * (W - LW - 12);
+  let y = 6; for (const [n, h] of lanes) { laneY[n] = [y, h]; if (n) { el('text', { x: 8, y: y + Math.min(h, 34) / 2 + 4, class: 'lab' }).textContent = n; el('line', { x1: LW, x2: W - 12, y1: y + h + 3, y2: y + h + 3, stroke: 'var(--line)' }); } y += h + 6; }
+  // frozen overlay behind charts
+  const [fy] = laneY['Arms frozen'], [hy, hh] = laneY['Tool height (cm)'];
+  D.holds.forEach(([t, d]) => { tip(el('rect', { x: X(t), y: laneY['Arms frozen'][0], width: Math.max(1.5, X(t + d) - X(t)), height: hy + hh - fy, fill: 'var(--hold)' }), `frozen ${d.toFixed(1)} s at ${fmt(t)}`);
+    el('rect', { x: X(t), y: fy, width: Math.max(1.5, X(t + d) - X(t)), height: 16, fill: 'var(--holdline)' }); });
+  // prompts
+  const [py, ph] = laneY['Prompts'];
+  D.segs.forEach((s, i) => { const x0 = X(s.t), x1 = X(segEnd(i)); const p = D.prompts[s.p];
+    tip(el('rect', { x: x0, y: py, width: Math.max(1, x1 - x0 - 1), height: ph, fill: hue(s.p), rx: 3 }), `P${s.p + 1} from ${fmt(s.t)}: ${p.full}`);
+    if (x1 - x0 > 26) el('text', { x: x0 + 4, y: py + ph / 2 + 4, fill: '#fff', style: 'fill:#fff;font-weight:600' }).textContent = 'P' + (s.p + 1); });
+  D.station.filter(e => e.kind === 'prompt_set').forEach(e => { const x = X(e.t);
+    const use = D.segs.find(s => s.t >= e.t - 0.3 && (e.p == null || s.p === e.p));
+    if (use && use.t > e.t) { const pat = el('rect', { x, y: py, width: Math.max(1, X(use.t) - x), height: ph, fill: 'url(#hatch)' }); tip(pat, `set at ${fmt(e.t)}, first sent with frames ${(use.t - e.t).toFixed(1)} s later`); }
+    tip(el('path', { d: `M${x - 5},${py - 5} L${x + 5},${py - 5} L${x},${py + 2} Z`, fill: 'var(--ink)' }), `station received a new prompt at ${fmt(e.t)}: ${e.text}`); });
+  const defs = el('defs'); const pat = el('pattern', { id: 'hatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, defs); el('rect', { width: 3, height: 6, fill: 'rgba(0,0,0,.35)' }, pat);
+  // judge
+  const [jy, jh] = laneY['Judge (vision model)'];
+  if (!judge.length) el('text', { x: LW + 6, y: jy + jh / 2 + 4 }).textContent = 'Load the harness events.jsonl to see the vision model\'s verdicts here.';
+  judge.forEach(e => { const x = X(e.rel); if (e.rel < -5 || e.rel > D.duration + 5) return;
+    if (e.event === 'verdict') { const col = e.done === true ? 'var(--ok)' : e.status === 'failing' ? 'var(--bad)' : e.status === 'stalled' ? 'var(--warn)' : 'var(--muted)';
+      tip(el('circle', { cx: x, cy: jy + jh / 2, r: 4, fill: col }), summary(e)); }
+    else { const col = /rewrite|prompt|set_prompt/.test(e.event) ? 'var(--accent)' : /recover|retry|reset/.test(e.event) ? 'var(--warn)' : /fail|stop|guard|refus/.test(e.event) ? 'var(--bad)' : 'var(--ink)';
+      tip(el('rect', { x: x - 3, y: jy + 2, width: 6, height: 8, fill: col, transform: `rotate(45 ${x} ${jy + 6})` }), summary(e)); } });
+  // dream replies
+  const [dy, dh] = laneY['Dream replies'];
+  D.chunks.forEach(([t, n, rtt, mode, disc]) => { const x = X(t), h = Math.max(3, Math.min(rtt, 3000) / 3000 * (dh - 4));
+    const col = disc ? 'var(--bad)' : rtt < 1000 ? 'var(--ok)' : rtt < 2000 ? 'var(--warn)' : 'var(--bad)';
+    tip(el('line', { x1: x, x2: x, y1: dy + dh, y2: dy + dh - h, stroke: col, 'stroke-width': mode === 'sync' ? 3 : 1.5 }), `reply #${n} at ${fmt(t)}: ${rtt} ms round trip, ${mode}${disc ? ', DISCARDED' : ''}`); });
+  D.stalls.forEach(t => tip(el('circle', { cx: X(t), cy: dy + 4, r: 3, fill: 'var(--bad)' }), `stall logged at ${fmt(t)}`));
+  // gripper
+  const [gy, gh] = laneY['Gripper gap (mm)']; const GY = mm => gy + gh - Math.min(mm, 20) / 20 * gh;
+  el('rect', { x: LW, y: GY(4.5), width: W - LW - 12, height: GY(2) - GY(4.5), fill: 'var(--wire)' });
+  el('rect', { x: LW, y: GY(10), width: W - LW - 12, height: GY(4.5) - GY(10), fill: 'var(--plug)' });
+  [0, 5, 10, 20].forEach(m => { el('text', { x: LW - 22, y: GY(m) + 4 }).textContent = m === 20 ? '20+' : m; });
+  line(D.series.map(r => [r[0], GY(r[1])]), 'var(--accent)', '4 3'); line(D.series.map(r => [r[0], GY(r[2])]), 'var(--ink)');
+  if (D.series.length && D.series[0].length > 5) { line(D.series.map(r => [r[0], GY(r[5])]), 'var(--warn)', '4 3'); line(D.series.map(r => [r[0], GY(r[6])]), 'var(--warn)'); }
+  // height
+  const ZY = cm => hy + hh - Math.max(0, Math.min(cm, 40)) / 40 * hh;
+  [0, 10, 20, 30, 40].forEach(c => el('text', { x: LW - 22, y: ZY(c) + 4 }).textContent = c);
+  line(D.series.map(r => [r[0], ZY(r[3])]), 'var(--accent)', '4 3'); line(D.series.map(r => [r[0], ZY(r[4])]), 'var(--ink)');
+  if (D.series.length && D.series[0].length > 5) { line(D.series.map(r => [r[0], ZY(r[7])]), 'var(--warn)', '4 3'); line(D.series.map(r => [r[0], ZY(r[8])]), 'var(--warn)'); }
+  // axis
+  const [ay] = laneY['']; for (let t = 0; t <= D.duration; t += 10) { el('line', { x1: X(t), x2: X(t), y1: ay, y2: ay + (t % 30 ? 4 : 8), stroke: 'var(--muted)' }); if (t % 30 === 0) el('text', { x: X(t) - 10, y: ay + 20 }).textContent = fmt(t).slice(0, -2); }
+  el('text', { x: 8, y: ay + 14, class: 'lab' }).textContent = D.series.length && D.series[0].length > 5 ? 'black right · amber left · dashed = cmd' : 'dashed = commanded';
+  (D.runs || []).forEach(b => { if (b.step === 1) return; const x = X(b.t);
+    tip(el('line', { x1: x, x2: x, y1: 2, y2: ay, stroke: 'var(--ink)', 'stroke-width': 1, 'stroke-dasharray': '2 3' }), `step ${b.step} started ${b.wall}; the session waited ${b.gap_s} s before it` + (b.between ? `\nbetween steps: ${b.between}` : ''));
+    el('text', { x: x + 2, y: laneY['Prompts'][0] + laneY['Prompts'][1] + 12, style: 'font-size:10px' }).textContent = 's' + b.step;
+    if (b.between && /scripted pull|lifted straight up/.test(b.between)) tip(el('path', { d: `M${x},${laneY['Prompts'][0] - 6} l-5,8 l10,0 Z`, fill: 'var(--ok)' }), 'between steps: ' + b.between); });
+  el('line', { id: 'ph', x1: X(0), x2: X(0), y1: 2, y2: H - 2, stroke: 'var(--bad)', 'stroke-width': 1.5 });
+  update();
+}
+function line(pts, col, dash) { if (!pts.length) return; el('polyline', { points: pts.map(([t, y]) => X(t).toFixed(1) + ',' + y.toFixed(1)).join(' '), fill: 'none', stroke: col, 'stroke-width': 1.4, 'stroke-dasharray': dash || '' }); }
+function summary(e) { const keep = ['stage', 'attempt', 'done', 'progress', 'status', 'confidence', 'recovery', 'reason', 'prompt', 'why', 'how', 'name', 'kind', 'ok', 'text']; return `${fmt(e.rel)} ${e.event}: ` + keep.filter(k => e[k] != null && e[k] !== '').map(k => `${k}=${typeof e[k] === 'object' ? JSON.stringify(e[k]) : e[k]}`).join(' · '); }
+
+// Now panel + events
+const now = document.getElementById('now');
+function update() {
+  const t = v.currentTime || 0; const ph = document.getElementById('ph'); if (ph) { ph.setAttribute('x1', X(t)); ph.setAttribute('x2', X(t)); }
+  const si = at(D.segs.map(s => [s.t]), t); const s = D.segs[Math.max(0, si)]; const p = D.prompts[s.p];
+  const set = D.station.filter(e => e.kind === 'prompt_set' && e.t <= t + 0.01).pop();
+  const ci = at(D.calls, t), c = D.calls[Math.max(0, ci)]; const [cn, cc] = cls(c[2]);
+  const ri = at(D.chunks, t), r = ri >= 0 ? D.chunks[ri] : null;
+  const fr = D.holds.find(([a, d]) => t >= a && t <= a + d);
+  const jv = judge.filter(e => e.event === 'verdict' && e.rel <= t).pop();
+  const jo = judge.filter(e => e.event !== 'verdict' && e.rel <= t).pop();
+  const nextSeg = D.segs.find(x => x.t > t);
+  now.innerHTML = `<div class="row"><h2>Time</h2><span class="big">${fmt(t)}</span> ${fr ? '<span class="pill bad">arms frozen</span>' : ''}</div>
+  <div class="row"><h2>Prompt now · P${s.p + 1} · ${p.chars} chars · for ${(t - s.t).toFixed(1)} s</h2><div class="prompt"></div>
+  <div class="note">${set ? `station last received a prompt at ${fmt(set.t)}` : ''}${nextSeg ? ` · next switch in ${(nextSeg.t - t).toFixed(1)} s` : ''}</div></div>
+  <div class="row"><h2>Right gripper</h2>gap <b>${c[2].toFixed(1)} mm</b> <span class="pill ${cc}">${cn}</span> · height <b>${c[3].toFixed(1)} cm</b></div>
+  ${c.length > 4 ? `<div class="row"><h2>Left gripper</h2>gap <b>${c[4].toFixed(1)} mm</b> · height <b>${c[5].toFixed(1)} cm</b></div>` : ''}
+  <div class="row"><h2>Dream-1</h2>${r ? `reply #${r[1]} ${(t - r[0]).toFixed(1)} s ago · ${r[2]} ms round trip · ${r[3]}` : 'waiting for the first reply'}</div>
+  <div class="row"><h2>Judge (vision model)</h2>${judge.length ? (jv ? '' : 'no verdict yet') : '<span class="note">not loaded</span>'}<div id="jv" class="note"></div></div>`;
+  now.querySelector('.prompt').textContent = p.full;
+  if (jv) now.querySelector('#jv').textContent = summary(jv) + (jo ? '\nlast action: ' + summary(jo) : '');
+  document.querySelectorAll('#etable tr').forEach(tr => tr.classList.toggle('cur', +tr.dataset.t <= t && t < +tr.dataset.n));
+}
+function events() {
+  const rows = [];
+  D.segs.forEach((s, i) => rows.push([s.t, 'prompt used', `P${s.p + 1}: ${D.prompts[s.p].short}`]));
+  D.station.forEach(e => rows.push([e.t, e.kind === 'prompt_set' ? 'prompt set' : e.kind, e.text]));
+  (D.runs || []).forEach(b => rows.push([b.t, 'step ' + b.step, `started ${b.wall}, ran ${b.dur} s` + (b.gap_s != null ? `, after the session waited ${b.gap_s} s` : '') + (b.between ? ` · between steps: ${b.between}` : '')]));
+  judge.forEach(e => rows.push([e.rel, 'judge · ' + e.event, summary(e).replace(/^\S+ \S+: /, '')]));
+  rows.sort((a, b) => a[0] - b[0]);
+  const et = document.getElementById('etable'); et.innerHTML = '';
+  rows.forEach((r, i) => { const tr = et.insertRow(); tr.dataset.t = r[0]; tr.dataset.n = i + 1 < rows.length ? rows[i + 1][0] : 1e9;
+    const a = tr.insertCell(); a.className = 't'; a.textContent = fmt(r[0]); tr.insertCell().textContent = r[1]; tr.insertCell().textContent = r[2];
+    tr.onclick = () => { v.currentTime = Math.max(0, r[0]); }; });
+}
+function loadJudge(text) {
+  const ev = text.split(/\r?\n/).filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(e => e && typeof e.t === 'number');
+  if (!ev.length) { jinfo = 'no events with a numeric t found'; return; }
+  let off = 0, how = 'clock only';
+  if (D.t0_epoch) ev.forEach(e => e.rel = e.t - D.t0_epoch); else { const s0 = ev.find(e => /start|set_prompt|prompt_change/.test(e.event)); ev.forEach(e => e.rel = e.t - (s0 ? s0.t : ev[0].t)); how = 'first start event (no station clock)'; }
+  const sets = D.station.filter(e => e.kind === 'prompt_set'); const diffs = [];
+  ev.filter(e => /set_prompt|prompt_change|^start$/.test(e.event) && e.prompt).forEach(e => { const m = sets.find(s => s.text.slice(0, 80) === String(e.prompt).slice(0, 80) && Math.abs(s.t - e.rel) < 60); if (m) diffs.push(m.t - e.rel); });
+  if (diffs.length) { diffs.sort((a, b) => a - b); off = diffs[diffs.length >> 1]; ev.forEach(e => e.rel += off); how = `aligned on ${diffs.length} matching prompt sends (shift ${off.toFixed(2)} s)`; }
+  judge = ev; jinfo = how; document.getElementById('drop').textContent = `judge log: ${ev.length} events, ${how}`; events(); render();
+}
+document.getElementById('jfile').onchange = e => { const f = e.target.files[0]; if (f) f.text().then(loadJudge); };
+addEventListener('dragover', e => e.preventDefault()); addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) f.text().then(loadJudge); });
+svg.addEventListener('click', e => { const r = svg.getBoundingClientRect(); const t = (e.clientX - r.left - LW) / (r.width - LW - 12) * D.duration; if (t >= 0) v.currentTime = Math.min(D.duration, t); });
+document.querySelectorAll('button[data-r]').forEach(b => b.onclick = () => { v.playbackRate = +b.dataset.r; document.querySelectorAll('button[data-r]').forEach(x => x.classList.toggle('on', x === b)); });
+addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; if (e.code === 'Space') { e.preventDefault(); v.paused ? v.play() : v.pause(); } if (e.code === 'ArrowRight') v.currentTime += 5; if (e.code === 'ArrowLeft') v.currentTime -= 5; });
+v.addEventListener('timeupdate', update); v.addEventListener('seeked', update);
+(function tick() { if (!v.paused) update(); requestAnimationFrame(tick); })();
+addEventListener('resize', render); events(); render();
+</script>
+</body>
+</html>
