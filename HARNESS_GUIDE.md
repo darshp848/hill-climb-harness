@@ -337,7 +337,28 @@ and may end the current stage, skip later ones, send the robot a new instruction
 follows for the rest of the run. Notes are appended to `--lessons` (default `lessons/operator.md`) and read into the
 monitor's system prompt on later runs. Everything is in `events.jsonl` (`operator_input`, `operator_reply`,
 `operator_action`) and on the trace page (`python tools/trace_report.py`). `s` + Enter still stops. Any human input
-during a match is a DQ: run matches with `--no-operator`.
+during a match is a DQ: run matches with `--match` (it turns the operator off; see [FINAL_HARNESS.md](FINAL_HARNESS.md)).
+
+## 6h. Observe a stage through LiveKit (`python -m harness.livekit_observer`)
+
+The rubric gives +10 for showing LiveKit use to the referee before the match. The observer subscribes to the station's
+camera tracks, never publishes, and isn't part of the runner: the runner still verifies its own stages from the
+station's frames.
+
+Install `livekit==1.2.1` (not in the base requirements). Set `LIVEKIT_URL` and `LIVEKIT_TOKEN` for the station's room,
+with a token that has `canSubscribe` on and `canPublish` and `canPublishData` off.
+
+```bash
+python -m harness.livekit_observer --publisher metal-station \
+  --track overhead=table_top --track wrist_l=left_wrist \
+  --plan plans/hill_climb_v4.yaml --stage tower_pass
+```
+
+Use the publisher identity and exact video track names from the room. With `--plan` and `--stage`, each sample also
+gets an advisory verdict from the Claude monitor (needs `ANTHROPIC_API_KEY`). Leave both out to capture camera evidence
+only. JPEGs and verdicts go to `runs_livekit/`. `receive_age_ms` is the time since this subscriber got the frame; the
+RTC timestamp is logged separately. A sample is taken only when every named track has a frame under `--max-age` (1 s)
+that wasn't in the previous sample.
 
 ## 7. Test in simulation (before the robot)
 
