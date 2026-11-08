@@ -378,3 +378,47 @@ def test_per_poll_guard_counts_new_frames_only(fake, write_plan, tmp_path):
     result = runner.run()
     assert not result.guard_tripped                    # one frame, judged once: never two yes answers
     assert len([e for e in events(runner.log, "guard_yes") if e.get("source") == "local"]) == 1
+
+
+# -- third Codex review ------------------------------------------------------------------------------------------------
+def test_no_home_while_the_live_guard_is_armed(fake, write_plan, tmp_path):
+    from harness.runner import _Fail
+    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+    runner._t0 = runner._clock()
+    g = LiveGuard(_Feed(), lambda f: (False, "n"), lambda: None)
+    runner.live_guard = g
+    g.arm("ball_1")
+    with pytest.raises(_Fail, match="armed"):
+        runner._motion(runner.station.home)
+    assert "/home" not in routes(fake)
+    g.disarm()
+    runner._motion(runner.station.home)
+    assert "/home" in routes(fake)
+
+
+def test_per_poll_guard_ignores_a_frozen_wrist_when_the_scene_changes(fake, write_plan, tmp_path):
+    q = "Is a gripper holding a black ball?"
+    path = write_plan([stage("ball_1", timeout_s=1.5, on_fail="skip")], verifier="monitor",
+                      guard={"question": q, "stages": ["ball_"], "confirm": 2})
+    runner = build(fake, path, tmp_path, Script([mv(None)]))
+    n = {"i": 0}
+
+    def latest():
+        n["i"] += 1
+        return {"scene": b"scene%d" % n["i"], "wrist_r": b"frozen-wrist"}
+    runner.frames.latest = latest
+    runner.fast_guard = lambda f: (True, "white ball") if "wrist_r" in f else (False, "none")
+    result = runner.run()
+    assert not result.guard_tripped
+    assert len([e for e in events(runner.log, "guard_yes") if e.get("source") == "local"]) == 1
+
+
+def test_a_dead_camera_does_not_slow_the_live_one():
+    import time as _t
+    lf = LiveFrames("http://127.0.0.1:9", ("wrist_l", "wrist_r"))
+    lf._one = lambda role: (_t.sleep(0.5), None)[1] if role == "wrist_l" else (_t.sleep(0.4), b"jpeg")[1]
+    t0 = _t.monotonic()
+    out = lf.grab()
+    took = _t.monotonic() - t0
+    assert out == {"wrist_r": b"jpeg"}
+    assert took < 0.8                                  # in parallel: ~0.5 s, not 0.9 s

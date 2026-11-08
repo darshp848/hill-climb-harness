@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib.error
 import urllib.request
@@ -32,26 +33,35 @@ from typing import Any
 
 
 class LiveFrames:
-    """GET /frame/<role>.jpg from the station API for each role. A role that fails this tick is just missing from
-    the result; it is tried again next tick (a camera that recovers is used again)."""
+    """GET /frame/<role>.jpg from the station API for each role, all roles at once (one slow or dead camera must not
+    hold up the others: 4 ms per frame on the NUC, so `timeout_s` is short). A role that fails this tick is missing
+    from the result and is tried again next tick (a camera that recovers is used again)."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:8091", roles: tuple[str, ...] = ("wrist_l", "wrist_r"),
-                 *, timeout_s: float = 1.0):
+                 *, timeout_s: float = 0.25):
         self.base_url = base_url.rstrip("/")
         self.roles = list(roles)
         self.timeout_s = timeout_s
         self.last_error: str | None = None
+        self._pool = ThreadPoolExecutor(max_workers=max(1, len(self.roles)), thread_name_prefix="live-frame")
+
+    def _one(self, role: str) -> bytes | None:
+        try:
+            with urllib.request.urlopen(f"{self.base_url}/frame/{role}.jpg", timeout=self.timeout_s) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            self.last_error = f"{role}: HTTP {exc.code}"
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            self.last_error = f"{role}: {exc}"
+        return None
 
     def grab(self) -> dict[str, bytes]:
+        jobs = {role: self._pool.submit(self._one, role) for role in self.roles}
         out: dict[str, bytes] = {}
-        for role in self.roles:
-            try:
-                with urllib.request.urlopen(f"{self.base_url}/frame/{role}.jpg", timeout=self.timeout_s) as resp:
-                    out[role] = resp.read()
-            except urllib.error.HTTPError as exc:
-                self.last_error = f"{role}: HTTP {exc.code}"
-            except (urllib.error.URLError, OSError, TimeoutError) as exc:
-                self.last_error = f"{role}: {exc}"
+        for role, job in jobs.items():
+            data = job.result()
+            if data is not None:
+                out[role] = data
         return out
 
     def probe(self, tries: int = 3) -> list[str]:
@@ -100,6 +110,10 @@ class LiveGuard:
                 self.last_answer_t = self._clock()   # max_blind_s counts from arming, as the poll guard does
                 self._log("live_guard_armed", stage=stage)
             self._armed = stage
+
+    @property
+    def armed(self) -> bool:
+        return self._armed is not None
 
     def disarm(self) -> None:
         with self._lock:

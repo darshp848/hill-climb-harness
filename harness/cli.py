@@ -131,16 +131,17 @@ def main(argv: list[str] | None = None) -> int:
                 live = LiveFrames(station_url, wrists)
                 found = live.probe()
                 if not found:
-                    # no add-on or other camera names: say so and keep only the per-poll guard on debug-view trips
-                    print(f"--live-guard: no live wrist frame at {station_url}/frame/<camera>.jpg "
-                          f"({live.last_error}); running without it", file=sys.stderr)
-                    log.event("warning", message=f"live guard off: no /frame route ({live.last_error})")
-                else:   # all roles stay in: a camera missing at startup is used once it answers
-                    runner.live_guard = LiveGuard(live.grab, det.guard, station.stop, rate_hz=args.live_guard_hz,
-                                                  confirm_frames=args.live_guard_frames, log=log.event)
-                    runner.live_guard.start()
-                    log.event("live_guard", station=station_url, roles=found, rate_hz=args.live_guard_hz,
-                              confirm_frames=args.live_guard_frames)
+                    # no add-on or other camera names: say so. It still runs, in case the cameras come up; the
+                    # per-poll guard on debug-view trips keeps running either way.
+                    print(f"--live-guard: no live wrist frame at {station_url}/frame/<camera>.jpg yet "
+                          f"({live.last_error}); the per-poll guard covers until one answers", file=sys.stderr)
+                    log.event("warning", message=f"live guard: no /frame answer at startup ({live.last_error})")
+                # All roles stay in, fetched in parallel: a camera missing at startup is used once it answers.
+                runner.live_guard = LiveGuard(live.grab, det.guard, station.stop, rate_hz=args.live_guard_hz,
+                                              confirm_frames=args.live_guard_frames, log=log.event)
+                runner.live_guard.start()
+                log.event("live_guard", station=station_url, roles=list(wrists), answering=found,
+                          rate_hz=args.live_guard_hz, confirm_frames=args.live_guard_frames)
         elif args.live_guard:
             print("--live-guard needs --detect (the colour detector judges the live frames)", file=sys.stderr)
             return 2

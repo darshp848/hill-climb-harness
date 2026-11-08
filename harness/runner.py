@@ -158,7 +158,7 @@ class Runner:
         # harness.start_pose.StartPoses for plan.start_pose; None = no start-pose checks
         self.start_poses: StartPoses | None = None
         self._homes: dict[str, int] = {}
-        self._fast_sig: str | None = None   # frames the per-poll local guard judged last
+        self._fast_sig: dict[str, str] = {}   # per camera: the image the per-poll local guard judged last
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -268,8 +268,11 @@ class Runner:
         """Sends a command that can move an arm, never after an operator stop, the deadline or a guard trip. A live
         guard trip found right after the command may have been overtaken by it: stop again and end the match."""
         self._check_global()
-        reply = fn(*args)
         lg = self.live_guard
+        if lg is not None and fn == self.station.home and lg.armed:
+            # /home can't be stopped once begun: never while the guard could fire (a trip racing this /home)
+            raise _Fail("refusing /home while the live guard is armed")
+        reply = fn(*args)
         if lg is not None and lg.tripped is not None:
             self._safe_stop(f"guard tripped while sending a command: {lg.tripped}")
             raise _Guard(f"guard tripped (live frames): {lg.tripped}")
@@ -452,13 +455,17 @@ class Runner:
             if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
                 self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
             fast_frames = self.frames.latest() if guard is not None and self.fast_guard is not None else {}
-            fast_sig = hashlib.sha1(b"".join(fast_frames[k] for k in sorted(fast_frames))).hexdigest()
-            if fast_frames and fast_sig != self._fast_sig:   # kept with a live guard too, as a fallback
+            new_frames = {}
+            for role, jpeg in fast_frames.items():    # kept with a live guard too, as a fallback
+                sig = hashlib.sha1(jpeg).hexdigest()
+                if self._fast_sig.get(role) != sig:
+                    self._fast_sig[role] = sig
+                    new_frames[role] = jpeg
+            if new_frames:
                 # Local detector on every poll, from the stage's first second: no API latency, works offline.
-                # Only new frames count: the debug view repeats a trip's frames until the next one, and a frozen
-                # view must neither confirm a yes nor keep max_blind_s satisfied.
-                self._fast_sig = fast_sig
-                local, why = self.fast_guard(fast_frames)
+                # Only camera images not judged before count: the debug view repeats a trip's frames until the next
+                # one, and a frozen wrist view must neither confirm a yes nor keep max_blind_s satisfied.
+                local, why = self.fast_guard(new_frames)
                 if isinstance(local, bool):
                     self._guard_answer_t = self._clock()
                 if local is True:
