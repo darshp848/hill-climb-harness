@@ -291,6 +291,7 @@ class Runner:
         max_p: float | None = None
         rise_ref = last_rise = None
         hint: int | None = None
+        consec_unwatched, watch_fixes = 0, 0
         while True:
             self._nap(self.plan.check_every_s)
             st = self._poll_health()
@@ -333,6 +334,19 @@ class Runner:
                     if verdict.status == "failing" and not failing:
                         failing, why = True, f"monitor says failing: {verdict.reason}"
                     consec_stalled = consec_stalled + 1 if verdict.status == "stalled" else 0
+                    if stage.watch is not None and verdict.done is not True:
+                        consec_unwatched = consec_unwatched + 1 if verdict.watch_ok is False else 0
+                        if consec_unwatched >= confirm and watch_fixes < stage.watch.max_fixes:
+                            watch_fixes += 1
+                            consec_unwatched = consec_done = consec_fail = consec_stalled = 0
+                            self.log.event("watch_lost", stage=stage.name, attempt=attempt, fix=watch_fixes,
+                                           camera=stage.watch.camera, reason=verdict.reason)
+                            self._issue(stage.watch.prompt, f"watcher back in place ({stage.name})")
+                            self._hold(stage.watch.settle_s)
+                            self._issue(stage.prompt, f"stage {stage.name} after watcher fix")
+                            gate = (self._clock() - t0) + stage.effective_settle()
+                            rise_ref = last_rise = None
+                            continue
                 if verdict.done is True:
                     consec_fail = 0
                     if verdict.immediate or frames:

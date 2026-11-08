@@ -36,6 +36,7 @@ class MonitorVerdict(Verdict):
     scene_ok: bool | None = None
     holding: dict | None = None
     guard: bool | None = None  # the plan guard's yes/no answer, on guarded stages only
+    watch_ok: bool | None = None  # only for stages with a watcher arm
 
 
 class Verifier(Protocol):
@@ -211,6 +212,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
     rec = obj.get("recovery")
     rec = rec if isinstance(rec, int) and not isinstance(rec, bool) and 0 <= rec < menu_len else None
     scene = obj.get("scene_ok") if isinstance(obj.get("scene_ok"), bool) else None
+    watch_ok = obj.get("watch_ok") if isinstance(obj.get("watch_ok"), bool) else None
     holding = obj.get("holding")
     if isinstance(holding, dict):
         holding = {str(k): str(v) for k, v in holding.items()}
@@ -224,7 +226,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
         else:
             reason = f"low confidence: {reason}"
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
-                          recovery=rec, scene_ok=scene, holding=holding, guard=guard)
+                          recovery=rec, scene_ok=scene, holding=holding, guard=guard, watch_ok=watch_ok)
 
 
 class MonitorVerifier:
@@ -311,7 +313,12 @@ class MonitorVerifier:
         guarded = guard is not None and guard.covers(stage.name)
         if guarded:
             lines.append(f"Safety question, answer it as `guard` (true = yes): {guard.question}")
-        lines += ["", MONITOR_INSTRUCTION, GUARD_SCHEMA if guarded else MONITOR_SCHEMA]
+        schema = GUARD_SCHEMA if guarded else MONITOR_SCHEMA
+        if stage.watch is not None:
+            lines.append(f"Watcher check (answer it as watch_ok, from the {stage.watch.camera} images): "
+                         f"{stage.watch.check}")
+            schema = schema.rstrip()[:-1] + ', "watch_ok": bool}'
+        lines += ["", MONITOR_INSTRUCTION, schema]
         return "\n".join(lines)
 
     def _build(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> dict[str, Any] | None:
