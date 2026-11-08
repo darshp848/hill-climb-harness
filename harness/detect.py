@@ -178,6 +178,26 @@ def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _dilate(m: np.ndarray) -> np.ndarray:
+    """One step of 4-neighbour dilation; scipy is optional in this module, so these three use numpy only."""
+    out = m.copy()
+    out[1:] |= m[:-1]
+    out[:-1] |= m[1:]
+    out[:, 1:] |= m[:, :-1]
+    out[:, :-1] |= m[:, 1:]
+    return out
+
+
+def _erode(m: np.ndarray) -> np.ndarray:
+    return ~_dilate(~np.pad(m, 1))[1:-1, 1:-1]
+
+
+def _fill_holes(m: np.ndarray) -> np.ndarray:
+    """m plus every background region that doesn't reach its border."""
+    lab, _ = _label(~np.pad(m, 1))
+    return (lab != lab[0, 0])[1:-1, 1:-1]
+
+
 HOLE_SURE = 0.6     # at or above this a hole was really seen on the overhead view; only then is it shown or used
 _HOLE_DARK = 0.62   # a hole is at least this much darker than the cube's median brightness
 
@@ -190,22 +210,20 @@ def _hole_axis(raw: np.ndarray, blob: np.ndarray, value: np.ndarray) -> tuple[st
     camera (lower half). horizontal-x = on a side face (off to one side and narrow). horizontal = no hole seen, so it
     runs sideways through a face this view can't see. Foam shadow and small cubes make this a guess: use the
     confidence, and don't gate a stage on it without checking it on the station's cameras."""
-    if _ndi is None:
-        return "unknown", 0.0
     ys, xs = np.nonzero(blob)
     y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    b, r, v = blob[y0:y1, x0:x1], raw[y0:y1, x0:x1], value[y0:y1, x0:x1]
+    b, r, v = _fill_holes(blob[y0:y1, x0:x1]), raw[y0:y1, x0:x1], value[y0:y1, x0:x1]
     body = b & r
     if body.sum() < 40:
         return "unknown", 0.0
     H, W = b.shape
-    cand = _ndi.binary_erosion(b, iterations=1) & (~r | (v < _HOLE_DARK * float(np.median(v[body]))))
-    lab, n = _ndi.label(cand)
+    cand = _erode(b) & (~r | (v < _HOLE_DARK * float(np.median(v[body]))))
+    lab, n = _label(cand)
     best, area = None, 0
     for i in range(1, n + 1):
         comp = lab == i
         size = int(comp.sum())
-        if size > area and not (_ndi.binary_dilation(comp, iterations=1) & ~b).any():
+        if size > area and not (_dilate(comp) & ~b).any():
             best, area = comp, size
     frac = area / float(b.sum())
     if best is None or frac < 0.02:
