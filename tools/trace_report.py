@@ -19,9 +19,10 @@ from datetime import datetime
 RUNS = pathlib.Path(__file__).resolve().parents[1] / "runs"
 
 CSS = """
-:root { --bg:#fbfbfa; --text:#1d1d1b; --muted:#6b6b66; --line:#e4e4df; --ok:#2f7d4f; --bad:#b3261e; --prompt:#1f5fa8; }
+:root { --bg:#fbfbfa; --text:#1d1d1b; --muted:#6b6b66; --line:#e4e4df; --ok:#2f7d4f; --bad:#b3261e; --prompt:#1f5fa8;
+  --rewrite-bg:#fff4dc; --rewrite:#8a5a00; --op-bg:#eef1ff; --op:#3b3fa8; }
 @media (prefers-color-scheme: dark) { :root { --bg:#161615; --text:#ecece8; --muted:#9b9b95; --line:#30302c;
-  --ok:#5cc28a; --bad:#ff6b5e; --prompt:#7fb0ff; } }
+  --ok:#5cc28a; --bad:#ff6b5e; --prompt:#7fb0ff; --rewrite-bg:#2e2412; --rewrite:#f0b54a; --op-bg:#1d2033; --op:#a9adff; } }
 * { box-sizing:border-box; }
 body { margin:0; padding:24px 16px 64px; background:var(--bg); color:var(--text);
   font:14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
@@ -38,11 +39,17 @@ table { border-collapse:collapse; width:100%; } td, th { text-align:left; paddin
 .thumbs img { height:96px; border-radius:4px; display:block; }
 .filter { margin:8px 0 0; } .filter label { margin-right:14px; }
 body.hide-wait .waiting { display:none; }
+.rewrite { background:var(--rewrite-bg); } .rewrite .kind { color:var(--rewrite); }
+.op { background:var(--op-bg); } .op .kind { color:var(--op); }
+.was { color:var(--muted); text-decoration:line-through; }
 """
 
 KINDS = {"stage_start": "stage", "start": "prompt", "set_prompt": None, "prompt_change": "prompt", "verdict": "verdict",
          "attempt_end": "attempt end", "stage_skipped": "skipped", "recovery": "recovery", "retry": "retry",
-         "entry_check": "entry check", "stop": "stop", "run_end": "run end", "guard_stop": "guard stop"}
+         "entry_check": "entry check", "stop": "stop", "run_end": "run end", "guard_stop": "guard stop",
+         "prompt_rewrite": "monitor rewrote prompt", "tower_prompt": "tower prompt", "reset": "reset",
+         "auto_reset": "auto reset", "station_restart": "station restart", "operator_input": "operator said",
+         "operator_reply": "claude replied", "operator_action": "operator action", "guard_tripped": "guard tripped"}
 
 
 def _when(stamp: str) -> str:
@@ -72,6 +79,23 @@ def render(run: pathlib.Path) -> dict:
         if e["event"] == "stage_start":
             cls += " stage"
             body = f"<b>{html.escape(stage)}</b> <span class='prompt'>{html.escape(e.get('prompt') or '')}</span>"
+        elif e["event"] == "prompt_rewrite":
+            cls += " rewrite"
+            body = (f"<span class='was'>“{html.escape(e.get('previous') or '')}”</span><br>"
+                    f"<span class='prompt'>“{html.escape(e.get('prompt') or '')}”</span>"
+                    f"<div class='muted'>because: {html.escape(str(e.get('reason') or ''))}</div>")
+        elif e["event"] in ("operator_input", "operator_reply", "operator_action"):
+            cls += " op"
+            if e["event"] == "operator_input":
+                body = f"“{html.escape(e.get('text') or '')}”"
+            elif e["event"] == "operator_reply":
+                acts = e.get("actions") or {}
+                body = html.escape(str(e.get("reply") or "")) + (
+                    f"<div class='muted'>{html.escape(json.dumps(acts))}</div>" if acts else "")
+            else:
+                body = html.escape(f"{e.get('action')}: {e.get('note') or e.get('stages') or e.get('stage') or ''}")
+        elif e["event"] == "prompt_change" and str(e.get("why") or "").startswith("monitor next_prompt"):
+            continue   # shown by its prompt_rewrite row
         elif e["event"] in ("start", "prompt_change"):
             why = e.get("why")
             body = f"<span class='prompt'>“{html.escape(e.get('prompt') or '')}”</span>" + (

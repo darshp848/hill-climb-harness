@@ -40,6 +40,7 @@ class MonitorVerdict(Verdict):
     watch_ok: bool | None = None  # only for stages with a watcher arm
     frames_sig: str | None = None  # digest of the newest frames this verdict was computed on
     tower: list[str] | None = None  # the tower the monitor sees, bottom to top (stacking stages with a tower_target)
+    next_prompt: str | None = None  # the monitor's own instruction for the robot (plan.rewrite_prompts)
 
 
 def valid_jpeg(data: bytes) -> bool:
@@ -73,6 +74,7 @@ class ManualVerifier:
         self._lock = threading.Lock()
         self._pending: str | None = None
         self._announced: set[str] = set()
+        self.on_text: Callable[[str], None] | None = None
         self._thread = threading.Thread(target=self._read_loop, name="manual-verifier", daemon=True)
         self._thread.start()
 
@@ -85,6 +87,8 @@ class ManualVerifier:
                         self._pending = key
                 elif key == "s" and self._on_stop is not None:
                     self._on_stop()
+                elif key and self.on_text is not None:
+                    self.on_text(line.strip())   # anything else is the operator talking (harness.operator)
         except (ValueError, OSError):
             return
 
@@ -183,6 +187,14 @@ MONITOR_SCHEMA = (
     '"holding": {"left": str, "right": str}, "recovery": <index into the recovery menu or null>, '
     '"scene_ok": bool, "confidence": 0..1, "reason": str}')
 GUARD_SCHEMA = MONITOR_SCHEMA[:-1] + ', "guard": bool}'
+# plan.rewrite_prompts: the monitor's diagnosis becomes the robot's next instruction. Base Dream-1 follows a change of
+# object or step well and ignores fine adjustments ("1 cm higher"), so it is asked for a whole short instruction.
+NEXT_PROMPT_RULE = (
+    'next_prompt: only when the robot is on the wrong object or wrong step, plainly stuck, or about to fail (e.g. its '
+    'arm is about to hit the tower), write ONE short instruction for the robot that replaces the last prompt: max 200 '
+    'characters, plain words, one action, naming objects by colour and position, e.g. "pick up the yellow block and '
+    'place it gently on top of the pink block". Follow the system rules and any operator feedback. Otherwise null.')
+NEXT_PROMPT_MAX_CHARS = 300
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -231,6 +243,8 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
     watch_ok = obj.get("watch_ok") if isinstance(obj.get("watch_ok"), bool) else None
     tower = obj.get("tower")
     tower = [str(x) for x in tower] if isinstance(tower, list) else None
+    nxt = obj.get("next_prompt")
+    nxt = " ".join(nxt.split())[:NEXT_PROMPT_MAX_CHARS] if isinstance(nxt, str) and nxt.strip() else None
     holding = obj.get("holding")
     if isinstance(holding, dict):
         holding = {str(k): str(v) for k, v in holding.items()}
@@ -245,7 +259,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
             reason = f"low confidence: {reason}"
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
                           recovery=rec, scene_ok=scene, holding=holding, guard=guard, watch_ok=watch_ok,
-                          tower=tower)
+                          tower=tower, next_prompt=nxt)
 
 
 class MonitorVerifier:
@@ -264,6 +278,7 @@ class MonitorVerifier:
         self.model = model or plan.claude.get("model", "claude-haiku-5-5")
         self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 4000))
         self.grip_note = ""   # set by the runner from /arms before each check (station_addons)
+        self.operator_notes: list[str] = []   # feedback typed by the operator during the run (harness.operator)
         self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
         if transport is None:
             key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
@@ -332,6 +347,9 @@ class MonitorVerifier:
             lines.append(self.legend)
         if getattr(self, "grip_note", ""):
             lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
+        if self.operator_notes:
+            lines.append("Operator feedback during this run (newest last; follow it):")
+            lines += [f"  - {n}" for n in self.operator_notes[-8:]]
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
         lines.append(f"Last prompt sent to the robot: {self._last_prompt or stage.prompt}")
         menu = stage.menu()
@@ -351,6 +369,8 @@ class MonitorVerifier:
             lines.append(f"Target tower, bottom to top: {target}. Report the tower you see as `tower`: a list of its "
                          "pieces bottom to top, worded like the target (empty list if there is no tower).")
             schema = schema.rstrip()[:-1] + ', "tower": [str]}'
+        if self.plan.rewrite_prompts:
+            schema = schema.rstrip()[:-1] + ', "next_prompt": str|null}\n' + NEXT_PROMPT_RULE
         if stage.watch is not None:
             lines.append(f"Watcher check (answer it as watch_ok, from the {stage.watch.camera} images): "
                          f"{stage.watch.check}")
@@ -404,8 +424,11 @@ class MonitorVerifier:
             content.append({"type": "image", "source": {
                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
-        return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
+        payload = {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
+                   "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
+        if self.plan.system_prompt:
+            payload["system"] = self.plan.system_prompt
+        return payload
 
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         payload = dict(payload)
