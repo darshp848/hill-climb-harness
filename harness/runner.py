@@ -168,6 +168,7 @@ class Runner:
         # harness.start_pose.StartPoses for plan.start_pose; None = no start-pose checks
         self.start_poses: StartPoses | None = None
         self._homes: dict[str, int] = {}
+        self.fast = None   # harness.fastloop.FastLoop: perception + observer + state-space decisions at 20 Hz
         self._fast_sig: dict[str, str] = {}   # per camera: the image the per-poll local guard judged last
         # harness.decide.Shadow: the decision equations run next to the rules below and log what they would do
         self.shadow: Any = None
@@ -545,6 +546,9 @@ class Runner:
         consec_unwatched, watch_fixes = 0, 0
         if self.shadow is not None:
             self.shadow.start(stage.timeout_s, stage.stall_s, confirm)
+        if self.fast is not None:
+            self.fast.attempt_start(stage.name, stage.timeout_s, stage.stall_s, guarded=guard is not None)
+        last_save = -1e9
         rewrites, last_prompt_t = 0, 0.0
         while True:
             self._nap(self.plan.check_every_s)
@@ -563,6 +567,14 @@ class Runner:
                 gate, rise_ref, last_rise = elapsed + stage.effective_settle(), None, None
             if st.get("state") == "idle":
                 return _Attempt(False, "station went idle during the stage", max_p, hint)
+            if self.fast is not None and self.fast.mode == "live":
+                fd = self.fast.decision
+                if self.fast.tripped is not None or fd.get("guard"):
+                    raise _Guard(f"guard tripped in stage {stage.name!r} (fast loop)")
+                if fd.get("pass"):
+                    return _Attempt(True, "fast loop: done evidence reached", max_p, hint)
+                if fd.get("fail") or fd.get("stall"):
+                    return _Attempt(False, "fast loop: " + ("failing" if fd.get("fail") else "stalled"), max_p, hint)
             if guard is not None and self.live_guard is not None and self.live_guard.last_answer_t is not None:
                 self._guard_answer_t = max(self._guard_answer_t or 0.0, self.live_guard.last_answer_t)
             fast_frames = self.frames.latest() if guard is not None and self.fast_guard is not None else {}
@@ -591,7 +603,12 @@ class Runner:
                 frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
                 self._last_verdict = verdict
-                saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
+                real = isinstance(verdict, MonitorVerdict) and verdict.status is not None
+                if real or elapsed - last_save >= 3.0:   # a 0.25 s loop must not write 12 images a second
+                    saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
+                    last_save = elapsed
+                else:
+                    saved = []
                 self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
                 if guard is not None:
                     answer = getattr(verdict, "guard", None)
@@ -619,6 +636,14 @@ class Runner:
                     raise _Guard(f"guard blind in stage {stage.name!r}: no answer for {guard.max_blind_s:g} s")
                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
+                if self.fast is not None and monitor:
+                    sig_ = getattr(verdict, "frames_sig", None)
+                    held = " ".join(str(x) for x in (verdict.holding or {}).values()).lower()
+                    self.fast.verdict(done=verdict.done, failing=verdict.done is False or verdict.status == "failing",
+                                      same_frames=verdict.done is True and sig_ is not None and sig_ == last_done_sig,
+                                      stalled=verdict.status == "stalled", progress=verdict.progress,
+                                      guard=getattr(verdict, "guard", None),
+                                      holding=None if not held else not any(w in held for w in ("nothing", "none")))
                 nxt = getattr(verdict, "next_prompt", None) if self.plan.rewrite_prompts else None
                 if (nxt and monitor and verdict.status in ("stalled", "failing") and verdict.done is not True
                         and last_done_t is None and rewrites < REWRITE_MAX
@@ -674,6 +699,12 @@ class Runner:
                     # the same camera images judged twice are one look, not two: a frozen view must not confirm
                     self.log.event("same_frames", stage=stage.name, attempt=attempt,
                                    note="done verdict on the frames of the previous done: not counted")
+                elif (verdict.done is True and not verdict.immediate and last_done_t is not None
+                      and elapsed - last_done_t < self.plan.confirm_gap_s):
+                    # Two hedged / parallel calls can land a second apart on near-identical frames: they are one
+                    # look, not two. Keeps "stands 3 s after release" true and stops paired false dones (stress sim).
+                    self.log.event("done_too_close", stage=stage.name, attempt=attempt,
+                                   gap_s=round(elapsed - last_done_t, 2), min_gap_s=self.plan.confirm_gap_s)
                 elif verdict.done is True:
                     consec_fail = 0
                     if verdict.immediate or frames:
@@ -795,6 +826,9 @@ class Runner:
                              max_progress=None)
             raise
         self.log.event("attempt_end", stage=stage.name, attempt=attempt, ok=out.ok, reason=out.reason)
+        self._attempt_n = attempt + 1
+        if not out.ok:
+            self._last_fail_reason = out.reason
         self.log.segment(stage=stage.name, attempt=attempt, kind="stage", prompt=prompt, t_start=t_start,
                          t_end=time.time(), outcome="ok" if out.ok else "failed", reason=out.reason,
                          max_progress=out.max_progress)
@@ -862,6 +896,23 @@ class Runner:
     def _stage_prompt(self, stage: Stage, verifier: Verifier) -> str:
         """The stage's prompt, or with plan.tower_prompts on a stacking stage: the next target piece by name, after
         the tower the monitor last reported (one synchronous look if it hasn't reported one yet)."""
+        return self._layered(stage, self._stage_prompt_base(stage, verifier))
+
+    def _layered(self, stage: Stage, prompt: str) -> str:
+        """plan.prompt_level (harness.promptgen): add context levels to the prompt for base Dream-1. 1 = as is."""
+        level = int(getattr(self.plan, "prompt_level", 1))
+        if level == 1:
+            return prompt
+        from .promptgen import Context, compose  # noqa: PLC0415
+        v = getattr(self, "_last_verdict", None)
+        ctx = Context(prefix=self.plan.prompt_prefix or "", holding=getattr(v, "holding", None),
+                      tower=self._tower, attempt=getattr(self, "_attempt_n", 1),
+                      progress=getattr(v, "progress", None), last_failure=getattr(self, "_last_fail_reason", ""))
+        out = compose(prompt, level, ctx)
+        self.log.event("prompt_layered", stage=stage.name, level=level, prompt=out)
+        return out
+
+    def _stage_prompt_base(self, stage: Stage, verifier: Verifier) -> str:
         plan = self.plan
         if not plan.tower_prompts or not stage.name.startswith(TOWER_STAGES):
             return stage.prompt

@@ -14,7 +14,7 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first", "confirm_gap_s", "fast", "prompt_level"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
@@ -134,6 +134,9 @@ class Plan:
     checkpoint: str | None = None
     time_budget_s: float = 900.0
     check_every_s: float = 3.0
+    confirm_gap_s: float = 0.0   # min seconds between two "done" verdicts that count toward confirm
+    prompt_level: int = 1        # harness.promptgen level for base Dream-1 (1 = the plan's prompt as written)
+    fast: dict[str, Any] = field(default_factory=dict)   # harness.fastloop settings (rate_hz, mode, weights)
     verifier: str = "manual"
     claude: dict[str, Any] = field(default_factory=lambda: {"model": "claude-haiku-5-5", "max_tokens": 200})
     cameras_for_check: list[str] = field(default_factory=list)  # empty = all cameras
@@ -170,6 +173,10 @@ def _roles(value: Any, where: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(c, str) and c.strip() for c in value):
         raise ValueError(f"{where}: must be a list of camera role names")
     return [c.strip() for c in value]
+
+
+def _bad_level(v: Any) -> int:
+    raise ValueError(f"plan.prompt_level: an integer 0-5, got {v!r}")
 
 
 def _num(value: Any, where: str, *, integer: bool = False) -> float:
@@ -384,6 +391,9 @@ def parse_plan(data: Any) -> Plan:
         checkpoint=checkpoint,
         time_budget_s=float(_num(data.get("time_budget_s", 900.0), "plan.time_budget_s")),
         check_every_s=float(_num(data.get("check_every_s", 3.0), "plan.check_every_s")),
+        confirm_gap_s=float(_num(data["confirm_gap_s"], "plan.confirm_gap_s")) if "confirm_gap_s" in data else 0.0,
+        fast=dict(data.get("fast") or {}),
+        prompt_level=int(data.get("prompt_level", 1)) if isinstance(data.get("prompt_level", 1), int) and 0 <= int(data.get("prompt_level", 1)) <= 5 else _bad_level(data.get("prompt_level")),
         verifier=default_verifier,
         claude=claude,
         cameras_for_check=list(cams),

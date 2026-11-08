@@ -80,7 +80,7 @@ def sim_frames(hold_eight: bool) -> dict[str, bytes]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", choices=["api", "subscription"],
+    ap.add_argument("--backend", choices=["api", "subscription", "openrouter"],
                     default=os.environ.get("HARNESS_CLAUDE_BACKEND")
                     or ("api" if os.environ.get("ANTHROPIC_API_KEY") else "subscription"))
     ap.add_argument("--plan", default=str(ROOT / "plans" / "hill_climb_v4.yaml"))
