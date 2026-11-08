@@ -50,7 +50,7 @@ def test_hedged_monitor_takes_the_first_good_reply(write_plan):
     path.write_text(path.read_text(encoding="utf-8") + "\nclaude: {hedge: 3}\n", encoding="utf-8")
     plan = load_plan(path)
     delays = iter([0.4, 0.05, 0.3])
-    reply = "<json>" + json.dumps({"stage_done": True, "progress": 0.9, "status": "ok", "reason": "fast one"}) + "</json>"
+    reply = "<json>" + json.dumps({"stage_done": True, "confidence": 0.9, "progress": 0.9, "status": "ok", "reason": "fast one"}) + "</json>"
 
     def transport(payload):
         time.sleep(next(delays))
