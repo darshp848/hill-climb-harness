@@ -76,7 +76,7 @@ class LiveFrames:
         """Roles that returned a frame in at least one of `tries` grabs (startup check before relying on them)."""
         seen: set[str] = set()
         for _ in range(tries):
-            seen |= set(self.grab())
+            seen |= set(self.grab(wait_s=self.timeout_s + 0.1))   # let each fetch finish or time out
             if len(seen) == len(self.roles):
                 break
         return [r for r in self.roles if r in seen]
