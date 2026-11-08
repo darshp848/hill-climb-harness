@@ -50,7 +50,7 @@ def _parser() -> argparse.ArgumentParser:
                    help="yes answers on distinct live frames in a row that trip the live guard (default 3)")
     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
                    help="override every stage's verifier")
-    p.add_argument("--claude-backend", choices=["api", "subscription"], default=None,
+    p.add_argument("--claude-backend", choices=["api", "subscription", "openrouter"], default=None,
                    help="how the claude/monitor verifiers reach Claude: api (ANTHROPIC_API_KEY, the default) or "
                         "subscription (the logged-in `claude` CLI); same as $HARNESS_CLAUDE_BACKEND")
     p.add_argument("--skip", action="append", default=[], metavar="PREFIX",
@@ -196,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             log.listeners.append(op.record)
             manual.on_text = op.submit
             runner.operator = op
+        det = None
         if args.detect:
             from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
             det = TableDetector.from_file(args.detect)
@@ -240,6 +241,21 @@ def main(argv: list[str] | None = None) -> int:
             except (OSError, ValueError) as exc:
                 print(f"start_pose: {exc}; start-pose checks are off", file=sys.stderr)
                 log.event("warning", message=f"start_pose reference not loaded: {exc}")
+        if plan.fast:
+            from .fastloop import FastLoop  # noqa: PLC0415
+            from .statespace import Weights  # noqa: PLC0415
+            fw = Weights(**(plan.fast.get("weights") or {}))
+            frames_fn = None
+            if det is not None:
+                from .live_guard import LiveFrames  # noqa: PLC0415
+                frames_fn = LiveFrames(station_url, ("wrist_l", "wrist_r")).grab
+            runner.fast = FastLoop(weights=fw, rate_hz=float(plan.fast.get("rate_hz", 20.0)),
+                                   mode=str(plan.fast.get("mode", "shadow")), frames=frames_fn,
+                                   guard_judge=det.guard if det is not None else None,
+                                   grippers=getattr(station, "grippers", None), stop=station.stop, log=log.event)
+            runner.fast.start()
+            log.event("fast_loop", rate_hz=plan.fast.get("rate_hz", 20.0), mode=plan.fast.get("mode", "shadow"),
+                      weights=plan.fast.get("weights") or {})
         holder["r"] = runner
         # Turn SIGTERM into the same clean stop as Ctrl+C.
         try:
@@ -271,5 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if runner is not None and runner.live_guard is not None:
             runner.live_guard.close()
+        if runner is not None and getattr(runner, "fast", None) is not None:
+            runner.fast.close()
         if fake is not None:
             fake.close()
