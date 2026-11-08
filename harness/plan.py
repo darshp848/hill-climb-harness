@@ -16,7 +16,7 @@ MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
-               "stall_s", "settle_s", "skip_if_done", "expect",
+               "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
                "cameras", "camera_notes", "history_cameras", "watch"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
@@ -48,6 +48,10 @@ class Stage:
     stall_s: float | None = None
     settle_s: float | None = None  # None = min_run_s
     skip_if_done: bool = False
+    # A yes/no question asked once before the prompt is sent; the stage is skipped unless the answer is a confident
+    # yes. E.g. plug-in stages: "are both grippers empty?", so a still-held UNPLUGGED cable is never pushed back in.
+    skip_unless: str | None = None
+    confirm: int | None = None    # None = the plan's confirm; 1 for stages where a false "done" costs nothing
     expect: str | None = None
     cameras: list[str] = field(default_factory=list)          # roles this stage's checks see; empty = plan's
     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
@@ -66,7 +70,7 @@ class Stage:
         return self.min_run_s if self.settle_s is None else self.settle_s
 
 
-_GUARD_KEYS = {"question", "stages", "confirm", "message"}
+_GUARD_KEYS = {"question", "stages", "confirm", "message", "max_blind_s"}
 
 
 @dataclass
@@ -78,6 +82,9 @@ class Guard:
     stages: list[str] = field(default_factory=list)   # stage-name prefixes it covers; empty = every stage
     confirm: int = 1
     message: str = "GUARD TRIPPED: RUN STOPPED. CALL STOP NOW"
+    # Stop as if tripped when a covered stage has had no yes/no answer for this long (monitor down, bad frames):
+    # a robot binning balls that nobody is watching for a black one. None = never.
+    max_blind_s: float | None = None
 
     def covers(self, stage_name: str) -> bool:
         return not self.stages or any(stage_name.startswith(p) for p in self.stages)
@@ -268,6 +275,8 @@ def parse_plan(data: Any) -> Plan:
                 stall_s=None if stall is None else float(_num(stall, f"{label}.stall_s")),
                 settle_s=None if settle is None else float(_num(settle, f"{label}.settle_s")),
                 skip_if_done=_bool(raw.get("skip_if_done", False), f"{label}.skip_if_done"),
+                skip_unless=None if raw.get("skip_unless") is None else _text(raw["skip_unless"], f"{label}.skip_unless"),
+                confirm=None if raw.get("confirm") is None else int(_num(raw["confirm"], f"{label}.confirm", integer=True)),
                 expect=expect,
                 cameras=cams,
                 camera_notes={k: v.strip() for k, v in notes.items()},
@@ -336,8 +345,10 @@ def _guard(raw: Any) -> Guard | None:
     message = raw.get("message", Guard.message)
     if not isinstance(message, str) or not message.strip():
         raise ValueError("plan.guard.message: must be non-empty text")
+    blind = raw.get("max_blind_s")
     return Guard(question=question.strip(), stages=[x.strip() for x in stages],
-                 confirm=int(_num(raw.get("confirm", 1), "plan.guard.confirm", integer=True)), message=message.strip())
+                 confirm=int(_num(raw.get("confirm", 1), "plan.guard.confirm", integer=True)), message=message.strip(),
+                 max_blind_s=None if blind is None else float(_num(blind, "plan.guard.max_blind_s")))
 
 
 _VAR = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

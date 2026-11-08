@@ -275,7 +275,11 @@ class FakeStation:
                     continue
                 self.chunks += 1
                 self._trip_n += 1
-                frames = {role: [base64.b64encode(TINY_JPEG).decode()] for role in ROLES}
+                # each trip is a new exposure: a COM segment with the trip number makes the bytes differ, as a
+                # live camera's do (the harness treats byte-identical frames as one look)
+                com = b"\xff\xfe\x00\x08" + self._trip_n.to_bytes(6, "big")
+                jpeg = TINY_JPEG[:2] + com + TINY_JPEG[2:]
+                frames = {role: [base64.b64encode(jpeg).decode()] for role in ROLES}
                 self._trips.append({
                     "n": self._trip_n, "sent_s": round(time.monotonic() - (self._run_started or 0), 3),
                     "frames": frames, "observation": {"prompt": self.prompt, "run": self.run_number},

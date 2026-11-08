@@ -29,8 +29,8 @@ def test_monitor_keeps_history_for_watcher_camera_and_labels_notes():
     plan, st = _st(history_cameras=["wrist_l"], camera_notes={"wrist_l": "side view from the watching arm"})
     t = Transport(reply_text())
     mon = MonitorVerifier(plan, transport=t, history_frames=2)
-    frames = lambda n: {"video.scene": JPEG + bytes([n]), "video.wrist_l": b"l" + bytes([n]),  # noqa: E731
-                        "video.wrist_r": b"r" + bytes([n])}
+    frames = lambda n: {"video.scene": JPEG + bytes([n]), "video.wrist_l": JPEG[:2] + b"l" + bytes([n]) + JPEG[-2:],  # noqa: E731
+                        "video.wrist_r": JPEG[:2] + b"r" + bytes([n]) + JPEG[-2:]}
     for i in range(4):
         mon.check_now(st, frames(i), 3.0 * i)
     content = t.payloads[-1]["messages"][0]["content"]

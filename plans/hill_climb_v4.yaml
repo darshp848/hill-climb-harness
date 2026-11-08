@@ -43,10 +43,14 @@ claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 c
 # the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
 # confirm 1, because a ball goes from gripper to bin in a few seconds; a false yes only costs the balls still to come.
 guard:
-  question: "Is either gripper holding a black 8-ball, or closed or closing around one?"
+  # The white ball is the illegal one on our table (Darsh, 8 Nov); the rubric's black 8-balls stay in the question.
+  question: "Is either gripper holding the white ball or a black 8-ball (balls that must never go in the bin), or closed or closing around one?"
   stages: [ball_]
   confirm: 1
-  message: "BLACK BALL HELD: RUN STOPPED. CALL STOP NOW"
+  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
+  # No guard answer for this long on a ball stage (Claude API down, bad frames) also stops the run: balls are +5
+  # each, a black ball in the bin loses the match, and nobody would be looking for one.
+  max_blind_s: 20
 
 stages:
   # ---- Stage 1 (pass bar: one cable out) ----
@@ -72,7 +76,19 @@ stages:
     expect: "The right arm carries the unplugged cable away from the hub, lowers it to the table and opens."
     timeout_s: 20
     min_run_s: 3
+    confirm: 1                # a false "put down" costs nothing: release_cable checks the grippers next
     on_fail: skip             # Stage 1 already passed
+
+  # The policy often keeps holding the unplugged plug (sim: most matches), and a held plug stops the stacking.
+  # Open the grippers before anything else; skipped at once if they're already empty.
+  - name: release_cable
+    prompt: "open both grippers and move the arms up"
+    success: "Are both grippers open and empty, with no cable held?"
+    timeout_s: 10
+    min_run_s: 2
+    confirm: 1
+    skip_if_done: true
+    on_fail: skip
 
   # One extra unplug, +5. Same prompt as unplug_cable: once the end port is empty, the end cable nearest the right arm
   # is the next one along (TELEOP_PLAN: record some T1 with the end port already empty). Then put that cable down too.
@@ -89,6 +105,7 @@ stages:
     success: "Are both grippers empty, with no cable held?"
     timeout_s: 12
     min_run_s: 3
+    confirm: 1
     skip_if_done: true        # nothing held (unplug_more failed or dropped it): skip at once
     on_fail: skip
 
@@ -97,6 +114,7 @@ stages:
     success: "Are both grippers empty and raised, clear of the hub, the cables and the blocks?"
     timeout_s: 10
     min_run_s: 2
+    confirm: 1
     skip_if_done: true        # usually already true after T2 or T3
     on_fail: skip
 
@@ -160,6 +178,7 @@ stages:
       "{stack_cam}": "view from the gripper doing the stacking"
     timeout_s: 30
     min_run_s: 4
+    confirm: 1                # same prompt as the next stage: a false "done" only renames the stage
     on_fail: skip             # a failed extra block costs only its 30 s; a fallen tower loses its height points
   - <<: *higher
     name: higher_2
@@ -168,29 +187,30 @@ stages:
   - &ball
     name: ball_1
     prompt: "put a golf ball in the bin"
-    success: "Is at least 1 golf ball resting inside the bin, with no black ball in the bin and the tower still standing?"
-    expect: "An arm picks up one golf ball that is not black, avoiding both black balls and the tower, and releases it into the bin."
+    success: "Is at least 1 golf ball resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+    expect: "An arm picks up one coloured golf ball, avoiding the white ball, any black ball and the tower, and releases it into the bin."
     timeout_s: 25
     min_run_s: 3
+    confirm: 1                # every ball stage sends the same prompt: a false "done" only renames the stage
     on_fail: skip
   - <<: *ball
     name: ball_2
-    success: "Are at least 2 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 2 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_3
-    success: "Are at least 3 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 3 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_4
-    success: "Are at least 4 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 4 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_5
-    success: "Are at least 5 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 5 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_6
-    success: "Are at least 6 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 6 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_7
-    success: "Are at least 7 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 7 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
   - <<: *ball
     name: ball_8
-    success: "Are at least 8 golf balls resting inside the bin, with no black ball in the bin and the tower still standing?"
+    success: "Are at least 8 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"

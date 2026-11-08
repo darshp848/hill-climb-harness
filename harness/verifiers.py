@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -37,6 +38,20 @@ class MonitorVerdict(Verdict):
     holding: dict | None = None
     guard: bool | None = None  # the plan guard's yes/no answer, on guarded stages only
     watch_ok: bool | None = None  # only for stages with a watcher arm
+    frames_sig: str | None = None  # digest of the newest frames this verdict was computed on
+
+
+def valid_jpeg(data: bytes) -> bool:
+    """SOI at the start and EOI near the end. A truncated or garbage frame makes the API answer 400 for the whole
+    request, and the stage-start frame is in every request of the stage, so one bad frame would blind a stage."""
+    return isinstance(data, (bytes, bytearray)) and len(data) > 4 and data[:2] == b"\xff\xd8" and b"\xff\xd9" in data[-32:]
+
+
+def frames_digest(frames: dict[str, bytes]) -> str:
+    h = hashlib.sha1()
+    for role, jpeg in sorted(frames.items()):
+        h.update(role.encode()); h.update(hashlib.sha1(jpeg).digest())
+    return h.hexdigest()[:16]
 
 
 class Verifier(Protocol):
@@ -261,6 +276,11 @@ class MonitorVerifier:
         self._history: dict[str, list[tuple[float, bytes]]] = {}
         self._last_prompt: str | None = None
         self._thread: threading.Thread | None = None
+        self._guard_alert = False   # a guard "yes" whose verdict was dropped (stage or prompt changed in flight)
+        # Optional local detector (harness.detect.TableDetector): draws labelled boxes on the frames sent to Claude
+        self.annotator: Callable[[dict[str, bytes]], dict[str, bytes]] | None = None
+        self.legend = ""
+        self.bad_frames = 0
 
     def __repr__(self) -> str:
         return f"MonitorVerifier(model={self.model!r})"
@@ -271,6 +291,12 @@ class MonitorVerifier:
             self._last_prompt = prompt
             self._gen += 1
             self._result = None
+
+    def take_guard_alert(self) -> bool:
+        """True once after a dropped verdict answered the guard yes. A safety answer outlives the stage it was for."""
+        with self._lock:
+            alert, self._guard_alert = self._guard_alert, False
+        return alert
 
     def wait_idle(self, timeout_s: float = 5.0) -> bool:
         """Tests: wait for the call in flight (if any)."""
@@ -298,6 +324,8 @@ class MonitorVerifier:
         if stage.camera_notes:
             lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
             lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]
+        if self.legend:
+            lines.append(self.legend)
         if getattr(self, "grip_note", ""):
             lines.append(f"Gripper sensors (measured, more reliable than the images for what is held): {self.grip_note}")
         lines.append(f"Elapsed in this stage: {elapsed_s:.0f} s of timeout {stage.timeout_s:g} s")
@@ -327,6 +355,14 @@ class MonitorVerifier:
             self._stage, self._first, self._history = stage.name, {}, {}
             self._gen += 1
             self._result = None
+        good = {r: j for r, j in frames.items() if valid_jpeg(j)}
+        self.bad_frames += len(frames) - len(good)
+        frames = good
+        if self.annotator is not None:
+            try:
+                frames = self.annotator(frames)
+            except Exception:  # noqa: BLE001 - a detector bug must not cost the monitor its frames
+                pass
         overhead, wrists = self._split(frames)
         if overhead is None and not wrists:
             return None
@@ -360,13 +396,17 @@ class MonitorVerifier:
                 "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}})
         content.append({"type": "text", "text": self._stage_text(stage, elapsed_s)})
         return {"model": self.model, "max_tokens": self.max_tokens, "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": content}]}
+                "messages": [{"role": "user", "content": content}], "_frames_sig": frames_digest(frames)}
 
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
+        payload = dict(payload)
+        sig = payload.pop("_frames_sig", None)
         try:
             reply = self._transport(payload)
             text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
-            return parse_monitor_reply(text, menu_len)
+            verdict = parse_monitor_reply(text, menu_len)
+            verdict.frames_sig = sig
+            return verdict
         except urllib.error.HTTPError as exc:
             return MonitorVerdict(None, 0.0, f"monitor error: HTTP {exc.code}")
         except Exception as exc:  # any failure means "can't tell"
@@ -377,6 +417,8 @@ class MonitorVerifier:
         with self._lock:
             if gen == self._gen:
                 self._result = verdict
+            elif verdict.guard is True:
+                self._guard_alert = True
             self._busy = False
 
     # -- Verifier protocol ----------------------------------------------------------------------
