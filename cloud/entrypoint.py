@@ -92,6 +92,7 @@ def main():
         upload = subprocess.run(["gcloud", "storage", "cp", "--recursive", str(folder),
                                  f"{prefix.rstrip('/')}/{attempt}/", "--quiet"], capture_output=True)
         if upload.returncode:
+            print(redact(upload.stderr.decode("utf-8", "replace"))[-800:], flush=True)
             raise SystemExit("USER ACTION NEEDED: output upload failed; check bucket IAM and network. Local logs remain in /out.")
         result_file = folder / "match.json"
         complete = result_file.exists() and json.loads(result_file.read_text(encoding="utf-8")).get("complete", False)

@@ -91,7 +91,7 @@ def setup(args, gc):
     bindings(gc, ["artifacts", "repositories", "add-iam-policy-binding", "hill-climb", "--location", r],
              builder, ["roles/artifactregistry.writer"])
     bindings(gc, ["storage", "buckets", "add-iam-policy-binding", bucket], worker,
-             ["roles/storage.objectCreator"])
+             ["roles/storage.objectCreator", "roles/storage.objectViewer"])   # gcloud storage cp needs objects.get
     bindings(gc, ["storage", "buckets", "add-iam-policy-binding", bucket], builder,
              ["roles/storage.objectViewer"])
     for secret in ("dream-api-key", "anthropic-api-key", "openrouter-api-key"):
