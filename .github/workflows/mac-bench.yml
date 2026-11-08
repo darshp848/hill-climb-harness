@@ -1,0 +1,26 @@
+# Tests and the offline benchmark on Apple Silicon (GitHub's macos-14 runners are M1, arm64).
+# The runners have a fan, so this checks arm64 correctness and rough speed, not a fanless Air's thermal behaviour:
+# run tools/mac_bench.py --sustained 300 on the match laptop itself for that (HARNESS_GUIDE.md section 2b).
+# No secrets: the tests and the benchmark make no API calls.
+name: mac-bench
+on:
+  workflow_dispatch:
+  push:
+    branches: [mac-arm64, final-harness]
+    paths: ["harness/**", "tools/mac_bench.py", "tests/**", "requirements-match.txt", ".github/workflows/mac-bench.yml"]
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
+      - run: pip install --only-binary=:all: -r requirements-match.txt opencv-python-headless
+      - run: python -m pytest -q
+      - run: python tools/mac_bench.py --seconds 2 --sustained 120 --label "GitHub macos-14 runner" --out bench_results/mac_bench_gha_macos14.json
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: mac-bench, path: bench_results/}
