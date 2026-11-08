@@ -379,8 +379,13 @@ class Runner:
         if reset is None:   # a stand-in station without /reset (experiments.stress SimStation)
             self.log.event("reset_unavailable", why=why)
             return
+        lg = self.live_guard
+        if lg is not None and lg.armed:
+            # like /home, a /reset moves both arms and may not be stoppable once begun: never while the guard is armed
+            self.log.event("reset_skipped", why=why, reason="live guard armed")
+            return
         self.log.event("reset", why=why)
-        reset()
+        self._motion(reset)   # checks operator stop, the deadline and a guard trip first, like every motion command
         self._nap(1.0)   # let the station leave idle before waiting for it to come back
         self._wait({"idle"}, START_TIMEOUT_S, "idle after reset")
 
