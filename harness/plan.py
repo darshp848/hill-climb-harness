@@ -16,7 +16,7 @@ MAX_PROMPT_CHARS = 512
 
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
               "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first",
-              "write_prompts", "rewrite_max", "rewrite_cooldown_s", "stop_on_pass", "hands_off"}
+              "write_prompts", "rewrite_max", "rewrite_cooldown_s", "stop_on_pass", "hands_off", "lock_prompt"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
@@ -204,6 +204,9 @@ class Plan:
     # undo it (8 Nov: "stack ... as high as possible" built blue on blue, then took it apart). A confirm that says
     # no starts Dream again on the same prompt.
     stop_on_pass: bool = False
+    # With stop_on_pass: send this prompt instead of /stop (e.g. "open both grippers and move the arms up"), so Dream's
+    # run stays warm and the next stage only changes the prompt: a fresh /start costs 7-12 s of first answers.
+    lock_prompt: str = ""
     # Leave Dream alone: an attempt ends only on a pass, a guard or the stage timeout. No regression / "failing" /
     # "stalled" exits, no recovery prompts, and a retry does not resend the prompt Dream is already running. 8 Nov
     # live: a noisy fast monitor ended 7 stacking attempts in 4 min, each with "open both grippers ...", which made
@@ -439,6 +442,7 @@ def parse_plan(data: Any) -> Plan:
         prompt_prefix=prefix.strip(),
         reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
         stop_on_pass=_bool(data.get("stop_on_pass", False), "plan.stop_on_pass"),
+        lock_prompt=_prompt(data["lock_prompt"], "plan.lock_prompt") if data.get("lock_prompt") else "",
         hands_off=_bool(data.get("hands_off", False), "plan.hands_off"),
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),

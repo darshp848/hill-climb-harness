@@ -398,3 +398,20 @@ def test_hands_off_ignores_noisy_looks_and_never_drops_the_cube(fake, write_plan
     assert prompts(fake) == ["put a block on top of the stack"]   # sent once, never resent, never "open both grippers"
     assert [e["reason"] for e in events(r.log, "attempt_end")][0].startswith("timeout")
     assert {e["mode"] for e in events(r.log, "retry")} == {"hands_off_keep_running"}
+
+
+def test_lock_prompt_keeps_dream_running(fake, write_plan, tmp_path):
+    path = write_plan([stage("stack_2", prompt="put a block on top of the stack", timeout_s=3.0, confirm=1,
+                             confirm_check="stacked?"), stage("ball_1", prompt="put a golf ball in the bin", confirm=1)],
+                      stop_on_pass=True, lock_prompt="open both grippers and move the arms up")
+    v = Confirming([mv(True, progress=1.0)], [False, True, True])
+    r = build(fake, path, tmp_path, v)
+    assert r.run().ok
+    rs = [(x, b.get("prompt")) for _, x, b in fake.posts() if x in ("/start", "/prompt", "/stop")]
+    assert rs[0] == ("/start", "put a block on top of the stack")
+    assert ("/stop", None) not in rs[:-1]                     # never stopped until the end of the plan
+    assert [x for x, _ in rs].count("/start") == 1            # one warm run throughout
+    sent = [p for _, p in rs if p]
+    assert sent[1:4] == ["open both grippers and move the arms up", "put a block on top of the stack",
+                         "open both grippers and move the arms up"]          # lock, resume after the "no", lock
+    assert sent[-2:] == ["put a golf ball in the bin", "open both grippers and move the arms up"]   # its own lock

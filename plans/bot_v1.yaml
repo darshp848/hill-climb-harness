@@ -47,6 +47,7 @@ vars:
 claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 3, hedge: 2, writer_model: claude-sonnet-5-5, confirm_model: claude-sonnet-5-5}
 reset_first: true
 stop_on_pass: true
+lock_prompt: "open both grippers and move the arms up"   # lock without /stop: Dream stays warm, arms lift clear
 hands_off: true        # attempts end only on a pass, a guard or the timeout (no drop-the-cube recoveries)
 rewrite_prompts: true
 write_prompts: true     # balls only: cable and stack stages set write_prompt false

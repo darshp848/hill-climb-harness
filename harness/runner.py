@@ -692,8 +692,9 @@ class Runner:
                             if check is not None:
                                 consec_done, last_done_t, last_done_sig = 0, None, None
                                 if locked:   # not done after all: Dream carries on where it stopped
-                                    self._issue(self._prompt or stage.prompt, f"after a locked pass: {check[:120]}",
-                                                force_start=True)
+                                    back = getattr(self, "_lock_resume", None) if self.plan.lock_prompt else None
+                                    self._issue(back or self._prompt or stage.prompt,
+                                                f"after a locked pass: {check[:120]}", force_start=not back)
                                     last_prompt_t, gate = elapsed, elapsed + stage.effective_settle()
                                 continue
                             return _Attempt(True, verdict.reason or "verified", max_p, hint)
@@ -890,7 +891,11 @@ class Runner:
         """plan.stop_on_pass: stop Dream the moment a look would pass the stage. True if a run was stopped."""
         if not self.plan.stop_on_pass or self.station.status().get("state") not in ("running", "starting"):
             return False
-        self.log.event("stage_locked", stage=stage.name, prompt=self._prompt)
+        self.log.event("stage_locked", stage=stage.name, prompt=self._prompt, how=self.plan.lock_prompt or "stop")
+        if self.plan.lock_prompt:
+            self._lock_resume = self._prompt
+            self._issue(self.plan.lock_prompt, f"stage {stage.name} looks done: lock it, run kept warm")
+            return True
         self._safe_stop(f"stage {stage.name} looks done: lock it")
         self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after locking a pass")
         return True

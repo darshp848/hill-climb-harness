@@ -107,6 +107,18 @@ class Operator:
     def submit(self, line: str) -> None:
         self.log.event("operator_input", text=line)
         self.record("operator_input", {"text": line})
+        # Exact commands, no model in between (harness/panel.py sends these): !prompt <text>, !skip
+        cmd, _, rest = line.partition(" ")
+        if cmd == "!prompt" and rest.strip():
+            with self._lock:
+                self._actions.prompts.append(rest.strip())
+            self.log.event("operator_reply", text=f"sending to Dream as typed: {rest.strip()}")
+            return
+        if cmd == "!skip":
+            with self._lock:
+                self._actions.end_current_stage = True
+            self.log.event("operator_reply", text="ending the current stage")
+            return
         if self._transport is None:
             self._print("[operator] logged (no Claude key, so nothing is done with it)")
             return
