@@ -16,7 +16,7 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "system_prompt", "rewrite_prompts"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "system_prompt", "rewrite_prompts", "prompt_prefix"}
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "expect",
                "cameras", "camera_notes", "history_cameras", "required_cameras", "requires_stage"}
@@ -84,6 +84,7 @@ class Plan:
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
     system_prompt: str = ""      # the monitor's system prompt: house rules and lessons from testing
     rewrite_prompts: bool = False  # let the monitor write the robot's next prompt (next_prompt), with guard rails
+    prompt_prefix: str = ""  # sentence every rewritten prompt must open with (added when the monitor drops it)
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -274,6 +275,7 @@ def parse_plan(data: Any) -> Plan:
         done_message=done_message,
         system_prompt=system_prompt.strip(),
         rewrite_prompts=rewrite,
+        prompt_prefix=str(data.get("prompt_prefix") or "").strip(),
         stages=stages,
         checkpoint=checkpoint,
         time_budget_s=float(_num(data.get("time_budget_s", 900.0), "plan.time_budget_s")),

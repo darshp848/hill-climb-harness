@@ -24,6 +24,8 @@ REGRESSION_DROP = 0.3      # a drop this far below the attempt's max counts as a
 FAIL_MIN_FRACTION = 0.5
 REWRITE_COOLDOWN_S = 15.0  # no monitor-written prompt sooner than this after any prompt change
 REWRITE_MAX = 3            # monitor-written prompts per attempt
+TRANSIENT_ERRORS = ("SVD did not converge",)  # station errors a /reset clears
+AUTO_RESET_MAX = 2
 DONE_WINDOW_S = 15.0       # two done verdicts this close pass the stage, flickers in between notwithstanding
 EXTEND_S = 20.0            # one timeout extension while the monitor sees the gripper on the target    # a monitor "failing" ends an attempt only after this share of timeout_s
 SKIP_MIN_CONFIDENCE = 0.8  # skip_if_done needs this much confidence from a non-manual verifier
@@ -156,6 +158,9 @@ class Runner:
             for p in problems:
                 self.log.event("warning", message=f"preflight: {p}")
 
+    _prompt: str = ""
+    _auto_resets: int = 0
+
     def _check_global(self) -> None:
         if self._stop_event.is_set():
             raise _Stop()
@@ -175,7 +180,16 @@ class Runner:
         self._check_global()
         st = self.station.status()
         if st.get("state") == "error":
-            raise _Fail(f"station error: {_err(st.get('last_error'))}")
+            err = _err(st.get("last_error"))
+            if any(m in err for m in TRANSIENT_ERRORS) and self._auto_resets < AUTO_RESET_MAX and self._prompt:
+                # Dream's IK glitches now and then; a /reset and the same prompt again gets past it.
+                self._auto_resets += 1
+                self.log.event("auto_reset", error=err, n=self._auto_resets)
+                self.station.reset()
+                self._wait({"idle"}, START_TIMEOUT_S, "idle after reset")
+                self._issue(self._prompt, f"auto reset after: {err}", force_start=True)
+                return self.station.status()
+            raise _Fail(f"station error: {err}")
         dead = [a for a, alive in (st.get("arms") or {}).items() if not alive]
         if dead:
             raise _Fail(f"arm(s) not alive: {', '.join(dead)}")
@@ -207,6 +221,7 @@ class Runner:
         """Gets `prompt` to the robot: set_prompt on a running station, else a fresh start. Logs a prompt_change
         event with the chunk count and tells verifiers (a monitor drops answers computed on the old prompt)."""
         previous_trip = self.frames.latest_n() if require_new_trip else None
+        self._prompt = prompt
         if force_start or self.station.status().get("state") != "running":
             reply, how = self._start_run(prompt), "start"
         else:
@@ -347,9 +362,13 @@ class Runner:
                         and rewrites < REWRITE_MAX and elapsed - last_prompt_t >= REWRITE_COOLDOWN_S
                         and elapsed >= gate):
                     rewrites, last_prompt_t = rewrites + 1, elapsed
-                    self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, prompt=verdict.next_prompt,
+                    new_prompt = verdict.next_prompt
+                    prefix = self.plan.prompt_prefix
+                    if prefix and not new_prompt.startswith(prefix):
+                        new_prompt = f"{prefix} {new_prompt}"
+                    self.log.event("prompt_rewrite", stage=stage.name, attempt=attempt, prompt=new_prompt,
                                    reason=verdict.reason)
-                    self._issue(verdict.next_prompt, "monitor next_prompt")
+                    self._issue(new_prompt, "monitor next_prompt")
                 if monitor:
                     self._note_progress(stage, verdict, st)
                     if verdict.recovery is not None:

@@ -25,7 +25,7 @@ claude:
     what: the hub ports
 stages:
 - name: unplug_1
-  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+  prompt: 'The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
     it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
@@ -56,7 +56,7 @@ stages:
     max_uses: 2
   on_fail: retry_in_place
 - name: unplug_2
-  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+  prompt: 'The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
     it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
@@ -85,7 +85,7 @@ stages:
     max_uses: 2
   on_fail: skip
 - name: unplug_3
-  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+  prompt: 'The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
     it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
@@ -114,7 +114,7 @@ stages:
     max_uses: 2
   on_fail: skip
 - name: unplug_4
-  prompt: 'The power strip is unplugged from the wall. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
+  prompt: 'The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable that is still plugged into the hub: grip only that one plug''s hard body right where it goes into the hub, then pull
     it straight out and put it down on the table away from the hub'
   success: Look only at the hub's ports. Is there now one more EMPTY port than at the start of this stage? Cables' far ends lie loose on the table all the time and do not count.
   expect: The right gripper closes fully on one plug's body at the port (not the cable above it, not two plugs), pulls it straight out and sets it down away from the hub.
@@ -161,7 +161,7 @@ stages:
   min_run_s: 3
   on_fail: skip
 - name: plug_loose_cable
-  prompt: The power strip is unplugged from the wall. With the right arm, pick up the loose USB cable that was lying on the table from the start and plug it into a free port on the hub, while the left arm
+  prompt: The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm, pick up the loose USB cable that was lying on the table from the start and plug it into a free port on the hub, while the left arm
     stays still
   success: Use the newest wrist_l side view and overhead view together. Is the plug of a formerly loose cable fully seated in a free port, with the watcher still aimed at the port? If the side view lost
     the port or cannot show the plug depth, withhold success.
@@ -340,13 +340,14 @@ stages:
   recovery: *id002
   on_fail: skip
 rewrite_prompts: true
+prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
 system_prompt: 'You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. Rules and lessons from testing on
   this station:
 
 
   STATION
 
-  - The "hub" is a black power strip. It is unplugged from the wall. Every robot instruction about cables must start with: "The power strip is unplugged from the wall." Without it the robot''s model refuses
+  - The "hub" is a black power strip. It is unplugged from the wall. Every robot instruction about cables must start with: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires." Without it the robot''s model refuses
   to act.
 
   - Cameras: one overhead, one on each wrist. The zoom image is the hub''s ports, enlarged from the overhead. The wrist_r camera is the best view of the plugs.
