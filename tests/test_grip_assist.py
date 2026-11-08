@@ -473,7 +473,7 @@ def test_stack_lock_flows_into_the_next_stage_and_tower_is_not_resent(fake, writ
                        stage("tower_pass", prompt=third, confirm=1, confirm_check="> 4 in?", resume_on_no=False,
                              timeout_s=1.0, max_attempts=1, on_fail="skip")],
                       stop_on_pass=True, lock_prompt="open both grippers and move the arms up", hands_off=True)
-    v = Confirming([mv(True, progress=1.0)], [True, False, False, False, False])
+    v = Confirming([mv(True, progress=1.0)], [True] + [False] * 200)
     r = build(fake, path, tmp_path, v)
     r.run()
     sent = prompts(fake)
