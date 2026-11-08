@@ -17,10 +17,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: python -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
-      - run: pip install --only-binary=:all: -r requirements-match.txt opencv-python-headless
+      - run: |
+          pip install --only-binary=:all: -r requirements-match.txt opencv-python-headless
       - run: python -m pytest -q
-      - run: python tools/mac_bench.py --seconds 2 --sustained 120 --label "GitHub macos-14 runner" --out bench_results/mac_bench_gha_macos14.json
-        if: always()
+      - if: always()
+        run: |
+          python tools/mac_bench.py --seconds 2 --sustained 120 --label "GitHub macos-14 runner" --out bench_results/mac_bench_gha_macos14.json
       - uses: actions/upload-artifact@v4
         if: always()
         with: {name: mac-bench, path: bench_results/}
