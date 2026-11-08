@@ -39,6 +39,24 @@ Environment (read once, when `python -m robots.station` starts; `dreamcli robot 
     tuned on a YAM; Dream's own note in dream_ik/specs.py says 20/100/200/5 hit the speed cap less often than the tick
     solve on a Metal arm, with less jerk and fewer direction flips. Only affects action_space: eef with ik_solve: traj.
 
+- PAH_EEF_OFFSET_M=r:0,0,-0.02;l:0,0,-0.02
+    Intercepts Dream's end-effector answer before the IK: each arm's tool positions (`action.<side>_eef_xyz`, every
+    row of every chunk, in that arm's base frame, metres) are shifted by this offset, then Dream's own IK solves them.
+    For a systematic aim error, such as the fine-tune aiming high because 73 of its 170 episodes were recorded with
+    gravity feed-forward off. eef head only.
+
+- PAH_EEF_Z_MIN_M=r:0.01;l:0.01
+    A floor on each arm's tool height (base frame), applied after the offset: no target below it reaches the IK.
+
+- PAH_EEF_HOOK=package.module:function
+    Your own override: called as function(side, xyz[rows,3], rot6[rows,6], grip[rows,1], observation) for each arm of
+    each chunk, after the offset and floor, and returns (xyz, rot6, grip) of the same shapes. An exception in it is
+    logged once per kind and that chunk runs unmodified.
+
+- PAH_EEF_LOG=/home/pah/.dreamlabs/eef-log.jsonl
+    One line per chunk: time, per arm the tool targets as Dream sent them, as passed to the IK, and the solved
+    joints. The first record of the IK's targets on the station (hand error can then be scored offline).
+
 - PAH_TICK_LOG=/home/pah/.dreamlabs/tick-log.csv
     One row per bus tick per arm: wall time, arm, tick duration, period, measured joints (deg), measured torque per
     motor (N.m, from the MIT replies), and drops. Every 10 s a summary line goes to the station log
@@ -92,6 +110,32 @@ def _floats(name: str, count: int | None = None) -> list[float] | None:
     return values
 
 
+SIDES = {"r": "right", "l": "left", "right": "right", "left": "left"}
+
+
+def _per_side(name: str, width: int) -> dict[str, list[float]] | None:
+    """`r:0,0,-0.02;l:0,0,-0.01` (or one value list for both arms) -> {"right": [...], "left": [...]}."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    out: dict[str, list[float]] = {}
+    for part in raw.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            side, values = part.split(":", 1)
+            sides = [SIDES[side.strip().lower()]]
+        else:
+            sides, values = ["right", "left"], part
+        nums = [float(x) for x in values.split(",") if x.strip()]
+        if len(nums) != width or not all(math.isfinite(x) for x in nums):
+            raise ValueError(f"{name} needs {width} numbers per arm, got {raw!r}")
+        for side in sides:
+            out[side] = nums
+    return out
+
+
 @dataclasses.dataclass
 class Settings:
     tick_hz: float | None = None
@@ -100,6 +144,10 @@ class Settings:
     ik_traj: list[float] | None = None
     tick_log: str | None = None
     ff_tau_s: float | None = None
+    eef_offset_m: dict[str, list[float]] | None = None
+    eef_z_min_m: dict[str, float] | None = None
+    eef_hook: str | None = None
+    eef_log: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -113,6 +161,13 @@ class Settings:
             tick_log=os.environ.get("PAH_TICK_LOG", "").strip() or None,
             ff_tau_s=None if _floats("PAH_FF_TAU_S") is None else _floats("PAH_FF_TAU_S")[0],
         )
+        s.eef_offset_m = _per_side("PAH_EEF_OFFSET_M", 3)
+        z_min = _per_side("PAH_EEF_Z_MIN_M", 1)
+        s.eef_z_min_m = None if z_min is None else {k: v[0] for k, v in z_min.items()}
+        s.eef_hook = os.environ.get("PAH_EEF_HOOK", "").strip() or None
+        s.eef_log = os.environ.get("PAH_EEF_LOG", "").strip() or None
+        if s.eef_offset_m and any(abs(x) > 0.05 for v in s.eef_offset_m.values() for x in v):
+            raise ValueError("PAH_EEF_OFFSET_M is capped at 5 cm per axis")
         if s.ff_tau_s is not None and not 0.02 <= s.ff_tau_s <= 2.0:
             raise ValueError(f"PAH_FF_TAU_S must be 0.02..2 s, got {s.ff_tau_s}")
         if s.tick_hz is not None and not MIN_TICK_HZ <= s.tick_hz <= MAX_TICK_HZ:
@@ -310,11 +365,92 @@ def patch_ik_specs(specs: Any, settings: Settings) -> None:
     _say(f"IK traj weights vel {vel:g} acc {acc:g} jerk {jerk:g} history x{hist:g}")
 
 
+def eef_transform(settings: Settings, hook: Any, side: str, xyz: Any, rot6: Any, grip: Any, observation: Any):
+    """Offset, floor, then the user hook, on one arm's chunk. Arrays in, arrays out (copies)."""
+    import numpy as np
+
+    xyz = np.array(xyz, dtype=np.float64, copy=True)
+    rot6 = np.array(rot6, dtype=np.float64, copy=True)
+    grip = np.array(grip, dtype=np.float64, copy=True)
+    if settings.eef_offset_m and side in settings.eef_offset_m:
+        xyz = xyz + np.asarray(settings.eef_offset_m[side])
+    if settings.eef_z_min_m and side in settings.eef_z_min_m:
+        xyz[:, 2] = np.maximum(xyz[:, 2], settings.eef_z_min_m[side])
+    if hook is not None:
+        new = hook(side, xyz, rot6, grip, observation)
+        nx, nr, ng = (np.asarray(a, dtype=np.float64) for a in new)
+        if nx.shape != xyz.shape or nr.shape != rot6.shape or ng.reshape(grip.shape).shape != grip.shape:
+            raise ValueError(f"PAH_EEF_HOOK returned shapes {nx.shape} {nr.shape} {ng.shape}")
+        if not (np.isfinite(nx).all() and np.isfinite(nr).all() and np.isfinite(ng).all()):
+            raise ValueError("PAH_EEF_HOOK returned a non-finite value")
+        xyz, rot6, grip = nx, nr, np.clip(ng.reshape(grip.shape), 0.0, 1.0)
+    return xyz, rot6, grip
+
+
+def patch_client_ik(client_ik: Any, settings: Settings) -> None:
+    """Wrap ClientIK.solve: transform the eef answer before Dream's IK, log targets and solved joints."""
+    if not (settings.eef_offset_m or settings.eef_z_min_m or settings.eef_hook or settings.eef_log):
+        return
+    import importlib
+    import json
+
+    import numpy as np
+
+    hook = None
+    if settings.eef_hook:
+        module, _, func = settings.eef_hook.partition(":")
+        hook = getattr(importlib.import_module(module), func)
+    original = client_ik.ClientIK.solve
+    said: set[str] = set()
+    log = open(settings.eef_log, "a", buffering=1) if settings.eef_log else None  # noqa: SIM115
+
+    def solve(self: Any, action: dict, observation: dict, *args: Any, **kwargs: Any) -> dict:
+        per_key = action.get("per_key") if isinstance(action, dict) else None
+        if self.head != "eef" or not isinstance(per_key, dict):
+            return original(self, action, observation, *args, **kwargs)
+        record: dict[str, Any] = {"t": time.time()}
+        try:
+            new_per_key = dict(per_key)
+            for side in self._solver.sides:
+                keys = (f"action.{side}_eef_xyz", f"action.{side}_eef_rot6", f"action.{side}_grip")
+                if not all(k in per_key for k in keys):
+                    continue
+                xyz, rot6, grip = (np.asarray(per_key[k], dtype=np.float64) for k in keys)
+                grip2 = grip[:, None] if grip.ndim == 1 else grip
+                nx, nr, ng = eef_transform(settings, hook, side, xyz, rot6, grip2, observation)
+                new_per_key[keys[0]], new_per_key[keys[1]] = nx, nr
+                new_per_key[keys[2]] = ng[:, 0] if grip.ndim == 1 else ng
+                if log is not None:
+                    record[side] = {"dream_xyz": xyz.round(4).tolist(), "ik_xyz": nx.round(4).tolist(),
+                                    "rot6": nr.round(4).tolist(), "grip": ng.round(3).ravel().tolist()}
+            action = {**action, "per_key": new_per_key}
+        except Exception as exc:  # noqa: BLE001 - this chunk runs as Dream sent it
+            kind = type(exc).__name__
+            if kind not in said:
+                said.add(kind)
+                _say(f"eef override failed, chunk unmodified: {kind}: {exc}")
+        out = original(self, action, observation, *args, **kwargs)
+        if log is not None:
+            for side in self._solver.sides:
+                key = client_ik.SIDES[side][0]
+                if key in out and side in record:
+                    record[side]["q"] = np.asarray(out[key]).round(4).tolist()
+            log.write(json.dumps(record) + "\n")
+        return out
+
+    client_ik.ClientIK.solve = solve
+    _say(
+        f"eef override: offset {settings.eef_offset_m}, z floor {settings.eef_z_min_m}, hook {settings.eef_hook}, "
+        f"log {settings.eef_log}"
+    )
+
+
 PATCHES = {
     "robots.metal": patch_metal,
     "robots.damiao": patch_damiao,
     "robots.motor_arm": patch_motor_arm,
     "dream_ik.specs": patch_ik_specs,
+    "dream.client_ik": patch_client_ik,
 }
 
 

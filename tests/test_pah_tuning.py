@@ -88,3 +88,37 @@ def test_ik_weights_patch():
     env = {k: v for k, v in os.environ.items() if not k.startswith("PAH_")} | {"PAH_IK_TRAJ": "20,100,200,5"}
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
     assert out.stdout.split()[-4:] == ["20.0", "100.0", "200.0", "5.0"], out.stderr
+
+
+def test_eef_transform_offset_floor_hook(monkeypatch):
+    import numpy as np
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("PAH_EEF_OFFSET_M", "r:0,0,-0.02;l:0.01,0,0")
+    monkeypatch.setenv("PAH_EEF_Z_MIN_M", "0.03")
+    s = pah_tuning.Settings.from_env()
+    xyz = np.array([[0.3, 0.0, 0.04], [0.3, 0.0, 0.10]])
+    x, r, g = pah_tuning.eef_transform(s, None, "right", xyz, np.zeros((2, 6)), np.ones((2, 1)), {})
+    assert np.allclose(x[:, 2], [0.03, 0.08])  # offset, then the floor
+    x, _, _ = pah_tuning.eef_transform(s, None, "left", xyz, np.zeros((2, 6)), np.ones((2, 1)), {})
+    assert np.allclose(x[:, 0], 0.31)
+
+    def hook(side, xyz, rot6, grip, obs):
+        return xyz, rot6, grip * 2.0  # clipped back to 0..1
+
+    _, _, g = pah_tuning.eef_transform(s, hook, "right", xyz, np.zeros((2, 6)), np.full((2, 1), 0.7), {})
+    assert np.allclose(g, 1.0)
+    monkeypatch.setenv("PAH_EEF_OFFSET_M", "0,0,-0.2")
+    with pytest.raises(ValueError):
+        pah_tuning.Settings.from_env()  # more than 5 cm is refused
+
+
+def test_eef_override_through_dreams_client_ik():
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PAH_")} | {"PAH_EEF_OFFSET_M": "r:0,0,-0.02"}
+    out = subprocess.run([sys.executable, str(ADDONS / "bench_eef_override.py"), "--trace",
+                          str(ADDONS / "data" / "run3_2026-11-08.csv"), "--chunks", "3"],
+                         env=env, capture_output=True, text=True, timeout=300)
+    line = [ln for ln in out.stdout.splitlines() if ln.startswith("{")][-1]
+    d = json.loads(line)
+    assert abs(d["right"]["mean_shift_cm"][2] + 2.0) < 0.2, d  # the solved hand moved down by the offset
+    assert abs(d["left"]["mean_shift_cm"][2]) < 0.5, d  # the other arm untouched

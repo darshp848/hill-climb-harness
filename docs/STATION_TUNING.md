@@ -32,6 +32,10 @@ up to 0.034 rad (r3), most of it lag. One cause is in Dream's code: the velocity
 | `PAH_IK_TRAJ` | eef traj-solve weights vel,acc,jerk,history (Dream: 5,50,200,5, YAM-tuned) | `20,100,200,5` (Dream's own Metal note) |
 | `PAH_TORQUE_CAP_NM` | max push per joint above gravity, by clamping the goal (`kp*|err| <= cap`) | off for the demo; `6,10,6,4,2,2` to try |
 | `PAH_GRAVITY_SCALE` | multiplies Dream's gravity feed-forward | unset |
+| `PAH_EEF_OFFSET_M` | shift Dream's end-effector targets per arm before its IK, base frame, m (cap 5 cm) | e.g. `0,0,-0.02` if the fine-tune aims high |
+| `PAH_EEF_Z_MIN_M` | floor on each arm's tool height before the IK | off |
+| `PAH_EEF_HOOK` | `module:function(side, xyz, rot6, grip, obs) -> (xyz, rot6, grip)`: your own override of each chunk | off |
+| `PAH_EEF_LOG` | JSONL per chunk: Dream's targets, what went to the IK, solved joints | `~/.dreamlabs/eef-log.jsonl` |
 | `PAH_TICK_LOG` | CSV per bus tick: tick time, joints, measured motor torque (from MIT replies) | `~/.dreamlabs/tick-log.csv` |
 
 Every 10 s the station log gets `pah_tuning: tick right: 52.0 Hz, tick p50 ... ms, ...` when any knob is on.
@@ -70,3 +74,13 @@ fresher joint state and smaller setpoint steps.
   A/B slot, fine-tune only.
 - `action_space: joint` for the fine-tune (skips the IK, runs the joint head trained on the teleop joints): allowed
   for a fine-tune of this robot. Worth one A/B against `eef`; Dream notes the eef head is noisier than the joint head.
+
+## Intercepting Dream's end-effector commands
+
+Dream's answer for a Metal fine-tune is tool poses per arm (`action.<side>_eef_xyz`, `_eef_rot6`, `_grip`, 48 rows).
+The client turns them into joints in `dream.client_ik.ClientIK.solve` on the station, so that is the hook:
+`PAH_EEF_*` wraps it, edits the poses, and hands them to Dream's own IK unchanged otherwise. Checked in sim
+(`station_addons/bench_eef_override.py`, Dream's real ClientIK on run-3 chunks): with no override the solved hand
+path matches the target within 0.1 cm (right) / 0.3 cm (left); with `0,0,-0.02` the right hand moves -1.97 cm and the
+left -1.57 cm (left runs into its joint margin on some rows); `r:0.01,0,-0.03;l:0,0,0` moves only the right arm.
+The joint-space hooks (feed-forward, torque cap, gravity scale) sit below this, in the Metal driver.
