@@ -73,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"plan error: {exc}", file=sys.stderr)
         return 2
     if args.skip:
+        plan.done_before = [f"{st.name}: {st.prompt}" for st in plan.stages if any(st.name.startswith(x) for x in args.skip)]
         plan.stages = [st for st in plan.stages if not any(st.name.startswith(x) for x in args.skip)]
         if not plan.stages:
             print("plan error: --skip removed every stage", file=sys.stderr)

@@ -165,6 +165,7 @@ class Runner:
         self.operator: Any = None   # harness.operator.Operator: the operator's typed words, turned into actions
         self._skip: set[str] = set()   # later stages the operator asked to skip
         self._stage_name = ""
+        self._grip_seen = False   # this stage: a gripper was felt holding something (Stage.needs_grip)
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -183,6 +184,8 @@ class Runner:
                 self.operator.status = self._status_line
                 self.operator.frames = self.frames.latest
             first = True
+            for what in self.plan.done_before:   # --skip in practice: those stages count as done
+                self._mark_done(what)
             if self.plan.reset_first:
                 self._reset_and_wait("before the first stage: both grippers open")
             for stage in self.plan.stages:
@@ -198,6 +201,8 @@ class Runner:
                     continue
                 results.append(self._run_stage(stage, first=first))
                 first = False
+                if results[-1].ok:
+                    self._mark_done(f"{stage.name}: {stage.prompt}")
             failed = [r.name for r in results if not r.ok]
             ok, reason = (not failed), ("completed" if not failed else f"completed with failed stages: {', '.join(failed)}")
             self._safe_stop("end of plan")
@@ -426,10 +431,12 @@ class Runner:
             elif got <= 0.06:
                 notes.append(f"{side} gripper shut on nothing ({got:.2f}): it is NOT holding anything")
             elif got <= 0.15:
+                self._grip_seen = self._grip_seen or side == "right"   # a thin plug; the idle left reads 0.10 shut
                 notes.append(f"{side} gripper nearly shut ({got:.2f}): a thin plug or nothing, judge from its wrist image")
             elif cmd is None:
                 notes.append(f"{side} gripper opening {got:.2f}")
             else:
+                self._grip_seen = True
                 notes.append(f"{side} gripper commanded closed but stopped at {got:.2f}: it is holding something")
         return "; ".join(notes)
 
@@ -606,6 +613,10 @@ class Runner:
                     # the same camera images judged twice are one look, not two: a frozen view must not confirm
                     self.log.event("same_frames", stage=stage.name, attempt=attempt,
                                    note="done verdict on the frames of the previous done: not counted")
+                elif verdict.done is True and stage.needs_grip and not self._grip_seen:
+                    consec_done = 0
+                    self.log.event("done_without_grip", stage=stage.name, attempt=attempt, reason=verdict.reason,
+                                   note="done verdict ignored: no gripper has held anything in this stage")
                 elif verdict.done is True:
                     consec_fail = 0
                     if verdict.immediate or frames:
@@ -613,6 +624,10 @@ class Runner:
                         recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
                         last_done_t, last_done_sig = elapsed, sig
                         if verdict.immediate or consec_done >= confirm or recent:
+                            check = self._confirm_check(stage, verifier)
+                            if check is not None:
+                                consec_done, last_done_t, last_done_sig = 0, None, None
+                                continue
                             return _Attempt(True, verdict.reason or "verified", max_p, hint)
                     else:
                         consec_done = 0
@@ -648,6 +663,31 @@ class Runner:
                     t0 += EXTEND_S                 # the gripper is on the target and pulling: let it finish
                     continue
                 return _Attempt(False, f"timeout after {stage.timeout_s:g} s", max_p, hint)
+
+    def _mark_done(self, what: str) -> None:
+        """Tell every monitor a stage has passed: without it the tower stage's monitor re-judged the cables and
+        rewrote the robot's prompt back to unplugging (sim, 8 Nov)."""
+        for v in self.verifiers.values():
+            for m in (v, getattr(v, "second", None)):
+                if hasattr(m, "done_stages") and what not in m.done_stages:
+                    m.done_stages.append(what)
+
+    def _confirm_check(self, stage: Stage, verifier: Verifier) -> str | None:
+        """Stage.confirm_check before a pass: None to pass, else why not. A confirm that cannot answer passes."""
+        fn = getattr(verifier, "confirm", None) or getattr(getattr(verifier, "second", None), "confirm", None)
+        if not stage.confirm_check or fn is None:
+            return None
+        if hasattr(fn.__self__, "grip_note"):
+            fn.__self__.grip_note = self._grip_note()
+        v = fn(stage, self._frames_for_check(stage))
+        self.log.event("confirm_check", stage=stage.name, yes=v.done, reason=v.reason,
+                       latency_s=getattr(v, "latency_s", None))
+        if v.done is not False:
+            return None
+        note = f"A careful second look said this stage is NOT done yet: {v.reason}"
+        for m in {id(x): x for x in (verifier, getattr(verifier, "second", None)) if hasattr(x, "operator_notes")}.values():
+            m.operator_notes.append(note[:400])   # the fast monitor sees it on its next calls
+        return f"confirm said no: {v.reason}"
 
     def _on_target(self, stage: Stage) -> bool:
         """The last monitor verdict says a gripper holds the stage's object and progress is at least half."""
@@ -810,6 +850,7 @@ class Runner:
         self._check_global()
         self._last_progress = None
         self._stage_name = stage.name
+        self._grip_seen = False
         self.log.event("stage_start", stage=stage.name, prompt=stage.prompt)
         if stage.skip_unless and not self._precondition(stage, verifier):
             self.log.event("stage_skipped", stage=stage.name, reason=f"precondition not met: {stage.skip_unless}")

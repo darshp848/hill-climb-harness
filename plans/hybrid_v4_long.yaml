@@ -23,8 +23,8 @@ done_message: "ALL STAGES DONE: CALL STOP NOW"
 vars:
   stack_cam: wrist_r
   ball: orange ball
-  unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Unplug the rightmost USB cable from the power strip and put it on the table."
-claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
+  unplug: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. With the right arm only, unplug the rightmost USB cable from the power strip and put it on the table; keep the left arm still."
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2, confirm_model: claude-sonnet-5-5}
 reset_first: true
 rewrite_prompts: true
 prompt_prefix: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
@@ -77,6 +77,9 @@ stages:
     max_attempts: 99    # pass bar
     min_run_s: 4
     stall_s: 35
+    needs_grip: true    # sim 8 Nov: passed twice on the loose cord ends with no plug touched
+    confirm_check: "Count the USB plugs standing seated in the power strip's top-face ports in the STAGE START images, then in the NOW images. Is the NOW count lower, so a plug that was seated has been pulled fully out of its port? The loose far ends of the orange cables lie on the table from the start and are NOT unplugged plugs. Answer yes only if you can see the empty port or the plug held clear of the strip."
+    history_cameras: [wrist_r]
     recovery:
       - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
          when: "the gripper is stuck, holds the cord instead of the plug, or has pushed the strip", settle_s: 4, max_uses: 3}
@@ -90,6 +93,9 @@ stages:
     timeout_s: 45
     min_run_s: 3
     stall_s: 30
+    needs_grip: true
+    confirm_check: "Count the USB plugs standing seated in the power strip's top-face ports in the STAGE START images, then in the NOW images. Is the NOW count lower, so a plug that was seated has been pulled fully out of its port? The loose far ends of the orange cables lie on the table from the start and are NOT unplugged plugs. Answer yes only if you can see the empty port or the plug held clear of the strip."
+    history_cameras: [wrist_r]
     on_fail: skip
 
   - name: arms_clear
@@ -102,7 +108,7 @@ stages:
 
   # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One prompt for the whole tower. ----
   - name: tower
-    prompt: "Stack the cubes into a single tower"
+    prompt: "With the right arm only, stack the cubes into a single tower; keep the left arm still"   # sim: the left gripper brushed a ball (DQ) in 4 of 5 runs
     success: "Is there a tower of cubes more than 4 inches (10 cm) tall, standing on its own, with no gripper touching it?"
     expect: "The arms pick up the cubes one at a time and set each squarely on the tower, which grows until it is over 4 inches tall."
     camera_notes:

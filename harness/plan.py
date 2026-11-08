@@ -19,7 +19,7 @@ _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier"
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -60,6 +60,13 @@ class Stage:
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     watch: Watch | None = None
     requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
+    # A "done" counts only after a gripper was felt holding something in this stage (/arms: commanded shut, stopped
+    # partway). An unplug cannot happen without a grip; in the sim the monitor passed cable stages on loose cord ends.
+    needs_grip: bool = False
+    # A pointed yes/no question a stronger model (plan claude.confirm_model) answers from the stage-start and newest
+    # frames before the stage may pass. For stages where a false pass costs the match (an unplug: blocks touched
+    # before a cable is out are a DQ).
+    confirm_check: str | None = None
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -120,6 +127,7 @@ class Plan:
     cameras_for_check: list[str] = field(default_factory=list)  # empty = all cameras
     confirm: int = 1
     claude_user: dict[str, Any] = field(default_factory=dict)  # only the keys the plan file set
+    done_before: list[str] = field(default_factory=list)       # stages dropped by --skip: done before this run
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
     guard: Guard | None = None
     # The tower to build, bottom to top, one piece per entry ("blue cube, hole facing sideways"). The monitor gets it
@@ -306,6 +314,8 @@ def parse_plan(data: Any) -> Plan:
                 history_cameras=hist,
                 watch=watch,
                 requires_stage=prerequisite,
+                needs_grip=_bool(raw.get("needs_grip", False), f"{label}.needs_grip"),
+                confirm_check=None if raw.get("confirm_check") is None else _text(raw["confirm_check"], f"{label}.confirm_check"),
             )
         )
 

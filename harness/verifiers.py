@@ -241,7 +241,8 @@ NEXT_PROMPT_RULE = (
     'robot that replaces the last prompt: max 200 characters, plain words, one action, naming objects by colour and '
     'position, e.g. "pick up the yellow block and place it gently on top of the pink block". It must ask for something '
     'different from the last prompt (another object, another step), never the same request reworded: every new prompt '
-    'makes the robot start its motion over. Follow the system rules and any operator feedback. Otherwise null.')
+    'makes the robot start its motion over. It is always for the CURRENT stage\'s task: never send the robot back to '
+    'a stage listed as already done. Follow the system rules and any operator feedback. Otherwise null.')
 NEXT_PROMPT_MAX_CHARS = 300
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -326,6 +327,7 @@ class MonitorVerifier:
         self.model = model or plan.claude.get("model", "claude-haiku-5-5")
         self.max_tokens = int(max_tokens if max_tokens is not None else user.get("max_tokens", 4000))
         self.grip_note = ""   # set by the runner from /arms before each check (station_addons)
+        self.done_stages: list[str] = []   # set by the runner: stages already passed (or passed before this run)
         self.operator_notes: list[str] = []   # feedback typed by the operator during the run (harness.operator)
         self.history_frames = int(history_frames if history_frames is not None else user.get("history_frames", 6))
         if transport is None:
@@ -396,6 +398,9 @@ class MonitorVerifier:
         for i, st in enumerate(self.plan.stages, 1):
             mark = "   <-- CURRENT STAGE" if st.name == stage.name else ""
             lines.append(f"  {i}. {st.name}: {st.prompt}{mark}")
+        if self.done_stages:
+            lines.append("Already done (passed earlier; do not re-judge them or send the robot back to them): "
+                         + "; ".join(self.done_stages))
         lines.append(f"Current stage question: {stage.success}")
         if stage.expect:
             lines.append(f"What correct behaviour looks like: {stage.expect}")
@@ -550,6 +555,43 @@ class MonitorVerifier:
         if not frames:
             return Verdict(None, 0.0, "no frames available")
         return Verdict(None, 0.0, "monitor call in flight")
+
+    def confirm(self, stage: Stage, frames: dict[str, bytes]) -> Verdict:
+        """Stage.confirm_check, answered synchronously by claude.confirm_model (default: the monitor's model) from
+        the stage-start frames and the newest ones. done True/False, or None when it cannot answer."""
+        model = self.plan.claude_user.get("confirm_model", self.model)
+        with self._lock:
+            first = {r: j for r, (_, j) in self._first.items()}
+        good = {r: j for r, j in frames.items() if valid_jpeg(j)}
+        if not good:
+            return Verdict(None, 0.0, "no frames available")
+        content: list[dict[str, Any]] = []
+        for tag, imgs in (("STAGE START", first), ("NOW", good)):
+            for role, jpeg in sorted(imgs.items()):
+                note = stage.note_for(role)
+                content.append({"type": "text", "text": f"{tag}: {role}" + (f" [{note}]" if note else "")})
+                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                            "data": base64.b64encode(jpeg).decode("ascii")}})
+        grip = f"\nGripper sensors now (measured): {self.grip_note}" if self.grip_note else ""
+        content.append({"type": "text", "text": f"{stage.confirm_check}{grip}\nLook carefully; a wrong yes ends the "
+                        "match. Reply with your reasoning, then <json>{\"yes\": bool, \"reason\": str}</json>."})
+        payload = {"model": model, "max_tokens": 6000, "output_config": {"effort": "medium"},
+                   "messages": [{"role": "user", "content": content}]}
+        if self.plan.system_prompt:
+            payload["system"] = self.plan.system_prompt
+        t0 = time.monotonic()
+        try:
+            reply = self._transport(payload)
+            text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
+            start, end = text.rfind("<json>"), text.rfind("</json>")
+            obj = json.loads(text[start + len("<json>"):end]) if 0 <= start < end else None
+        except Exception as exc:  # noqa: BLE001 - can't tell
+            return Verdict(None, 0.0, f"confirm error: {type(exc).__name__}: {str(exc)[:200]}")
+        if not isinstance(obj, dict) or not isinstance(obj.get("yes"), bool):
+            return Verdict(None, 0.0, f"confirm error: no answer in {text[-120:]!r}")
+        verdict = Verdict(obj["yes"], 1.0, str(obj.get("reason", "")))
+        verdict.latency_s = round(time.monotonic() - t0, 2)
+        return verdict
 
     def check_now(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict:
         """Synchronous: waits for any call in flight, then asks once and returns that answer."""
