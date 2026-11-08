@@ -89,7 +89,10 @@ def preflight(prefix, attempt, out):
     probe.write_text(json.dumps({"attempt": attempt, "inherited_cloudsdk": inherited_cloudsdk(),
                                  "python": sys.executable}), encoding="utf-8")
     print(f"Inherited gcloud settings: {sorted(inherited_cloudsdk().items())}", flush=True)
-    if not put(probe, f"{prefix.rstrip('/')}/_preflight/{attempt}.json"):
+    # Twice to the same object: live snapshots and the final upload REPLACE files, which needs delete permission
+    # as well as create (8 Nov: matches ran, then their upload failed on storage.objects.delete).
+    target = f"{prefix.rstrip('/')}/_preflight/{attempt}.json"
+    if not (put(probe, target) and put(probe, target)):
         print("USER ACTION NEEDED: upload preflight failed before any match ran; check bucket IAM and network.",
               flush=True)
         raise SystemExit(UPLOAD_FAILED)
