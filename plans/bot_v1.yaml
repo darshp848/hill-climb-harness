@@ -135,57 +135,22 @@ stages:
     on_fail: retry_in_place
 
   # Only when Dream unplugged without the assist and still holds the cable: the assist puts it down itself.
-  # ---- Stage 2: tower of 4 foam cubes, one cube per step; colours don't matter (8 Nov live: a real blue-on-pink
-  # stack was rejected for not being blue-on-blue). Sonnet confirms before Dream is switched to the next step. ----
-  - name: stack_2
-    prompt: "put one blue foam cube on top of the other blue foam cube"
+  # ---- Stage 2: one goal prompt for the whole tower, never switched mid-stack (option B, Kaushik 8 Nov): every prompt
+  # change restarts Dream's motion. Passes when Sonnet confirms 3+ foam cubes stacked (any colours), then arms up. ----
+  - name: tower
+    prompt: "stack the foam cubes on top of each other as high as possible"
     write_prompt: false
-    lock_prompt: "put another foam cube on top of the stacked foam cubes"   # flow on: no arms-up, no restart
-    success: "Are at least two foam cubes (any colours) stacked on top of each other in one stack, standing on its own, with no gripper holding it?"
-    camera_notes:
-      scene: "overhead view: judge stacking HERE. A cube on top of another sits raised and partly hides the one below"
-      wrist: "in a wrist view two cubes side by side, one behind the other, look stacked: check the overhead view before saying a cube is on another"
-    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
-    max_attempts: 1
-    min_run_s: 4
-    stall_s: 30
-    confirm: 2
-    confirm_check: "Look at the OVERHEAD (scene) image first. Are at least two foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
-    resume_on_no: true
-    on_fail: skip
-
-  - name: stack_3
-    prompt: "put another foam cube on top of the stacked foam cubes"
-    write_prompt: false
-    lock_prompt: "put another foam cube on top of the stacked foam cubes"   # flow on: no arms-up, no restart
+    lock_prompt: "open both grippers and move the arms up"   # only after Sonnet confirms (confirm_before_lock)
     success: "Are at least three foam cubes (any colours) stacked on top of each other in one stack, standing on its own, with no gripper holding it?"
     camera_notes:
       scene: "overhead view: judge stacking HERE. A cube on top of another sits raised and partly hides the one below"
       wrist: "in a wrist view two cubes side by side, one behind the other, look stacked: check the overhead view before saying a cube is on another"
-    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
+    timeout_s: 295         # no per-stage limit: only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
     confirm: 2
     confirm_check: "Look at the OVERHEAD (scene) image first. Are at least three foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
-    resume_on_no: true
-    on_fail: skip
-
-  - name: tower
-    prompt: "put another foam cube on top of the stacked foam cubes"
-    write_prompt: false
-    lock_prompt: "open both grippers and move the arms up"   # tower done: lift clear
-    success: "Are at least four foam cubes (any colours) stacked on top of each other in one stack, standing on its own, with no gripper holding it?"
-    camera_notes:
-      scene: "overhead view: judge stacking HERE. A cube on top of another sits raised and partly hides the one below"
-      wrist: "in a wrist view two cubes side by side, one behind the other, look stacked: check the overhead view before saying a cube is on another"
-    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
-    max_attempts: 1
-    min_run_s: 4
-    stall_s: 30
-    confirm: 2
-    confirm_check: "Look at the OVERHEAD (scene) image first. Are at least four foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
-    resume_on_no: true
     on_fail: skip
 
   # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. One named ball per call. ----

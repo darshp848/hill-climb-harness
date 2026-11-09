@@ -195,7 +195,7 @@ def test_monitor_model_flag(monkeypatch):
 def test_bot_v1_plan():
     plan = load_plan(ROOT / "plans/bot_v1.yaml")
     names = [s.name for s in plan.stages]
-    first_stack, first_ball = names.index("stack_2"), names.index("ball_1")
+    first_stack, first_ball = names.index("tower"), names.index("ball_1")
     assert all(n.startswith(("cable_", "arms_")) for n in names[:first_stack])
     assert all(n.startswith(("stack", "tower")) for n in names[first_stack:first_ball])
     assert all(n.startswith("ball_") for n in names[first_ball:])
@@ -210,11 +210,9 @@ def test_bot_v1_plan():
     assert "far right" in ga.put_down_prompt
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "orange USB cable" in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
-    assert [x.name for x in stacks] == ["stack_2", "stack_3", "tower"]
-    assert stacks[0].prompt == "put one blue foam cube on top of the other blue foam cube"
-    assert stacks[1].prompt == stacks[2].prompt == "put another foam cube on top of the stacked foam cubes"
-    assert stacks[0].lock_prompt == stacks[1].prompt and plan.confirm_before_lock
-    assert all("any colours" in x.confirm_check and x.timeout_s == 295 for x in stacks)
+    assert [x.name for x in stacks] == ["tower"]
+    assert stacks[0].prompt == "stack the foam cubes on top of each other as high as possible" and plan.confirm_before_lock
+    assert "three" in stacks[0].confirm_check and stacks[0].timeout_s == 295
     assert not plan.tower_prompts
     balls = plan.stages[first_ball:]
     assert all(s.write_prompt and "nearest" in s.prompt and "white basket" in s.prompt and s.writer_notes
