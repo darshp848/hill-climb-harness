@@ -100,7 +100,7 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - &unplug
     name: cable_unplug
-    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+    prompt: "{safe} With the right gripper half open, move down onto the plug of an orange USB cable standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
     write_prompt: false
     grip_assist:
       regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
@@ -110,7 +110,7 @@ stages:
       seat_dz: 0.0         # no seat: two fewer moves (each 3-6 s)
       repull: 0            # slipped: lower back and let Dream re-approach (a re-pull kept Dream stopped ~19 s, 8 Nov live)
       hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty); a pull from 0.27 lost it
-      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
+      put_down_prompt: "With the right gripper half open, move down onto the plug of an orange USB cable standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)

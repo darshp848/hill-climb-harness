@@ -208,7 +208,7 @@ def test_bot_v1_plan():
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.10], 4.0, 0, (0.062, 0.20))
     assert ga.put_down_prompt and unplugs[0].prompt.endswith(ga.put_down_prompt)   # one prompt: unplug + place
     assert "far right" in ga.put_down_prompt
-    assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
+    assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "orange USB cable" in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert [x.name for x in stacks] == ["stack_2", "stack_3", "tower"]
     assert [x.prompt for x in stacks] == ["put one blue foam cube on top of the other blue foam cube",
