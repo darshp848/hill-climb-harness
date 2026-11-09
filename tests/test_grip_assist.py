@@ -207,7 +207,7 @@ def test_bot_v1_plan():
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.10], 4.0, 0, (0.062, 0.20))
     assert ga.put_down_prompt and unplugs[0].prompt.endswith(ga.put_down_prompt)   # one prompt: unplug + place
-    assert "white basket" in ga.put_down_prompt
+    assert "far to the right" in ga.put_down_prompt
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "toss" not in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert [x.name for x in stacks] == ["stack_2", "stack_3", "tower"]
@@ -517,3 +517,15 @@ def test_reset_last_sends_reset_when_the_run_ends(fake, write_plan, tmp_path):
     r.run()
     rs = routes(fake)
     assert rs[0] == "/reset" and rs[-1] == "/reset" and rs.count("/reset") == 2
+
+
+def test_drop_at_carries_the_cable_to_the_basket_without_dream(fake, write_plan, tmp_path):
+    fake.grip_readings = [0.9, 0.9, 0.9, 0.1]
+    fake.grip_cmd = 0.0
+    path = _cable_plan(write_plan, _assist(drop_at=[0.10, 0.20, 0.10], put_down_prompt=PUT, seat_dz=0.0, repull=0))
+    r = build(fake, path, tmp_path, Script([mv(None)]))
+    assert r.run().stages[0].ok
+    drop = events(r.log, "grip_drop")[0]
+    assert drop["moves"] >= 1 and drop["dist"] <= 0.40
+    assert _moves(fake)[-1]["gripper"] == 0.8                            # opened at the end
+    assert not any(PUT in b["prompt"] for _, rt, b in fake.posts() if rt == "/start")   # Dream never restarted for it
