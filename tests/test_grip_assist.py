@@ -534,3 +534,13 @@ def test_confirm_before_lock_never_switches_on_a_wrong_look(fake, write_plan, tm
     sent = prompts(fake)
     assert sent[0].startswith("put one blue") and sent.count(nxt) == 1   # switched once, only after the yes
     assert [c["yes"] for c in events(r.log, "confirm_check")][:3] == [False, False, True]
+
+
+def test_confirm_every_s_passes_without_the_fast_monitor(fake, write_plan, tmp_path):
+    path = write_plan([stage("tower", prompt="stack the foam cubes on top of each other as high as possible",
+                             confirm_check="3+ stacked?", confirm_every_s=0.2, timeout_s=3.0, max_attempts=1,
+                             on_fail="skip")], stop_on_pass=True, hands_off=True)
+    v = Confirming([mv(None, progress=0.3)], [False, True])   # the fast monitor never says done
+    r = build(fake, path, tmp_path, v)
+    res = r.run()
+    assert res.stages[0].ok and events(r.log, "direct_confirm_pass")
