@@ -25,7 +25,7 @@ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_ru
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
                "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check",
                "grip_assist", "write_prompt", "retry_prompt", "writer_notes", "template", "slots", "variants",
-               "not_after_s", "lock_prompt", "resume_on_no"}
+               "not_after_s", "lock_prompt", "resume_on_no", "confirm_every_s"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 _GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
               "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s",
@@ -152,6 +152,9 @@ class Stage:
     # After a lock, a confirm "no" sends Dream back to this stage's prompt. False: it doesn't (a tower stage: 8 Nov
     # live, re-sending the stacking prompt onto a standing 3-cube tower made Dream knock it over).
     resume_on_no: bool = True
+    # Also ask the confirm_check (Sonnet) every this many seconds, without waiting for the fast monitor to say done.
+    # 8 Nov live: Dream built a 4-cube tower and the fast monitor kept calling it "roughly two cubes".
+    confirm_every_s: float | None = None
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -461,6 +464,7 @@ def parse_plan(data: Any) -> Plan:
                 not_after_s=_not_after(raw, label),
                 lock_prompt=_prompt(raw["lock_prompt"], f"{label}.lock_prompt") if raw.get("lock_prompt") else "",
                 resume_on_no=_bool(raw.get("resume_on_no", True), f"{label}.resume_on_no"),
+                confirm_every_s=None if raw.get("confirm_every_s") is None else float(_num(raw["confirm_every_s"], f"{label}.confirm_every_s")),
             )
         )
 

@@ -643,6 +643,13 @@ class Runner:
                         self.log.event("guard_tripped", stage=stage.name, attempt=attempt, question=guard.question,
                                        message=guard.message, source="local")
                         raise _Guard(f"guard tripped in stage {stage.name!r} (local detector): {why}")
+            if (stage.confirm_every_s and stage.confirm_check and elapsed >= gate
+                    and elapsed - gs.get("last_direct", 0.0) >= stage.confirm_every_s):
+                gs["last_direct"] = elapsed
+                if self._confirm_check(stage, verifier) is None:   # Sonnet sees it done: pass without the fast monitor
+                    self.log.event("direct_confirm_pass", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 1))
+                    self._lock_success(stage)
+                    return _Attempt(True, "confirmed directly by the confirm model", max_p, hint)
             if elapsed >= gate:
                 frames = self._frames_for_check(stage)
                 verdict = self._ask(verifier, stage, frames, elapsed)
