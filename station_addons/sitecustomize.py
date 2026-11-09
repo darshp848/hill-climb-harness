@@ -33,3 +33,12 @@ try:
 except Exception as _e:  # never stop Dream station over this
     import sys as _sys
     print(f"pah_judge: frame route not added: {_e}", file=_sys.stderr)
+
+try:  # hedged Dream calls (station_addons/pah_hedge.py), only with PAH_HEDGE_N >= 2
+    import os as _os
+    if int(_os.environ.get("PAH_HEDGE_N", "1") or 1) >= 2:
+        import pah_hedge as _pah_hedge
+        _pah_hedge.install()
+except Exception as _e:  # never stop Dream station over this
+    import sys as _sys
+    print(f"pah_hedge: not installed: {_e}", file=_sys.stderr)

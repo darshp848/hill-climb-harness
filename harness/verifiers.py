@@ -556,6 +556,10 @@ class MonitorVerifier:
         # lands about twice as often (a call took ~10 s on the station on 8 Nov). The newest launched result wins.
         self.max_inflight = max(1, int(user.get("parallel", 1)))
         self.stitch = bool(user.get("stitch", False))   # claude.stitch: one labelled grid image per check
+        # claude.hedge: each check sends this many identical requests at once and uses the first answer that
+        # parses (harness.hedge). Cuts the latency tail; costs `hedge` x the calls. 1 = off.
+        self.hedge = max(1, int(user.get("hedge", 1)))
+        self.hedge_wins: list[int] = []   # which copy won each hedged call (for the logs / tuning)
         self._inflight = 0
         self._seq = self._result_seq = 0
         self._last_launch = 0.0
@@ -720,12 +724,25 @@ class MonitorVerifier:
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         payload = dict(payload)
         sig = payload.pop("_frames_sig", None)
+        if self.hedge > 1:
+            from .hedge import first_of  # noqa: PLC0415
+            res = first_of(lambda: self._call_once(payload, menu_len), self.hedge,
+                           timeout_s=float(self.plan.claude_user.get("timeout_s", 60.0)),
+                           good=lambda v: not v.reason.startswith("monitor error"))
+            verdict = res.value if res.value is not None else MonitorVerdict(
+                None, 0.0, f"monitor error: all {self.hedge} hedged calls failed ({'; '.join(res.errors)[:200]})")
+            if res.winner is not None:
+                self.hedge_wins.append(res.winner)
+        else:
+            verdict = self._call_once(payload, menu_len)
+        verdict.frames_sig = sig
+        return verdict
+
+    def _call_once(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         try:
             reply = self._transport(payload)
             text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
-            verdict = parse_monitor_reply(text, menu_len)
-            verdict.frames_sig = sig
-            return verdict
+            return parse_monitor_reply(text, menu_len)
         except urllib.error.HTTPError as exc:
             return MonitorVerdict(None, 0.0, f"monitor error: HTTP {exc.code}")
         except Exception as exc:  # any failure means "can't tell"
@@ -835,6 +852,9 @@ class MonitorVerifier:
         if self.grip_note:
             lines.append(f"Gripper sensors now (measured): {self.grip_note}")
         lines.append(WRITE_PROMPT_RULE)
+        if stage.writer_notes:
+            lines.append(f"For this stage: {stage.writer_notes} If there is nothing the robot can do here, reply "
+                         "<prompt>SKIP</prompt>.")
         content.append({"type": "text", "text": "\n".join(lines)})
         payload = {"model": model, "max_tokens": 4000, "output_config": {"effort": "low"},
                    "messages": [{"role": "user", "content": content}]}
