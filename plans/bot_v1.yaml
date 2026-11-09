@@ -150,6 +150,7 @@ stages:
     min_run_s: 4
     stall_s: 30
     confirm: 2
+    confirm_every_s: 10    # Sonnet also checks every 10 s on its own (8 Nov live: the fast monitor missed a 4-cube tower)
     confirm_check: "Look at the OVERHEAD (scene) image first. Are at least three foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
     on_fail: skip
 
