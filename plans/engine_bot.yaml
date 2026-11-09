@@ -1,0 +1,209 @@
+# Prompt-engine run on the bot: plans/bot_v1.yaml (grip-assist unplug loop, hands_off, success lock, live guard,
+# Sonnet confirm) with Darsh's prompt engine (harness/prompt_engine.py, branch prompt-engine) writing every Dream
+# instruction from a template + slots. The templates are the wordings that worked by hand on 8 Nov
+# (docs/BOT_PROMPTS_2026-11-08.md); the filler (claude-sonnet-5-5, once per stage) picks each slot from the cameras:
+# which plug, which cube onto which, which ball and which arm. No model writes free text to the robot.
+#
+#   doppler run -p nous -c dev -- ~/Documents/Work/hackathon/makermods-pah/harness/.venv/bin/python -m harness plans/engine_bot.yaml --live \
+#       --monitor-model google/gemini-3.1-flash-lite --detect plans/table_colors.yaml --live-guard
+task: >-
+  Hill Climb relay. Stage 1: unplug a USB cable from the power strip and put it down away from the strip (then one
+  more the same way). Never plug a cable in. Stage 2: stack the blocks into a free-standing tower more than 4 inches
+  (10 cm) tall. Do not touch the blocks before a cable is unplugged. Stage 3: put the green, yellow and orange golf
+  balls into the white bin, never the white ball or a black ball, without touching the tower. Do not touch the balls
+  before the tower passes.
+checkpoint: dreamlabs/dream-1-beta   # base Dream-1: the 8 Nov fine-tune was worse on every task
+time_budget_s: 295
+check_every_s: 1.0     # a fast-monitor look about every second (Flash-Lite answers in ~2.6 s: 3 in flight)
+verifier: monitor
+confirm: 2
+done_message: "ALL STAGES DONE: CALL STOP NOW"
+vars:
+  safe: "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires."
+  ball: green, yellow or orange golf ball
+# model: the monitor's model on the api backend; with --monitor-model / --claude-backend openrouter the frequent looks
+# go to the OpenRouter model instead. confirm_model and writer_model are in $HARNESS_ANTHROPIC_MODELS: Anthropic API.
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 3, hedge: 2, writer_model: claude-sonnet-5-5, confirm_model: claude-sonnet-5-5}
+reset_first: true
+reset_last: true       # Kaushik, 8 Nov: end every run at the start pose too
+stop_on_pass: true
+lock_prompt: "open both grippers and move the arms up"   # lock without /stop: Dream stays warm, arms lift clear
+hands_off: true        # attempts end only on a pass, a guard or the timeout (no drop-the-cube recoveries)
+rewrite_prompts: true
+write_prompts: false    # the prompt engine writes the instructions (it refuses the free-text writer next to it)
+rewrite_max: 1
+rewrite_cooldown_s: 30
+prompt_prefix: "{safe}"
+prompt_engine:
+  mode: compose
+  filler: claude
+  filler_model: claude-sonnet-5-5   # once per stage, on the Anthropic API (HARNESS_ANTHROPIC_MODELS)
+  prefetch_ttl_s: 20
+  max_words: 60
+  prefix: "{safe}"
+  forbid: ["white ball", "white golf ball", "black ball", "8-ball", "eight ball"]
+  vocab:
+    plug: ["a plug standing upright in a port on top of the black power strip", "the rightmost plug standing in a port on top of the black power strip", "the plug standing in the power strip nearest the right arm"]
+    piece: ["one blue cube", "the pink cube", "the other blue cube", "the blue cube", "the yellow square stick", "the pink round stick"]
+    top: ["the other blue cube", "the stacked blue cubes", "the blue cube in front of the robot", "the pink cube", "the blue cube", "the top of the tower"]
+    base: ["a blue cube", "the blue cube nearest the robot", "the pink cube"]
+    ball: ["the orange golf ball", "the yellow golf ball", "the green golf ball"]
+    where: ["on the right side of the table", "at the front right of the table", "on the left side of the table", "at the front left of the table", "next to the white basket"]
+    arm: ["With the right arm,", "With the left arm,"]
+  templates:
+    unplug:
+      text: "With the right gripper half open, move down onto <plug>, then close the gripper on that plug, pull it straight up and drop the cable into the white basket."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+      prefix: true
+      slots: {plug: plug}
+      note: "approach + grip; the harness fixes the grip and pulls (grip_assist). 2/2 plugs held on 8 Nov"
+    put_down:
+      text: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and drop the cable into the white basket."
+      prefix: true
+      note: "after an unplug; the shorter wording set the cable back on the strip"
+    base:
+      text: "move <base> to the middle of the table, close in front of the robot"
+      arm: none
+      slots: {base: base}
+      note: "the tower's base cube, close to the robot so the near arm stacks"
+    stack:
+      text: "put <piece> on top of <top>"
+      arm: none
+      slots: {piece: piece, top: top}
+      note: "name both pieces by colour and WHICH one when there are two of a colour; no arm named (Dream picks the near arm). 8 Nov: 'a blue cube' with two blue cubes stacked on the far one and the next piece tipped it"
+    tower:
+      text: "stack one blue cube on top of the other blue cube, then put the pink cube on top of them"
+      arm: none
+      note: "one stage, one goal (Kaushik, 8 Nov)"
+    stack_all:
+      text: "stack the blocks and sticks as high as possible"
+      arm: none
+      note: "the rubric's own wording: stacked in 2 of 3 runs on 8 Nov (prompt comparison S8); the second-try wording"
+    ball:
+      text: "<arm> pick up <ball> <ball_where> and drop it into the white basket."
+      slots: {arm: arm, ball: ball, ball_where: where}
+      note: "one legal ball per prompt; prefer a ball the right arm can reach (8 Nov: both near the right gripper went in, left arm and mid-table failed)"
+
+guard:
+  question: "Is either gripper holding the white ball or a black ball (balls that must never go in the bin), or closed or closing around one?"
+  stages: [ball_]
+  confirm: 1
+  message: "ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW"
+  max_blind_s: 20
+
+# Shapes only, bottom to top: colour order does not matter (Darsh, 8 Nov). For the monitor's tower report; no
+# tower_prompts: the stack prompts below are the short ones that worked.
+tower_target:
+  - "cube"
+  - "cube"
+  - "cube"
+  - "square stick, standing upright"
+  - "round stick, standing upright"
+
+system_prompt: |-
+  You supervise a robot (two MakerMods Metal arms, run by the Dream-1 model) doing a timed relay on one table, and you judge each stage from its cameras. Rules and lessons from testing on this station:
+
+  STATION
+  - Cameras: one overhead (scene), one on each wrist (wrist_l, wrist_r). The right arm does the cables; for stacking and balls the arm nearest the object does the work.
+  - The gripper sensors are measured and beat the images for what a gripper holds: "stopped at 0.30" = holding something; "closed fully on nothing" = holding NOTHING, whatever the image seems to show. Never report a held cable or block on a gripper the sensor says is empty.
+  - Between robot motions the harness itself may stop the robot and move the right hand straight up or down (fixing a grip, pulling a plug). The arm standing still holding a plug, or the robot idle after putting a cable down, is expected, not a stall.
+
+  CABLES
+  - The "hub" is a black power strip, unplugged from the wall. The USB ports are on its top face; plugs stand vertical and come out by pulling straight up, one at a time, with the right arm.
+  - Count plugs in their ports. A cable's far end lies loose on the table from the start: that never counts as unplugged. An unplugged cable may not be plugged back in.
+  - Once a plug is out it often lies loose next to the strip or on the table to the right. That one is DONE.
+
+  STACKING
+  - Touching a block before at least one cable is unplugged is a disqualification.
+  - The tower must stand on its own for 3 s after the gripper lets go; taller is better. Cubes at the bottom, sticks on top; the colours can be in any order.
+
+  BALLS
+  - Only the green, yellow and orange golf balls go in the white bin. Never let the white ball or a black ball go in. Do not touch the tower.
+
+  WRITING ROBOT INSTRUCTIONS
+  - One short action in plain words, naming ONE object by colour and position, e.g. "With the right arm, pick up the orange golf ball on the right side of the table and drop it into the white basket." One ball per instruction, with the arm on that ball's side of the table. No negations ("not the white ball"): name the right ball instead.
+  - Only write next_prompt when the robot is on the wrong object or step, plainly stuck, or about to fail.
+
+stages:
+  # ---- Stage 1 (pass bar: one cable out) ----
+  - &unplug
+    name: cable_unplug
+    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and drop the cable into the white basket."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+    write_prompt: false
+    template: unplug
+    slots: {plug: "a plug standing upright in a port on top of the black power strip"}
+    grip_assist:
+      regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
+      regrip_dz: -0.025      # 8 Nov live: 0 of 6 re-grips held at -1.5 cm
+      pull_up_m: [0.10]     # one move: each /move costs 3-6 s on the station (arm re-sync), 8 Nov live
+      pull_s: 4            # seconds for the 10 cm lift: slow enough not to slip
+      seat_dz: 0.0         # no seat: two fewer moves (each 3-6 s)
+      repull: 0            # slipped: lower back and let Dream re-approach (a re-pull kept Dream stopped ~19 s, 8 Nov live)
+      hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty)
+      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and drop the cable into the white basket."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
+      put_down_s: 15
+      min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
+      pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
+      loop_until_s: 120    # Kaushik, 8 Nov: 2 min for cables, 1 min tower, 2 min balls
+    success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
+    expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
+    camera_notes:
+      wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
+      scene: "top view: every cable's far end lies loose on the table all the time; do not count those as unplugged"
+    timeout_s: 60          # Dream's time only: the harness's own grip and pull do not count against it
+    max_attempts: 99       # pass bar: keep trying until the clock runs out
+    min_run_s: 4
+    settle_s: 4
+    stall_s: 30
+    recovery:
+      - {name: keep_going, kind: retry, when: "the gripper is on a plug or right next to the strip", max_uses: 4}
+      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+         when: "the gripper is stuck, holds the cord instead of the plug, or has pushed the strip", settle_s: 5, max_uses: 3}
+    confirm: 2             # two looks before the lock (8 Nov live: one 'all plugs removed' look was wrong)
+    confirm_check: "Count the USB plugs standing seated in the power strip's ports in the STAGE START images, then in the NOW images. Is the NOW count lower, so a plug that was seated has been pulled fully out of its port? Every cable's far end lies loose on the table from the start and is NOT an unplugged plug. Answer yes only if you can see an empty port that was filled, or the plug held or lying clear of the strip."
+    on_fail: retry_in_place
+
+  # Only when Dream unplugged without the assist and still holds the cable: the assist puts it down itself.
+  # ---- Stage 2 (pass bar: tower > 4 in, free-standing 3 s after release). One stage, one goal prompt, no arm named. ----
+  # Kaushik, 8 Nov: one well-defined stage instead of "stack a cube" + "tower > 4 in": every stage boundary (lock, arms
+  # up, camera check, new prompt) cost time and the re-prompt knocked finished towers over. Goal, not motion.
+  - name: tower
+    prompt: "stack one blue cube on top of the other blue cube, then put the pink cube on top of them"
+    write_prompt: false
+    template: tower
+    success: "Are three cubes stacked on top of each other in one tower, standing on its own, with no gripper holding or touching it?"
+    expect: "The arms pick up the cubes one at a time and stack them into a single tower of three, then lift clear; the tower stays standing."
+    camera_notes:
+      scene: "top view of the table: the cubes and the tower"
+    timeout_s: 75          # Kaushik, 8 Nov: 75 s for stacking (15 s taken from the balls)
+    max_attempts: 1        # RUBRIC RISK: balls before the tower passes can be a DQ (Kaushik's call, 8 Nov)
+    min_run_s: 4
+    stall_s: 45
+    confirm: 2             # two fast looks in a row before the lock, then Sonnet decides
+    confirm_check: "In the NOW images, are three cubes stacked on top of each other in a single tower, standing on its own, with no gripper holding or touching it?"
+    on_fail: skip
+
+  # ---- Stage 3: no pass bar. The guard stops the run if an illegal ball is held. One named ball per call. ----
+  - &ball
+    name: ball_1
+    prompt: "With the arm nearest to it, pick up one {ball} and drop it into the white basket."
+    template: ball
+    slots: {arm: "With the right arm,", ball: "the orange golf ball", ball_where: "on the right side of the table"}
+    writer_notes: "Pick the ONE legal ball (green, yellow or orange golf ball; never the white ball or a black ball) that is closest to one of the arms and reachable without passing over the tower, the blocks or the white basket. Name the arm on that ball's side of the table: \"With the right arm, ...\" for a ball on the right arm's half, \"With the left arm, ...\" for a ball on the left arm's half. Say where the ball is (e.g. \"the orange golf ball at the front right of the table\"). If no legal ball outside the basket is in easy reach of either arm, the answer is SKIP."
+    success: "Compared with the stage-start images, is there one more {ball} resting inside the bin than at the start of this stage, with no white or black ball in the bin and the tower (if any) still standing?"
+    expect: "The right arm picks up one named {ball}, staying clear of the white ball, any black ball and the tower, and releases it over the bin."
+    timeout_s: 40
+    min_run_s: 3
+    stall_s: 30
+    confirm: 1
+    confirm_check: "Count the green, yellow and orange golf balls inside the white bin in the STAGE START images, then in the NOW images. Is the NOW count higher, with no white or black ball in the bin?"
+    on_fail: skip
+  - <<: *ball
+    name: ball_2
+  - <<: *ball
+    name: ball_3
+  - <<: *ball
+    name: ball_4
+  - <<: *ball
+    name: ball_5
+  - <<: *ball
+    name: ball_6

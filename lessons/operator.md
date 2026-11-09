@@ -1,0 +1,1 @@
+- For cable stages, unplug the cables one at a time, always the rightmost plug still in the strip, and keep going through all of them.  (operator: "good job - it tried to unplug 3rd cable but corrected and unplugged first one instead. is a little slow at places tho and not sure why.  can we unplug all the cables one by one now?", run 20261108T051204Z)

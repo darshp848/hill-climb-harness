@@ -11,15 +11,26 @@ import yaml
 
 VERIFIERS = ("manual", "claude", "time", "claude+manual", "monitor", "monitor+manual")
 RECOVERY_KINDS = ("retry", "reset")
-ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
+# retry_then_skip: retry in place (recovery menu as usual) up to max_attempts, then move on instead of ending the run.
+# Darsh's rule (decisions.pdf): "if a task fails more than twice, move on; three times if it is worth a lot".
+ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort", "retry_then_skip")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
+              "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first",
+              "write_prompts", "rewrite_max", "rewrite_cooldown_s", "stop_on_pass", "hands_off", "lock_prompt",
+              "prompt_engine", "reset_last"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check",
+               "grip_assist", "write_prompt", "retry_prompt", "writer_notes", "template", "slots", "variants",
+               "not_after_s", "lock_prompt", "resume_on_no"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
+_GRIP_KEYS = {"arm", "regrip", "regrip_dz", "pull_up_m", "pull_s", "seat_dz", "repull", "put_down_prompt",
+              "put_down_s", "hold", "open_above", "poll_s", "min_z", "pass_on_pull", "drop_dxyz", "loop_until_s",
+              "empty_below", "pull_count_dz"}
+MAX_MOVE_M = 0.12   # the station's /move takes at most 12 cm per call
 
 
 @dataclass
@@ -33,6 +44,54 @@ class Recovery:
     settle_s: float = 8.0
     max_uses: int = 1
     legacy: bool = False
+
+
+@dataclass
+class GripAssist:
+    """Dream grips, the harness fixes the grip and pulls (tools/try_prompt.py, 8 Nov: 2/2 plugs held through the pull).
+
+    While Dream runs the stage prompt the runner reads GET /arms every poll_s. When `arm`'s gripper was open
+    (> open_above) and now reads shut on nothing (<= hold[0]) twice: /stop, open in place, lower regrip_dz, close (at
+    most `regrip` times; no hold -> Dream starts again). When it holds (hold[0] < g < hold[1]) twice: /stop, (seat:
+    open a little, lower seat_dz, ) squeeze in place, re-read, then lift straight up by pull_up_m steps of pull_s
+    each, grip shut. A slip on the way up goes back down and re-grips, at most `repull` times. Then Dream gets
+    put_down_prompt for up to put_down_s. Every /move is sent with no Dream run going, <= 12 cm each."""
+
+    arm: str = "right"
+    regrip: int = 2
+    regrip_dz: float = -0.015
+    pull_up_m: list[float] = field(default_factory=lambda: [0.06, 0.04])
+    pull_s: float = 3.0
+    seat_dz: float = 0.0
+    repull: int = 2
+    put_down_prompt: str | None = None
+    put_down_s: float = 15.0
+    # Reading of a holding gripper. A USB plug is thin: 0.05-0.15 (8 Nov: a pull from 0.27 lost the plug, so <0.20).
+    # A held foam cube reads ~0.33-0.51: a stage gripping cubes would use [0.25, 0.6].
+    hold: tuple[float, float] = (0.045, 0.20)
+    open_above: float = 0.5
+    poll_s: float = 1.0
+    # No pull when the hand is lower than this (GET /pose z, m, arm base frame): a plug in the strip is gripped at
+    # ~0.08, a cable lying on the table at ~0.02 (8 Nov live run: the retry "unplugged" a loose cable off the table).
+    min_z: float | None = None
+    # After a pull that held and the put-down: ask the stage's confirm_check at once and pass on a yes, instead of
+    # waiting for the fast monitor (8 Nov live run: a real unplug at 40 s was never called done, and the retry went
+    # for the loose cable).
+    pass_on_pull: bool = True
+    # After the pull, the harness puts the cable down itself: move the hand by this much (m, arm base frame, <= 12 cm
+    # a step), then open. Instead of put_down_prompt: no Dream restart, and it lands where we say (8 Nov live: Dream set
+    # cables back on the strip). None = Dream puts it down.
+    drop_dxyz: list[float] | None = None
+    # Unplug in a loop: after each confirmed pull, count it and send Dream straight back for the next plug (same stage,
+    # no stage change) until this match-clock time (s since the run started), or the confirm says no plug is left.
+    # The stage passes with at least one cable out. None = one cable per stage.
+    loop_until_s: float | None = None
+    # Once the harness has squeezed (or lifted), the jaws read below this only when empty (8 Nov live: empty after a
+    # squeeze 0.024-0.026; a plug held through the lift 0.049-0.052, under the approach band's 0.062).
+    empty_below: float = 0.04
+    # A pull that raised the hand at least this much (m) and still holds something counts as a cable out even if the
+    # confirm look says no (8 Nov live: a real held pull, z 0.067 -> 0.170, was rejected by the camera check).
+    pull_count_dz: float | None = 0.08
 
 
 @dataclass
@@ -58,6 +117,37 @@ class Stage:
     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
     watch: Watch | None = None
+    requires_stage: str | None = None   # skip this stage at once unless the named earlier stage passed
+    # A "done" counts only after a gripper was felt holding something in this stage (/arms: commanded shut, stopped
+    # partway). An unplug cannot happen without a grip; in the sim the monitor passed cable stages on loose cord ends.
+    needs_grip: bool = False
+    # A pointed yes/no question a stronger model (plan claude.confirm_model) answers from the stage-start and newest
+    # frames before the stage may pass. For stages where a false pass costs the match (an unplug: blocks touched
+    # before a cable is out are a DQ).
+    confirm_check: str | None = None
+    grip_assist: GripAssist | None = None
+    # False: the monitor neither writes this stage's prompt (plan.write_prompts) nor rewrites it mid-stage
+    # (plan.rewrite_prompts); stage.prompt goes to Dream as written. 8 Nov: the writer's detail hurt stacking.
+    write_prompt: bool = True
+    retry_prompt: str | None = None   # sent instead of `prompt` on every retry of the stage
+    # Extra rules for the stage-prompt writer on this stage (plan.write_prompts). It may answer SKIP (nothing it can
+    # do here, e.g. no legal ball within reach): the stage is then skipped.
+    writer_notes: str | None = None
+    # plan.prompt_engine: the template this stage's instruction is composed from, and its default slot options
+    # (also the fallback). `prompt` stays the intent the monitor reads and the text a verbatim run sends.
+    template: str | None = None
+    slots: dict[str, str] = field(default_factory=dict)
+    # More templates for later tries of the same stage: try n uses ([template] + variants)[(n - 1) % len].
+    variants: list[str] = field(default_factory=list)
+    # Match clock (s since run start) after which this optional stage is not started or retried: leaves time for the
+    # stages after it. Only on skip / retry_then_skip stages (a pass bar can't be left).
+    not_after_s: float | None = None
+    # plan.stop_on_pass: what Dream is switched to when this stage looks done. "" = the plan's lock_prompt. E.g. the
+    # next stage's prompt, so Dream flows on without an arms-up reset (8 Nov live: 2 cubes -> 3rd cube paused).
+    lock_prompt: str = ""
+    # After a lock, a confirm "no" sends Dream back to this stage's prompt. False: it doesn't (a tower stage: 8 Nov
+    # live, re-sending the stacking prompt onto a standing 3-cube tower made Dream knock it over).
+    resume_on_no: bool = True
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -118,6 +208,7 @@ class Plan:
     cameras_for_check: list[str] = field(default_factory=list)  # empty = all cameras
     confirm: int = 1
     claude_user: dict[str, Any] = field(default_factory=dict)  # only the keys the plan file set
+    done_before: list[str] = field(default_factory=list)       # stages dropped by --skip: done before this run
     done_message: str = ""  # printed large (with a bell) when every stage passed, e.g. "CALL STOP NOW"
     guard: Guard | None = None
     # The tower to build, bottom to top, one piece per entry ("blue cube, hole facing sideways"). The monitor gets it
@@ -126,8 +217,39 @@ class Plan:
     tower_target: list[str] = field(default_factory=list)
     # Optional: name the next piece in the prompt instead of the stage's generic one. Shape word -> template with
     # <piece>, e.g. {"cube": "put the <piece> on top of the stack"}. The piece is the target's next entry after the
-    # tower the monitor last reported. Off (empty) for a fine-tune that only knows its recorded texts.
+    # tower the monitor last reported; an optional <top> names the piece it goes on. Off (empty) for a fine-tune
+    # that only knows its recorded texts.
     tower_prompts: dict[str, str] = field(default_factory=dict)
+    system_prompt: str = ""        # the monitor's system prompt: station rules and lessons from testing
+    # Let the monitor write the robot's next prompt (its `next_prompt`), with a cooldown and a cap per attempt.
+    # Base Dream-1 only: a fine-tune follows only its recorded task texts.
+    rewrite_prompts: bool = False
+    rewrite_max: int = 3               # monitor-written prompts per attempt
+    rewrite_cooldown_s: float = 15.0   # no monitor-written prompt sooner than this after any prompt change
+    # The monitor writes each stage's prompt at stage start (and at each retry) from what it sees: one short
+    # instruction naming the object and where it goes. stage.prompt is the intent it works from and the fallback.
+    # Base Dream-1 only (8 Nov, bot: "the pink cube onto the blue cube" stacked; "a cube onto the cube" hit a ball).
+    write_prompts: bool = False
+    # A sentence a rewritten prompt must open with when the stage's own prompt opens with it (Dream refuses cable
+    # work without the "no power" sentence); added when the monitor drops it.
+    prompt_prefix: str = ""
+    reset_first: bool = False      # POST /reset and wait for idle before the first stage: both grippers start open
+    # POST /reset when the run ends (done, time up, operator stop), except after a guard trip: the arm then holds a
+    # ball that must not be dropped. Kaushik, 8 Nov: start and end every run from the start pose.
+    reset_last: bool = False
+    # Lock a success: stop Dream at the first look that would pass the stage (before the confirm_check), so it can't
+    # undo it (8 Nov: "stack ... as high as possible" built blue on blue, then took it apart). A confirm that says
+    # no starts Dream again on the same prompt.
+    stop_on_pass: bool = False
+    # With stop_on_pass: send this prompt instead of /stop (e.g. "open both grippers and move the arms up"), so Dream's
+    # run stays warm and the next stage only changes the prompt: a fresh /start costs 7-12 s of first answers.
+    lock_prompt: str = ""
+    # Leave Dream alone: an attempt ends only on a pass, a guard or the stage timeout. No regression / "failing" /
+    # "stalled" exits, no recovery prompts, and a retry does not resend the prompt Dream is already running. 8 Nov
+    # live: a noisy fast monitor ended 7 stacking attempts in 4 min, each with "open both grippers ...", which made
+    # Dream drop the cube it held.
+    hands_off: bool = False
+    prompts: Any = None            # harness.prompt_engine.Library from plan.prompt_engine, or None
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -136,6 +258,13 @@ def _roles(value: Any, where: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(c, str) and c.strip() for c in value):
         raise ValueError(f"{where}: must be a list of camera role names")
     return [c.strip() for c in value]
+
+
+def _cooldown(value: Any) -> float:
+    """plan.rewrite_cooldown_s: a number of seconds, 0 allowed."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"plan.rewrite_cooldown_s: must be a number >= 0, got {value!r}")
+    return float(value)
 
 
 def _num(value: Any, where: str, *, integer: bool = False) -> float:
@@ -211,6 +340,24 @@ def _recovery_item(raw: Any, j: int, label: str, seen: set[str]) -> str | Recove
     return item
 
 
+def _variants(raw: Any, template: Any, label: str) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(v, str) and v.strip() for v in raw):
+        raise ValueError(f"{label}.variants: must be a list of template ids")
+    if not template:
+        raise ValueError(f"{label}.variants: needs a stage template")
+    return [v.strip() for v in raw]
+
+
+def _not_after(raw: dict, label: str) -> float | None:
+    if raw.get("not_after_s") is None:
+        return None
+    if raw.get("on_fail") not in ("skip", "retry_then_skip"):
+        raise ValueError(f"{label}.not_after_s: only on on_fail skip or retry_then_skip stages (a pass bar can't be left)")
+    return float(_num(raw["not_after_s"], f"{label}.not_after_s"))
+
+
 def parse_plan(data: Any) -> Plan:
     """Validates an already-loaded mapping."""
     if not isinstance(data, dict):
@@ -235,6 +382,9 @@ def parse_plan(data: Any) -> Plan:
         label = f"stage {name!r}"
         if name in seen:
             raise ValueError(f"{label}.name: duplicate stage name")
+        prerequisite = raw.get("requires_stage")
+        if prerequisite is not None and (not isinstance(prerequisite, str) or prerequisite not in seen):
+            raise ValueError(f"{label}.requires_stage: must name an earlier stage")
         seen.add(name)
         unknown = set(raw) - _STAGE_KEYS
         if unknown:
@@ -291,6 +441,19 @@ def parse_plan(data: Any) -> Plan:
                 camera_notes={k: v.strip() for k, v in notes.items()},
                 history_cameras=hist,
                 watch=watch,
+                requires_stage=prerequisite,
+                needs_grip=_bool(raw.get("needs_grip", False), f"{label}.needs_grip"),
+                confirm_check=None if raw.get("confirm_check") is None else _text(raw["confirm_check"], f"{label}.confirm_check"),
+                grip_assist=_grip_assist(raw.get("grip_assist"), f"{label}.grip_assist"),
+                write_prompt=_bool(raw.get("write_prompt", True), f"{label}.write_prompt"),
+                retry_prompt=None if raw.get("retry_prompt") is None else _prompt(raw["retry_prompt"], f"{label}.retry_prompt"),
+                writer_notes=None if raw.get("writer_notes") is None else _text(raw["writer_notes"], f"{label}.writer_notes"),
+                template=None if raw.get("template") is None else _text(raw["template"], f"{label}.template"),
+                slots=_slot_defaults(raw.get("slots"), label),
+                variants=_variants(raw.get("variants"), raw.get("template"), label),
+                not_after_s=_not_after(raw, label),
+                lock_prompt=_prompt(raw["lock_prompt"], f"{label}.lock_prompt") if raw.get("lock_prompt") else "",
+                resume_on_no=_bool(raw.get("resume_on_no", True), f"{label}.resume_on_no"),
             )
         )
 
@@ -324,9 +487,35 @@ def parse_plan(data: Any) -> Plan:
     tower = data.get("tower_target") or []
     if not isinstance(tower, list) or not all(isinstance(x, str) and x.strip() for x in tower):
         raise ValueError("plan.tower_target: must be a list of pieces, bottom to top")
+    system_prompt = data.get("system_prompt", "") or ""
+    if not isinstance(system_prompt, str):
+        raise ValueError("plan.system_prompt: must be a string")
+    prefix = data.get("prompt_prefix", "") or ""
+    if not isinstance(prefix, str):
+        raise ValueError("plan.prompt_prefix: must be a string")
+    from harness.prompt_engine import parse_library   # here: prompt_engine imports nothing from plan
+    prompts = parse_library(data.get("prompt_engine"), stages)
+    if prompts is not None and prompts.mode == "verbatim":
+        on = [k for k in ("rewrite_prompts", "write_prompts") if data.get(k)] + (["tower_prompts"] if data.get("tower_prompts") else [])
+        if on:
+            raise ValueError(f"plan.prompt_engine: mode verbatim (fine-tune) sends recorded texts only; turn off {on}")
+    if prompts is not None and prompts.mode == "compose" and data.get("write_prompts"):
+        raise ValueError("plan: write_prompts (free text) and prompt_engine compose are two prompt writers; pick one")
     return Plan(
+        prompts=prompts,
         task=task,
         guard=guard,
+        system_prompt=system_prompt.strip(),
+        rewrite_prompts=_bool(data.get("rewrite_prompts", False), "plan.rewrite_prompts"),
+        rewrite_max=int(_num(data.get("rewrite_max", 3), "plan.rewrite_max", integer=True)),
+        rewrite_cooldown_s=_cooldown(data.get("rewrite_cooldown_s", 15.0)),
+        write_prompts=_bool(data.get("write_prompts", False), "plan.write_prompts"),
+        prompt_prefix=prefix.strip(),
+        reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
+        reset_last=_bool(data.get("reset_last", False), "plan.reset_last"),
+        stop_on_pass=_bool(data.get("stop_on_pass", False), "plan.stop_on_pass"),
+        lock_prompt=_prompt(data["lock_prompt"], "plan.lock_prompt") if data.get("lock_prompt") else "",
+        hands_off=_bool(data.get("hands_off", False), "plan.hands_off"),
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
         done_message=done_message,
@@ -342,6 +531,14 @@ def parse_plan(data: Any) -> Plan:
     )
 
 
+def _slot_defaults(raw: Any, label: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+        raise ValueError(f"{label}.slots: must map slot names to option strings")
+    return {k: " ".join(v.split()) for k, v in raw.items()}
+
+
 def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
     if raw is None:
         return {}
@@ -354,9 +551,72 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
         name = piece.split(",")[0].strip()
         if not any(name.endswith(k) for k in raw):
             raise ValueError(f"plan.tower_prompts: no template for {name!r}")
-        prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name)
+        prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name).replace("<top>", name)
         _prompt(prompt, "plan.tower_prompts")
     return {k: v.strip() for k, v in raw.items()}
+
+
+def _grip_assist(raw: Any, where: str) -> GripAssist | None:
+    if raw is None or raw is False:
+        return None
+    if raw is True:
+        return GripAssist()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where}: must be a mapping (or true for the defaults)")
+    unknown = set(raw) - _GRIP_KEYS
+    if unknown:
+        raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
+    d = GripAssist()
+    arm = raw.get("arm", d.arm)
+    if arm not in ("left", "right"):
+        raise ValueError(f"{where}.arm: must be left or right, got {arm!r}")
+    steps = raw.get("pull_up_m", d.pull_up_m)
+    if not isinstance(steps, list) or not steps:
+        raise ValueError(f"{where}.pull_up_m: must be a non-empty list of lift steps in metres")
+    steps = [float(_num(x, f"{where}.pull_up_m")) for x in steps]
+    if any(x > MAX_MOVE_M for x in steps):
+        raise ValueError(f"{where}.pull_up_m: each step must be <= {MAX_MOVE_M} m (the station's /move limit)")
+    hold = raw.get("hold", list(d.hold))
+    if (not isinstance(hold, list) or len(hold) != 2 or not all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                                                                for x in hold) or not 0 <= hold[0] < hold[1] <= 1):
+        raise ValueError(f"{where}.hold: must be [low, high] gripper readings with 0 <= low < high <= 1")
+    regrip_dz = raw.get("regrip_dz", d.regrip_dz)
+    if isinstance(regrip_dz, bool) or not isinstance(regrip_dz, (int, float)) or abs(regrip_dz) > MAX_MOVE_M:
+        raise ValueError(f"{where}.regrip_dz: must be a number of metres within +-{MAX_MOVE_M}")
+    seat = raw.get("seat_dz", 0.0)
+    if isinstance(seat, bool) or not isinstance(seat, (int, float)) or not 0 <= seat <= MAX_MOVE_M:
+        raise ValueError(f"{where}.seat_dz: must be 0..{MAX_MOVE_M} m (lowered before the pull; 0 = no seat)")
+    counts = {}
+    for k in ("regrip", "repull"):
+        v = raw.get(k, getattr(d, k))
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+            raise ValueError(f"{where}.{k}: must be an integer >= 0, got {v!r}")
+        counts[k] = v
+    put = raw.get("put_down_prompt")
+    return GripAssist(arm=arm, regrip=counts["regrip"], regrip_dz=float(regrip_dz), pull_up_m=steps,
+                      pull_s=float(_num(raw.get("pull_s", d.pull_s), f"{where}.pull_s")), seat_dz=float(seat),
+                      repull=counts["repull"], put_down_prompt=None if put is None else _prompt(put, f"{where}.put_down_prompt"),
+                      put_down_s=float(_num(raw.get("put_down_s", d.put_down_s), f"{where}.put_down_s")),
+                      hold=(float(hold[0]), float(hold[1])),
+                      open_above=float(_num(raw.get("open_above", d.open_above), f"{where}.open_above")),
+                      poll_s=float(_num(raw.get("poll_s", d.poll_s), f"{where}.poll_s")),
+                      min_z=None if raw.get("min_z") is None else float(_num(raw["min_z"], f"{where}.min_z")),
+                      pass_on_pull=_bool(raw.get("pass_on_pull", True), f"{where}.pass_on_pull"),
+                      drop_dxyz=_drop(raw.get("drop_dxyz"), where),
+                      loop_until_s=None if raw.get("loop_until_s") is None else float(_num(raw["loop_until_s"], f"{where}.loop_until_s")),
+                      empty_below=float(_num(raw.get("empty_below", d.empty_below), f"{where}.empty_below")),
+                      pull_count_dz=None if raw.get("pull_count_dz", d.pull_count_dz) is None else float(_num(raw.get("pull_count_dz", d.pull_count_dz), f"{where}.pull_count_dz")))
+
+
+def _drop(raw: Any, where: str) -> list[float] | None:
+    if raw is None:
+        return None
+    if (not isinstance(raw, list) or len(raw) != 3
+            or not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in raw)):
+        raise ValueError(f"{where}.drop_dxyz: must be [dx, dy, dz] in metres")
+    if sum(float(x) ** 2 for x in raw) ** 0.5 > 0.36:
+        raise ValueError(f"{where}.drop_dxyz: at most 36 cm in all")
+    return [float(x) for x in raw]
 
 
 def _guard(raw: Any) -> Guard | None:

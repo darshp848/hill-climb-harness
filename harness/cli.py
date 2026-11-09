@@ -13,10 +13,15 @@ from pathlib import Path
 from . import __version__
 from .frames import FrameSource
 from .log import RunLog
+from .operator import Operator, load_lessons
 from .plan import load_plan
 from .runner import Runner
 from .station_client import StationClient, StationError
-from .verifiers import ManualVerifier, Verifier, make_verifier
+from .verifiers import ManualVerifier, MonitorVerifier, Verifier, make_verifier
+
+# The fast monitor through OpenRouter when none is named (8 Nov bot: low latency, but it missed a real unplug and
+# rewrote prompts 11 times in a run: pair it with rewrite_max 1 and the Sonnet confirm_check, as plans/bot_v1.yaml does).
+DEFAULT_OPENROUTER_MONITOR = "google/gemini-3.1-flash-lite"
 
 SAFETY = """\
 LIVE RUN. This drives the real robot through the station agent.
@@ -39,14 +44,49 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--detect", default=None, metavar="COLORS.yaml",
                    help="local ball/block detector (e.g. plans/table_colors.yaml): fast black-ball guard + boxes on "
                         "the monitor's frames")
+    p.add_argument("--live-guard", action="store_true",
+                   help="with --detect: run the guard on live GET /frame/<wrist>.jpg images (station add-on) in its own "
+                        "thread, which sends /stop itself (the per-poll guard keeps running as a fallback)")
+    p.add_argument("--live-guard-hz", type=float, default=10.0, help="live guard looks per second (default 10)")
+    p.add_argument("--live-guard-frames", type=int, default=3,
+                   help="yes answers on distinct live frames in a row that trip the live guard (default 3)")
+    p.add_argument("--allow-no-live-guard", action="store_true",
+                   help="let a --live run whose plan has a guard start without --detect --live-guard (not for matches)")
     p.add_argument("--verifier", choices=["manual", "claude", "time", "claude+manual", "monitor", "monitor+manual"], default=None,
                    help="override every stage's verifier")
-    p.add_argument("--claude-backend", choices=["api", "subscription"], default=None,
+    p.add_argument("--skip", action="append", default=[], metavar="PREFIX",
+                   help="drop the stages whose names start with PREFIX, e.g. --skip cable_ (repeatable; practice)")
+    p.add_argument("--checkpoint", default=None, help="override the plan's checkpoint, e.g. a fine-tune")
+    p.add_argument("--no-rewrite", action="store_true",
+                   help="never send monitor-written prompts (a fine-tune only follows its recorded task texts)")
+    p.add_argument("--budget", type=float, default=None, metavar="S",
+                   help="override the plan's time_budget_s (practice; a match is 295 s)")
+    p.add_argument("--lessons", default="lessons/operator.md", metavar="FILE",
+                   help="operator lessons: read into the monitor's system prompt, and new ones appended")
+    p.add_argument("--no-operator", action="store_true",
+                   help="ignore typed lines other than s (stop). Use this in a match: any human input is a DQ")
+    p.add_argument("--claude-backend", choices=["api", "subscription", "openrouter"], default=None,
                    help="how the claude/monitor verifiers reach Claude: api (ANTHROPIC_API_KEY, the default) or "
                         "subscription (the logged-in `claude` CLI); same as $HARNESS_CLAUDE_BACKEND")
+    p.add_argument("--monitor-model", default=None, metavar="OPENROUTER_ID",
+                   help="the model for the frequent monitor looks, an OpenRouter id (comma-separate several to race "
+                        "them); implies --claude-backend openrouter. Same as $HARNESS_OPENROUTER_MODELS; default "
+                        f"{DEFAULT_OPENROUTER_MONITOR}. The plan's confirm_model and writer_model (in "
+                        "$HARNESS_ANTHROPIC_MODELS, default claude-sonnet-5-5) stay on the Anthropic API")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
                    help="fill a {NAME} placeholder in the plan, e.g. --var color=orange (repeatable)")
     return p
+
+
+def _set_backend(monitor_model: str | None, backend: str | None) -> None:
+    """--monitor-model and --claude-backend into the environment default_transport reads."""
+    if monitor_model:
+        os.environ["HARNESS_OPENROUTER_MODELS"] = monitor_model
+        os.environ["HARNESS_CLAUDE_BACKEND"] = "openrouter"   # an explicit --claude-backend still wins
+    if backend:
+        os.environ["HARNESS_CLAUDE_BACKEND"] = backend
+    if os.environ.get("HARNESS_CLAUDE_BACKEND", "").strip().lower() == "openrouter":
+        os.environ.setdefault("HARNESS_OPENROUTER_MODELS", DEFAULT_OPENROUTER_MONITOR)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -63,11 +103,39 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError) as exc:
         print(f"plan error: {exc}", file=sys.stderr)
         return 2
-    if args.claude_backend:
-        os.environ["HARNESS_CLAUDE_BACKEND"] = args.claude_backend
+    if args.skip:
+        plan.done_before = [f"{st.name}: {st.prompt}" for st in plan.stages if any(st.name.startswith(x) for x in args.skip)]
+        plan.stages = [st for st in plan.stages if not any(st.name.startswith(x) for x in args.skip)]
+        if not plan.stages:
+            print("plan error: --skip removed every stage", file=sys.stderr)
+            return 2
+    if args.budget:
+        plan.time_budget_s = args.budget
+    if args.checkpoint:
+        plan.checkpoint = args.checkpoint
+    if args.no_rewrite:
+        plan.rewrite_prompts = False
+    lessons_path = None if args.no_operator else Path(args.lessons)
+    lessons = load_lessons(lessons_path)
+    if lessons:
+        plan.system_prompt = (plan.system_prompt + "\n\n" if plan.system_prompt else "") + \
+            "LESSONS FROM THE OPERATOR IN EARLIER TEST RUNS (follow them)\n" + lessons
+    _set_backend(args.monitor_model, args.claude_backend)
     if args.verifier:
         for stage in plan.stages:
             stage.verifier = args.verifier
+    if args.live_guard and not args.detect:
+        print("--live-guard needs --detect (the colour detector judges the live frames)", file=sys.stderr)
+        return 2
+    if args.live and plan.guard is not None and not (args.detect and args.live_guard):
+        # 8 Nov, by hand: told to pick the green ball, Dream put the WHITE ball in the bin when the green one was gone.
+        # The monitor's guard looks every few seconds; the live guard looks at both wrists 10 times a second.
+        msg = ("the plan's illegal-ball guard needs --detect plans/table_colors.yaml --live-guard on a live run "
+               "(the monitor alone looks every few seconds; a white ball in the bin is a DQ)")
+        if not args.allow_no_live_guard:
+            print(f"refused: {msg}. Practice without it: --allow-no-live-guard", file=sys.stderr)
+            return 2
+        print(f"\a\n{'!' * 100}\nWARNING: {msg}\n{'!' * 100}\n", file=sys.stderr)
     if plan.guard is not None and any(st.verifier not in ("monitor", "monitor+manual")
                                       for st in plan.stages if plan.guard.covers(st.name)):
         print("WARNING: plan.guard is only answered by the monitor; guarded stages without it are unguarded",
@@ -100,7 +168,15 @@ def main(argv: list[str] | None = None) -> int:
             host=socket.gethostname())
         dry = args.dry_run
         station = StationClient(station_url, dry_run=dry, log=lambda m: (print(m), log.event("dry_run", message=m))[0])
-        frames = FrameSource(view_url)
+        # Small single frames from the station's /frame add-on, not whole debug-view round trips: those carry every
+        # camera's 9-frame window (~2 MB a check) over the station's Wi-Fi and slowed Dream from ~0.8 s to 2-6 s.
+        # The debug view is the fallback (no add-on, or HARNESS_FRAMES=view; the mock station has only the view).
+        light = os.environ.get("HARNESS_FRAMES", "view" if args.mock else "station") == "station"
+        frames = FrameSource(view_url, station_url=station_url if light else None)
+        log.update_manifest(frames="station /frame (light)" if light else "debug view /trip",
+                            skipped_prefixes=args.skip, lessons=str(lessons_path) if lessons else None,
+                            claude_backend=os.environ.get("HARNESS_CLAUDE_BACKEND", "api"),
+                            openrouter_models=os.environ.get("HARNESS_OPENROUTER_MODELS"))
 
         holder: dict[str, Runner] = {}
         manual = None
@@ -115,6 +191,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         runner = Runner(plan, station, frames, verifiers, log)
+        if not args.no_operator:
+            monitor = next((m for v in verifiers.values() for m in (v, getattr(v, "second", None))
+                            if isinstance(m, MonitorVerifier)), None)
+            op = Operator(plan, log, transport=monitor._transport if monitor else None,
+                          model=monitor.model if monitor else "claude-haiku-5-5", lessons_path=lessons_path)
+            log.listeners.append(op.record)
+            manual.on_text = op.submit
+            runner.operator = op
         if args.detect:
             from .detect import TableDetector  # noqa: PLC0415 (numpy + Pillow only when asked for)
             det = TableDetector.from_file(args.detect)
@@ -124,6 +208,22 @@ def main(argv: list[str] | None = None) -> int:
                     if hasattr(m, "annotator"):
                         m.annotator, m.legend = det.annotate_frames, det.legend()
             log.event("detector", config=str(args.detect))
+            if args.live_guard and plan.guard is not None:
+                from .live_guard import LiveFrames, LiveGuard  # noqa: PLC0415
+                wrists = ("wrist_l", "wrist_r")   # station camera names (GET /status cameras)
+                live = LiveFrames(station_url, wrists)
+                found = live.probe()
+                if not found:
+                    # no add-on or other camera names: say so. It still runs, in case the cameras come up; the
+                    # per-poll guard keeps running either way.
+                    print(f"--live-guard: no live wrist frame at {station_url}/frame/<camera>.jpg yet "
+                          f"({live.last_error}); the per-poll guard covers until one answers", file=sys.stderr)
+                    log.event("warning", message=f"live guard: no /frame answer at startup ({live.last_error})")
+                runner.live_guard = LiveGuard(live.grab, det.guard, station.stop, rate_hz=args.live_guard_hz,
+                                              confirm_frames=args.live_guard_frames, log=log.event)
+                runner.live_guard.start()
+                log.event("live_guard", station=station_url, roles=list(wrists), answering=found,
+                          rate_hz=args.live_guard_hz, confirm_frames=args.live_guard_frames)
         holder["r"] = runner
         # Turn SIGTERM into the same clean stop as Ctrl+C.
         try:
@@ -132,11 +232,17 @@ def main(argv: list[str] | None = None) -> int:
             pass
         mode = "DRY RUN" if dry else ("MOCK" if args.mock else "LIVE")
         print(f"{mode}: {plan.task or '(no task)'}  [{len(plan.stages)} stages]  type s + Enter to stop")
+        if runner.operator is not None:
+            print("Type anything else to talk to the harness (\"skip the next step\", \"why did it grab the pink one?\", "
+                  "\"approach the tower slower next time\"). Testing only: human input in a match is a DQ.")
         try:
             result = runner.run()
         except StationError as exc:
             print(f"station error: {exc.message}", file=sys.stderr)
             return 1
+        finally:
+            if runner.live_guard is not None:
+                runner.live_guard.close()
         for r in result.stages:
             print(f"  {'ok  ' if r.ok else 'FAIL'} {r.name:<20} attempts={r.attempts} {r.seconds:6.1f}s  {r.reason}")
         print(f"{'SUCCESS' if result.ok else 'FAILED'}: {result.reason}  ({result.seconds:.1f}s)  log: {log.path}")

@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness.frames import FrameSource  # noqa: E402
 from harness.log import RunLog  # noqa: E402
 from harness.plan import Stage, load_plan  # noqa: E402
+from harness.prompt_engine import DefaultFiller  # noqa: E402
 from harness.runner import Runner  # noqa: E402
 from harness.station_client import StationClient  # noqa: E402
 from harness.verifiers import MonitorVerdict  # noqa: E402
@@ -82,7 +83,7 @@ class OracleVerifier:
             done = self._open(snap) and not held_out
         elif name in ("plug_1", "plug_2"):
             done = ref["seated"] > base["seated"] and self._open(snap)
-        elif name == "arms_clear":
+        elif name.startswith("arms_clear"):
             done = (self._open(snap) and self._near(snap, bodies["hub"]) > CLEAR_M
                     and all(snap["tcp"][s][2] > h.TABLE_Z + 0.10 for s in ("left", "right")))
         elif name == "stack_2":
@@ -106,6 +107,119 @@ class OracleVerifier:
         return verdict
 
 
+class OracleFiller:
+    """plan.prompt_engine slot filler from sim ground truth (/objects): which plug is left, which free piece goes on
+    which top, which ball and which arm is nearer. Tests the engine and Dream's response to well-filled slots
+    without camera judgement, the way OracleVerifier tests the runner."""
+
+    LANDMARK_M = 0.12   # nearer than this to a landmark -> "next to the <landmark>"
+
+    def __init__(self, station_url: str) -> None:
+        self.url = station_url
+        self.left_x: float | None = None   # sign of x towards the robot's left, from the arms at the first look
+
+    PORT_NAMES = ("the port at the left end", "the second port from the left", "the second port from the right",
+                  "the port at the right end")
+
+    def _ports_left_to_right(self, tcp: dict) -> list[int]:
+        """Port indices ordered from the robot's left (the left arm's side), whichever way the sim's x runs."""
+        if self.left_x is None:
+            self.left_x = -1.0 if tcp["left"][0] < tcp["right"][0] else 1.0
+        return sorted(range(len(h.PORT_X)), key=lambda p: self.left_x * -h.PORT_X[p])
+
+    @staticmethod
+    def _seated_in(bodies: dict, port: int) -> bool:
+        return any(math.hypot(b[0] - h.HUB_POS[0] - h.PORT_X[port], b[1] - h.HUB_POS[1]) < 0.006
+                   and b[2] > h.TABLE_Z + 0.02 for n, b in bodies.items() if n.startswith(("loose_", "plugged_")))
+
+    def _plug_slots(self, bodies: dict, tcp: dict, v: dict) -> dict[str, str]:
+        """Plug-in: a cable loose at the start (loose_*; an unplugged one may never go back in) that isn't seated
+        yet, and a port that was free at the start (the sim referee scores those) and is still empty."""
+        out: dict[str, str] = {}
+        order = self._ports_left_to_right(tcp)
+        free = [p for p in order if p not in h.PLUGGED_PORTS and not self._seated_in(bodies, p)]
+        if free:
+            want = self.PORT_NAMES[order.index(free[0])]
+            if want in v["port"]:
+                out["port"] = want
+        loose = [n for n in bodies if n.startswith("loose_") and bodies[n][2] < h.TABLE_Z + 0.02]
+        if len(loose) == 1:
+            out["cable"] = "the loose orange cable"
+        elif loose and free:
+            px = h.HUB_POS[0] + h.PORT_X[free[0]]
+            near = min(loose, key=lambda n: math.dist(bodies[n][:2], (px, h.HUB_POS[1])))
+            far = max(loose, key=lambda n: math.dist(bodies[n][:2], (px, h.HUB_POS[1])))
+            out["cable"] = "the nearer loose orange cable" if near != far else "the loose orange cable"
+        return {k: x for k, x in out.items() if x in v.get(k, [x])}
+
+    @staticmethod
+    def colour(body: str) -> str:
+        i = int(body.rsplit("_", 1)[1])
+        if body.startswith("cube_"):
+            return "pink cube" if i % 2 == 0 else "blue cube"
+        return "purple stick" if i % 2 == 0 else "yellow stick"
+
+    def _where(self, xy: tuple[float, float], tower_xy: tuple[float, float] | None, opts: list[str]) -> str:
+        marks = [("next to the power strip", h.HUB_POS), ("next to the white basket", h.BIN_POS)]
+        if tower_xy is not None:
+            marks.append(("next to the tower", tower_xy))
+        name, d = min(((n, math.dist(xy, p)) for n, p in marks), key=lambda t: t[1])
+        return name if d < self.LANDMARK_M and name in opts else ""
+
+    def _tower(self, bodies: dict) -> tuple[list[str], tuple[float, float] | None]:
+        """Blocks stacked on another block, plus the base: the tallest column by xy."""
+        blocks = [b for b in bodies if b.startswith(("cube_", "cylinder_"))]
+        best: list[str] = []
+        for base in blocks:
+            col = sorted((b for b in blocks if math.dist(bodies[b][:2], bodies[base][:2]) < h.CUBE_HALF * 1.5),
+                         key=lambda b: bodies[b][2])
+            if len(col) > len(best) and col[0] == base and bodies[base][2] < h.TABLE_Z + h.CUBE_HALF + 0.01:
+                best = col
+        if len(best) < 2:
+            return [], None
+        return best, tuple(bodies[best[0]][:2])
+
+    def fill(self, tpl, lib, stage, frames, ctx, hint):
+        snap = get(self.url, "/objects")
+        bodies, tcp = snap["bodies"], snap["tcp"]
+        out = lib.defaults(tpl, stage.slots)
+        v = {s: lib.vocab[n] for s, n in tpl.slots.items()}
+        tower, txy = self._tower(bodies)
+        if tpl.id.startswith("plug"):
+            out.update(self._plug_slots(bodies, tcp, v))
+        elif tpl.id.startswith("unplug"):
+            if snap["referee"]["unplugged"] == len(h.PLUGGED_PORTS) - 1 and "the cable still plugged in" in v["plug"]:
+                out["plug"] = "the cable still plugged in"
+        elif tpl.id.startswith("stack"):
+            free = [b for b in bodies if b.startswith(("cube_", "cylinder_")) and b not in tower
+                    and bodies[b][2] < h.TABLE_Z + 0.05]
+            cubes = [b for b in free if b.startswith("cube_")] or free
+            if tower:
+                top = "the tower"
+                piece = min(cubes, key=lambda b: math.dist(bodies[b][:2], txy)) if cubes else None
+            else:   # first pair: the closest pink/blue pair, the pink one goes on the blue one
+                pairs = [(a, b) for a in cubes for b in cubes if self.colour(a) != self.colour(b)
+                         and self.colour(b) == "blue cube"]
+                a, b = min(pairs, key=lambda p: math.dist(bodies[p[0]][:2], bodies[p[1]][:2])) if pairs else (None, None)
+                piece, top = a, "a blue cube"
+            if piece is not None:
+                out["piece"] = f"the {self.colour(piece)}"
+                out["piece_where"] = self._where(tuple(bodies[piece][:2]), txy, v["piece_where"])
+            out["top"] = top
+        elif tpl.id.startswith("ball"):
+            balls = [b for b in bodies if b.startswith("golf_") and not self._in_bin(bodies[b])]
+            if balls:
+                side, ball = min(((s, b) for s in ("left", "right") for b in balls),
+                                 key=lambda t: math.dist(tcp[t[0]][:2], bodies[t[1]][:2]))
+                out["arm"] = f"With the {side} arm,"
+                out["ball_where"] = self._where(tuple(bodies[ball][:2]), txy, v["ball_where"])
+        return out, "oracle: sim ground truth"
+
+    @staticmethod
+    def _in_bin(pos: list[float]) -> bool:
+        return abs(pos[0] - h.BIN_POS[0]) < h.BIN_HALF[0] and abs(pos[1] - h.BIN_POS[1]) < h.BIN_HALF[1]
+
+
 def run_match(args: argparse.Namespace, n: int, out: Path) -> dict[str, Any]:
     station = StationClient(args.station, timeout_s=10.0)
     if station.status().get("state") not in ("idle", "error"):
@@ -119,7 +233,10 @@ def run_match(args: argparse.Namespace, n: int, out: Path) -> dict[str, Any]:
     t0 = time.time()
     oracle = OracleVerifier(args.station)
     oracle._plan_guard = plan.guard
-    result = Runner(plan, station, FrameSource(args.view), {"monitor": oracle}, log).run()
+    filler = None
+    if plan.prompts is not None:
+        filler = {"oracle": OracleFiller(args.station), "default": DefaultFiller()}.get(args.filler)
+    result = Runner(plan, station, FrameSource(args.view), {"monitor": oracle}, log, filler=filler).run()
     referee = get(args.station, "/objects")["referee"]
     summary = {"match": n, "wall_s": round(time.time() - t0, 1), "log": str(log.path),
                "harness": {k: v for k, v in asdict(result).items() if k != "stages"},
@@ -135,6 +252,8 @@ def main() -> None:
     ap.add_argument("--plan", default=str(Path(__file__).resolve().parents[1] / "plans" / "hill_climb_v4.yaml"))
     ap.add_argument("--var", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--matches", type=int, default=1)
+    ap.add_argument("--filler", choices=["oracle", "default", "plan"], default="oracle",
+                    help="prompt_engine plans: slot filler (plan = the plan's own, e.g. claude on the monitor)")
     ap.add_argument("--out", default="runs_sim_match")
     args = ap.parse_args()
     status = get(args.station, "/status")

@@ -26,6 +26,7 @@ class RunLog:
         self._manifest: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._seq = 0
+        self.listeners: list = []   # callables (event, fields), e.g. harness.operator.Operator.record
 
     def event(self, event: str, **fields: Any) -> None:
         record = {"t": round(time.time(), 3), "event": event, **fields}
@@ -33,6 +34,8 @@ class RunLog:
         with self._lock:
             with self._events.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
+        for fn in self.listeners:
+            fn(event, fields)
 
     def segment(self, **fields: Any) -> None:
         """One line of segments.jsonl: a stage attempt or a recovery (see DESIGN_v2.md section 7)."""

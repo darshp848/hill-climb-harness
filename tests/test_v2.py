@@ -433,7 +433,7 @@ def test_rising_progress_does_not_stall(fake, write_plan, tmp_path):
 
 
 def test_stall_by_monitor_status_needs_confirm_in_a_row(fake, write_plan, tmp_path):
-    path = write_plan([stage("a", timeout_s=10, stall_s=100, on_fail="skip")], confirm=2)
+    path = write_plan([stage("a", timeout_s=10, stall_s=0.05, on_fail="skip")], confirm=2)
     sv = Script([mv(None, "stalled"), mv(None, "ok"), mv(None, "stalled"), mv(None, "stalled")], repeat=False)
     r = build(fake, path, tmp_path, sv).run().stages[0]
     assert r.reason.startswith("stalled") and len(sv.calls) == 4
