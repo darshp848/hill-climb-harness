@@ -1,0 +1,25 @@
+run,time,checkpoint,config,subtask,attempt,outcome,seconds,note
+1107-113439-0,11:35:06,dreamlabs/dream-1-beta,t1-reach,t1-reach,1,done,26.4,jev_max=0.87
+1107-113710-0,11:38:11,dreamlabs/dream-1-beta,t4-stack,t4-stack,1,timeout,60.6,jev_max=0.22
+1107-114148-0,11:42:53,dreamlabs/dream-1-beta,tower-single,tower-single,1,done,64.6,jev_max=0.93
+1107-114805-0,11:48:49,dreamlabs/dream-1-beta,tower5-chain,L1-pink-on-blue,1,done,44.2,jev_max=0.73
+1107-114805-0,11:49:40,dreamlabs/dream-1-beta,tower5-chain,L2-pink-stick-up,1,timeout,50.9,jev_max=0.17
+1107-114805-0,11:50:31,dreamlabs/dream-1-beta,tower5-chain,L2-pink-stick-up,2,timeout,50.9,jev_max=0.11
+1107-115322-0,11:54:53,dreamlabs/dream-1-beta,tall-single,tall-single,1,timeout,90.9,jev_max=0.38
+1107-115522-0,11:55:26,dreamlabs/dream-1-beta,usb-plug,usb-plug,1,error,3.8,"error: {'type': 'DreamBadRequest', 'message': 'DreamAPI refused the inference request: DA-4000 BAD_REQUEST (malformed): unsafe instruction, refused: Inserting metal or objects into a power strip risks electrical hazards.', 'code': 'DA-4000', 'reason': 'malformed', 'error_code': 'malformed'} dead arms [] jev_max=0.09"
+1107-115655-0,11:57:45,dreamlabs/dream-1-beta,usb-unplugged,usb-unplugged,1,error,49.7,"error: {'type': 'ControlLoopError', 'message': 'action buffer empty for 241 consecutive ticks (12.05 s), more than max_stall_ticks=240', 'code': None, 'reason': None, 'error_code': 'ControlLoopError'} dead arms [] jev_max=0.34"
+1107-115942-0,12:01:13,dreamlabs/dream-1-beta,usb-unplugged,usb-unplugged,1,timeout,91.1,jev_max=0.43
+1107-120304-0,12:04:35,dreamlabs/dream-1-beta,usb-unplug,usb-unplug,1,timeout,90.6,jev_max=0.37
+1107-121706-0,12:17:23,dreamlabs/dream-1-beta,usb-cycle,unplug-1,1,done,16.9,jev_max=1.00
+1107-121706-0,12:18:54,dreamlabs/dream-1-beta,usb-cycle,unplug-2,1,timeout,90.4,jev_max=0.50
+1107-121949-0,12:21:24,dreamlabs/dream-1-beta,usb-cycle2,unplug-last,1,timeout,94.2,jev_max=0.00
+1107-122250-0,12:24:25,dreamlabs/dream-1-beta,usb-cycle2,unplug-last,1,timeout,94.7,jev_max=0.00
+1107-122457-0,12:26:16,dreamlabs/dream-1-beta,unplug-gripcheck,grip,1,timeout,79.2,jev_max=0.00
+1107-122648-0,12:28:27,dreamlabs/dream-1-beta,unplug-observer,observer-unplug,1,timeout,98.3,jev_max=0.00
+1107-123139-0,12:33:11,dreamlabs/dream-1-beta,unplug-feel,unplug-feel,1,timeout,91.8,jev_max=0.33
+1107-123139-0,12:33:22,dreamlabs/dream-1-beta,unplug-feel,unplug-feel,2,error,5.4,"error: {'type': 'DreamBadRequest', 'message': ""DreamAPI refused the inference request: DA-4000 BAD_REQUEST (malformed): unsafe instruction in this scene, refused: A person's hand is holding the orange plug/cable right now."", 'code': 'DA-4000', 'reason': 'malformed', 'error_code': 'malformed'} dead arms [] jev_max=0.33"
+1107-155046-0,15:51:03,dreamlabs/dream-1-beta,unplug-4,unplug-1,1,error,16.4,"error: {'type': 'LinAlgError', 'message': 'SVD did not converge', 'code': None, 'reason': None, 'error_code': 'LinAlgError'} dead arms [] jev_max=0.50"
+1107-155118-0,15:52:35,dreamlabs/dream-1-beta,unplug-4,unplug-1,1,timeout,77.0,jev_max=0.50
+1107-155118-0,15:54:00,dreamlabs/dream-1-beta,unplug-4,unplug-1,2,timeout,76.1,jev_max=0.50
+1107-155443-0,15:55:59,dreamlabs/dream-1-beta,unplug-pinch,pinch-1,1,timeout,75.7,jev_max=0.50
+1107-155443-0,15:57:22,dreamlabs/dream-1-beta,unplug-pinch,pinch-1,2,timeout,79.6,jev_max=0.50

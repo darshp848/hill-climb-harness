@@ -1,0 +1,25 @@
+{
+  "name": "tower-single",
+  "time_limit_s": 95,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "tower-single",
+      "prompt": "stack the blocks and sticks as high as possible",
+      "check": "Are at least two of the cubes (blue or pink, each with a hole) stacked on top of each other?",
+      "timeout_s": 90,
+      "tries": 1,
+      "examples": "",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the robot grippers.",
+      "recover": "none"
+    }
+  ]
+}

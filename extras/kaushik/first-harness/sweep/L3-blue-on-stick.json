@@ -1,0 +1,26 @@
+{
+  "name": "L3-blue-on-stick",
+  "time_limit_s": 65,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "L3-blue-on-stick",
+      "prompt": "put the other blue cube on top of the pink stick",
+      "check": "Is a blue cube resting on top of the upright pink stick, with the stick going into the blue cube's hole?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers and show the tower from the side.",
+      "examples": "",
+      "timeout_s": 60,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 0.55
+    }
+  ]
+}

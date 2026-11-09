@@ -1,0 +1,92 @@
+[
+ {
+  "name": "hand-built 5 layers",
+  "images": [
+   "referee_cases/built_scene.jpg",
+   "referee_cases/built_wrist_l.jpg",
+   "referee_cases/built_wrist_r.jpg"
+  ],
+  "truth": {
+   "stack_layers": 5,
+   "stack_touched": false
+  }
+ },
+ {
+  "name": "zero-shot 4 layers",
+  "images": [
+   "referee_cases/tower4.jpg"
+  ],
+  "truth": {
+   "stack_layers": 4,
+   "stack_touched": false
+  }
+ },
+ {
+  "name": "scattered, stick upright",
+  "images": [
+   "referee_cases/pre.jpg"
+  ],
+  "truth": {
+   "stack_layers": 1,
+   "gripper_on_blocks": false
+  }
+ },
+ {
+  "name": "chain collapsed",
+  "images": [
+   "referee_cases/chain_collapsed.jpg"
+  ],
+  "truth": {
+   "stack_layers": 1
+  }
+ },
+ {
+  "name": "L1 pink on blue",
+  "images": [
+   "referee_cases/l1_done.jpg"
+  ],
+  "truth": {
+   "stack_layers": 2
+  }
+ },
+ {
+  "name": "stick across blue",
+  "images": [
+   "referee_cases/stick_across.jpg"
+  ],
+  "truth": {
+   "stack_layers": 2
+  }
+ },
+ {
+  "name": "cable plugged, start",
+  "images": [
+   "referee_cases/unplug_pre.jpg",
+   "referee_cases/unplug_pre_r.jpg"
+  ],
+  "truth": {
+   "cables_in_hub": 1,
+   "cable_in_gripper": false
+  }
+ },
+ {
+  "name": "unplug failed, end",
+  "images": [
+   "referee_cases/unplug_end.jpg"
+  ],
+  "truth": {
+   "cables_in_hub": 1
+  }
+ },
+ {
+  "name": "cable held at ports",
+  "images": [
+   "referee_cases/usb3_scene.jpg",
+   "referee_cases/usb3_wrist_r.jpg"
+  ],
+  "truth": {
+   "cables_in_hub": 0,
+   "cable_in_gripper": true
+  }
+ }
+]

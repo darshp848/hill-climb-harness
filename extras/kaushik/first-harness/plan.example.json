@@ -1,0 +1,38 @@
+{
+  "name": "example-v1",
+  "time_limit_s": 300,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.8,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "grasp",
+      "prompt": "Pick up the motor",
+      "check": "Is the motor held between the gripper's fingers and lifted off the table?",
+      "examples": "",
+      "timeout_s": 25,
+      "tries": 3,
+      "recover": "home"
+    },
+    {
+      "name": "place",
+      "prompt": "Place the motor in the box",
+      "check": "Is the small silver cylinder (the motor) sitting inside the black foam tray of the open white box, rather than on the white table?",
+      "examples": "",
+      "timeout_s": 25,
+      "tries": 2,
+      "recover": {
+        "prompt": "Pick up the motor",
+        "seconds": 10
+      },
+      "required": true,
+      "threshold": 0.42
+    }
+  ]
+}

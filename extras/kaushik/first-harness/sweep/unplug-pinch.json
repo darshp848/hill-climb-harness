@@ -1,0 +1,44 @@
+{
+  "name": "unplug-pinch",
+  "time_limit_s": 200,
+  "skip_if_less_than_s": 15,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 2,
+    "period": 2.0,
+    "crop": [
+      0.45,
+      0.25,
+      0.75,
+      0.65
+    ]
+  },
+  "subtasks": [
+    {
+      "name": "pinch-1",
+      "prompt": "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Open the right gripper wide and turn it so its two fingers line up with the length of the power strip. Come straight down from above onto the rightmost orange USB plug and pinch the front and back of its hard black plug body, not its sides, then pull it straight up out of the port and put it down on the table away from the strip.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 75,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 25,
+        "every_s": 25
+      }
+    }
+  ]
+}

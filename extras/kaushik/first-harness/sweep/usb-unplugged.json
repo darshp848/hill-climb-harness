@@ -1,0 +1,26 @@
+{
+  "name": "usb-unplugged",
+  "time_limit_s": 95,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 2.0
+  },
+  "subtasks": [
+    {
+      "name": "usb-unplugged",
+      "prompt": "The power strip is unplugged from the wall. Plug the orange USB cable into one of the USB ports on the power strip.",
+      "check": "Is the end of an orange cable plugged into one of the USB ports of the black power strip?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers.",
+      "examples": "",
+      "timeout_s": 90,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 0.75
+    }
+  ]
+}

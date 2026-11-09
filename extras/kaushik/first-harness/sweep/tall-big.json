@@ -1,0 +1,26 @@
+{
+  "name": "tall-big",
+  "time_limit_s": 185,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 2.0
+  },
+  "subtasks": [
+    {
+      "name": "tall-big",
+      "prompt": "Build a tall tower: put the pink cube on top of a blue cube. Stand the pink stick straight up in the pink cube's hole. Slide the other blue cube down onto the top of the standing pink stick. Then stand the yellow stick straight up in that blue cube's hole. Keep every piece centered and upright.",
+      "check": "Is the yellow stick standing upright at the top of a tower of blue cube, pink cube, pink stick and blue cube?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers.",
+      "examples": "",
+      "timeout_s": 180,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 1.01
+    }
+  ]
+}

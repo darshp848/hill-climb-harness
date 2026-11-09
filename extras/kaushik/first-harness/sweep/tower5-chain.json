@@ -1,0 +1,59 @@
+{
+  "name": "tower5-chain",
+  "time_limit_s": 300,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "L1-pink-on-blue",
+      "prompt": "put the pink cube on top of a blue cube",
+      "check": "Is the pink cube (with a hole) resting on top of a blue cube, not on the table?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers and show the tower from the side.",
+      "examples": "",
+      "timeout_s": 45,
+      "tries": 2,
+      "recover": "none",
+      "threshold": 0.7
+    },
+    {
+      "name": "L2-pink-stick-up",
+      "prompt": "stand the pink stick upright in the hole of the pink cube",
+      "check": "Is the pink stick standing upright in the hole of the pink cube that sits on a blue cube?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers and show the tower from the side.",
+      "examples": "",
+      "timeout_s": 50,
+      "tries": 2,
+      "recover": "none",
+      "threshold": 0.6
+    },
+    {
+      "name": "L3-blue-on-stick",
+      "prompt": "put the other blue cube on top of the pink stick",
+      "check": "Is a blue cube resting on top of the upright pink stick, with the stick going into the blue cube's hole?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers and show the tower from the side.",
+      "examples": "",
+      "timeout_s": 60,
+      "tries": 2,
+      "recover": "none",
+      "threshold": 0.55
+    },
+    {
+      "name": "L4-yellow-stick-up",
+      "prompt": "stand the yellow stick upright in the hole of the top blue cube",
+      "check": "Is the yellow stick standing upright in the hole of the blue cube at the top of the tower?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers and show the tower from the side.",
+      "examples": "",
+      "timeout_s": 60,
+      "tries": 2,
+      "recover": "none",
+      "threshold": 0.33
+    }
+  ]
+}

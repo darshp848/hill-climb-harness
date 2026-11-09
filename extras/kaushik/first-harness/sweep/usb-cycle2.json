@@ -1,0 +1,76 @@
+{
+  "name": "usb-cycle2",
+  "time_limit_s": 600,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 3,
+    "period": 2.0,
+    "crop": [
+      0.45,
+      0.25,
+      0.75,
+      0.65
+    ]
+  },
+  "subtasks": [
+    {
+      "name": "unplug-last",
+      "prompt": "The power strip is unplugged from the wall. Grip the hard connector body of one orange USB cable firmly in the middle and pull it straight out of its port, then put it down on the table away from the power strip.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 90,
+      "tries": 2,
+      "recover": "home"
+    },
+    {
+      "name": "plug-1",
+      "prompt": "The power strip is unplugged from the wall. Pick up a loose orange USB cable by its hard connector body, line the connector up with a free USB port on the power strip, and push it straight in.",
+      "check": "",
+      "done_when": {
+        "cables_added_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 120,
+      "tries": 2,
+      "recover": "home"
+    },
+    {
+      "name": "plug-2",
+      "prompt": "The power strip is unplugged from the wall. Pick up a loose orange USB cable by its hard connector body, line the connector up with a free USB port on the power strip, and push it straight in.",
+      "check": "",
+      "done_when": {
+        "cables_added_since_start": [
+          ">=",
+          2
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 120,
+      "tries": 2,
+      "recover": "home"
+    }
+  ]
+}

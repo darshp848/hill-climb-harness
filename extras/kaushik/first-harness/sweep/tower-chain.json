@@ -1,0 +1,45 @@
+{
+  "name": "tower-chain",
+  "time_limit_s": 180,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "lvl1-blue-on-blue",
+      "prompt": "put a blue cube on top of the other blue cube",
+      "check": "Is one blue cube resting on top of the other blue cube, not on the table?",
+      "timeout_s": 50,
+      "tries": 1,
+      "examples": "",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the robot grippers.",
+      "recover": "none"
+    },
+    {
+      "name": "lvl2-pink-on-top",
+      "prompt": "put the pink cube on top of the blue cubes",
+      "check": "Is the pink cube resting on top of a stack of blue cubes, so three cubes are stacked?",
+      "timeout_s": 50,
+      "tries": 1,
+      "examples": "",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the robot grippers.",
+      "recover": "none"
+    },
+    {
+      "name": "lvl3-stick-upright",
+      "prompt": "stand the yellow stick upright in the hole of the top cube",
+      "check": "Is the yellow stick standing upright in the hole of the top cube of the stack?",
+      "timeout_s": 60,
+      "tries": 1,
+      "examples": "",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the robot grippers.",
+      "recover": "none"
+    }
+  ]
+}

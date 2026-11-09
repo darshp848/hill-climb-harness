@@ -1,0 +1,44 @@
+{
+  "name": "unplug-feel",
+  "time_limit_s": 200,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 3,
+    "period": 2.0,
+    "crop": [
+      0.45,
+      0.25,
+      0.75,
+      0.65
+    ]
+  },
+  "subtasks": [
+    {
+      "name": "unplug-feel",
+      "prompt": "The power strip is unplugged from the wall. Keep the left gripper away from the blocks; move it near the power strip and hold it still there, pointed at the orange plug, so its camera can watch. With the right gripper, grip the black rubbery part of the orange USB cable's plug, right next to the port, and squeeze it as hard as you can, then pull it straight out of the port and put it down on the table.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 90,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 15,
+        "every_s": 15
+      }
+    }
+  ]
+}

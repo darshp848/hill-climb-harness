@@ -1,0 +1,37 @@
+{
+  "name": "tall-two",
+  "time_limit_s": 215,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 2.0
+  },
+  "subtasks": [
+    {
+      "name": "half1-pink-cube-and-stick",
+      "prompt": "put the pink cube on top of a blue cube and stand the pink stick straight up in its hole",
+      "check": "Is the pink stick standing upright in the hole of the pink cube, which sits on a blue cube?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers.",
+      "examples": "",
+      "timeout_s": 90,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 0.6
+    },
+    {
+      "name": "half2-blue-and-yellow",
+      "prompt": "slide the other blue cube onto the top of the standing pink stick, then stand the yellow stick straight up in its hole",
+      "check": "Is the yellow stick standing upright in the hole of a blue cube that sits on top of the upright pink stick?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers.",
+      "examples": "",
+      "timeout_s": 120,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 0.33
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "name": "unplug-observer",
+  "time_limit_s": 200,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 3,
+    "period": 2.0,
+    "crop": [
+      0.45,
+      0.25,
+      0.75,
+      0.65
+    ]
+  },
+  "subtasks": [
+    {
+      "name": "observer-unplug",
+      "prompt": "The power strip is unplugged from the wall. Move the left gripper close to the power strip and hold it still there, pointed at the orange plug, so its camera can watch. Then with the right gripper, close firmly on the hard connector body of the orange USB cable right next to the port, and pull it straight out of the port.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 90,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 30,
+        "every_s": 25
+      }
+    }
+  ]
+}

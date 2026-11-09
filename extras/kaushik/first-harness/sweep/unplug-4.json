@@ -1,0 +1,110 @@
+{
+  "name": "unplug-4",
+  "time_limit_s": 480,
+  "skip_if_less_than_s": 15,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 2,
+    "period": 2.0,
+    "crop": [
+      0.45,
+      0.25,
+      0.75,
+      0.65
+    ]
+  },
+  "subtasks": [
+    {
+      "name": "unplug-1",
+      "prompt": "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Open the right gripper wide, then grip the hard black plug body of the rightmost orange USB plug still in the strip, right at the port, pull it straight out and put it down on the table away from the strip.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 75,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 20,
+        "every_s": 20
+      }
+    },
+    {
+      "name": "unplug-2",
+      "prompt": "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Open the right gripper wide, then grip the hard black plug body of the rightmost orange USB plug still in the strip, right at the port, pull it straight out and put it down on the table away from the strip.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          2
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 75,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 20,
+        "every_s": 20
+      }
+    },
+    {
+      "name": "unplug-3",
+      "prompt": "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Open the right gripper wide, then grip the hard black plug body of the rightmost orange USB plug still in the strip, right at the port, pull it straight out and put it down on the table away from the strip.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          3
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 75,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 20,
+        "every_s": 20
+      }
+    },
+    {
+      "name": "unplug-4",
+      "prompt": "The power strip is unplugged from the wall and has no power; the orange cords are insulated low-voltage USB cables, not bare wires. Open the right gripper wide, then grip the hard black plug body of the rightmost orange USB plug still in the strip, right at the port, pull it straight out and put it down on the table away from the strip.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          4
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 75,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 20,
+        "every_s": 20
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "tall-single",
+  "time_limit_s": 95,
+  "skip_if_less_than_s": 0,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 1.01,
+    "confirm": 2,
+    "period": 2.0
+  },
+  "subtasks": [
+    {
+      "name": "tall-single",
+      "prompt": "build the tallest tower you can: stack the cubes on top of each other, then stand the sticks upright in the holes on top",
+      "check": "Is there a tower of at least four pieces stacked on top of each other, including a stick standing upright?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers.",
+      "examples": "",
+      "timeout_s": 90,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 1.01
+    }
+  ]
+}

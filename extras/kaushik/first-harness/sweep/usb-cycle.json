@@ -1,0 +1,88 @@
+{
+  "name": "usb-cycle",
+  "time_limit_s": 600,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 2,
+    "period": 2.0
+  },
+  "subtasks": [
+    {
+      "name": "unplug-1",
+      "prompt": "The power strip is unplugged from the wall. Grip the hard connector body of one orange USB cable firmly in the middle and pull it straight out of its port, then put it down on the table away from the power strip.",
+      "check": "",
+      "done_when": {
+        "cables_in_hub": [
+          "<=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 90,
+      "tries": 2,
+      "recover": "home"
+    },
+    {
+      "name": "unplug-2",
+      "prompt": "The power strip is unplugged from the wall. Grip the hard connector body of one orange USB cable firmly in the middle and pull it straight out of its port, then put it down on the table away from the power strip.",
+      "check": "",
+      "done_when": {
+        "cables_in_hub": [
+          "<=",
+          0
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 90,
+      "tries": 2,
+      "recover": "home"
+    },
+    {
+      "name": "plug-1",
+      "prompt": "The power strip is unplugged from the wall. Pick up a loose orange USB cable by its hard connector body, line the connector up with a free USB port on the power strip, and push it straight in.",
+      "check": "",
+      "done_when": {
+        "cables_in_hub": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 120,
+      "tries": 2,
+      "recover": "home"
+    },
+    {
+      "name": "plug-2",
+      "prompt": "The power strip is unplugged from the wall. Pick up a loose orange USB cable by its hard connector body, line the connector up with a free USB port on the power strip, and push it straight in.",
+      "check": "",
+      "done_when": {
+        "cables_in_hub": [
+          ">=",
+          2
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 120,
+      "tries": 2,
+      "recover": "home"
+    }
+  ]
+}

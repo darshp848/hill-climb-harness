@@ -1,0 +1,24 @@
+{
+  "name": "t4-stack",
+  "time_limit_s": 70,
+  "skip_if_less_than_s": 0,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "t4-stack",
+      "prompt": "put the pink block on top of a blue block",
+      "check": "Is the pink cube resting on top of one of the blue cubes, not on the table and not in a gripper?",
+      "examples": "",
+      "timeout_s": 60,
+      "tries": 1,
+      "recover": "none"
+    }
+  ]
+}

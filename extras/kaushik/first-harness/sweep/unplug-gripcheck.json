@@ -1,0 +1,62 @@
+{
+  "name": "unplug-gripcheck",
+  "time_limit_s": 300,
+  "skip_if_less_than_s": 10,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "kind": "referee",
+    "model": "claude-haiku-5-5",
+    "confirm": 3,
+    "period": 2.0,
+    "crop": [
+      0.45,
+      0.25,
+      0.75,
+      0.65
+    ]
+  },
+  "subtasks": [
+    {
+      "name": "grip",
+      "prompt": "The power strip is unplugged from the wall. Move the right gripper to the orange USB cable plugged into the power strip and close it firmly on the hard connector body, right next to the port. Do not pull yet.",
+      "check": "",
+      "done_when": {
+        "grip_on": [
+          "==",
+          "connector_body"
+        ],
+        "grip_near_port": [
+          "==",
+          true
+        ]
+      },
+      "timeout_s": 75,
+      "tries": 2,
+      "recover": "home",
+      "feedback": {
+        "after_s": 25,
+        "every_s": 20
+      }
+    },
+    {
+      "name": "pull",
+      "prompt": "The power strip is unplugged from the wall. Keep holding the connector body firmly and pull it straight out of the port, along the direction the port points, then put the cable down on the table.",
+      "check": "",
+      "done_when": {
+        "cables_removed_since_start": [
+          ">=",
+          1
+        ],
+        "cable_in_gripper": [
+          "==",
+          false
+        ]
+      },
+      "timeout_s": 60,
+      "tries": 1,
+      "recover": "none"
+    }
+  ]
+}

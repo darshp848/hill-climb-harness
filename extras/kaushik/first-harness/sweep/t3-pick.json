@@ -1,0 +1,24 @@
+{
+  "name": "t3-pick",
+  "time_limit_s": 60,
+  "skip_if_less_than_s": 0,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "t3-pick",
+      "prompt": "pick up the pink block",
+      "check": "Is the pink cube with a hole held between a robot gripper's two fingers and lifted clear off the table?",
+      "examples": "",
+      "timeout_s": 45,
+      "tries": 1,
+      "recover": "none"
+    }
+  ]
+}

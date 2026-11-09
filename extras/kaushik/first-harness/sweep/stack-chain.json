@@ -1,0 +1,33 @@
+{
+  "name": "stack-chain",
+  "time_limit_s": 100,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 1.5
+  },
+  "subtasks": [
+    {
+      "name": "chain-pick",
+      "prompt": "pick up the pink cube",
+      "check": "Is the pink cube with a hole held between a robot gripper's two fingers and lifted clear off the table?",
+      "examples": "",
+      "timeout_s": 40,
+      "tries": 1,
+      "recover": "none"
+    },
+    {
+      "name": "chain-stack",
+      "prompt": "put the pink cube on top of the blue cube",
+      "check": "Is the pink cube resting on top of one of the blue cubes, not on the table and not in a gripper?",
+      "examples": "",
+      "timeout_s": 50,
+      "tries": 1,
+      "recover": "none"
+    }
+  ]
+}

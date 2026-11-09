@@ -1,0 +1,26 @@
+{
+  "name": "usb-unplug",
+  "time_limit_s": 95,
+  "skip_if_less_than_s": 5,
+  "cameras": [
+    "judge"
+  ],
+  "checker": {
+    "threshold": 0.7,
+    "confirm": 2,
+    "period": 2.0
+  },
+  "subtasks": [
+    {
+      "name": "usb-unplug",
+      "prompt": "The power strip is unplugged from the wall. Pull the orange USB cable out of the power strip and put it down on the table.",
+      "check": "Is the orange cable lying on the table, not plugged into the black power strip?",
+      "context": "The first image looks straight down at a table from above; the others come from cameras on the two robot grippers.",
+      "examples": "",
+      "timeout_s": 90,
+      "tries": 1,
+      "recover": "none",
+      "threshold": 0.7
+    }
+  ]
+}
