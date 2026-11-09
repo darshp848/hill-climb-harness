@@ -100,7 +100,7 @@ stages:
   # ---- Stage 1 (pass bar: one cable out) ----
   - &unplug
     name: cable_unplug
-    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable on the table far to the right, away from the other cables."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
+    prompt: "{safe} With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # no "toss": 8 Nov live, with "toss it" Dream went for the balls mid-unplug
     write_prompt: false
     grip_assist:
       regrip: 2            # Dream shut on air: open 0.6 in place, lower 1.5 cm, close
@@ -110,17 +110,16 @@ stages:
       seat_dz: 0.0         # no seat: two fewer moves (each 3-6 s)
       repull: 0            # slipped: lower back and let Dream re-approach (a re-pull kept Dream stopped ~19 s, 8 Nov live)
       hold: [0.062, 0.20]  # empty reads 0.03-0.06 on this station, a plug 0.07-0.15 (8 Nov live: 0.053 was empty); a pull from 0.27 lost it
-      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and place the cable on the table far to the right, away from the other cables."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
+      put_down_prompt: "With the right gripper half open, move down onto a plug standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
-      loop_until_s: 105    # Kaushik, 8 Nov: 15 s moved from cables to stacking
     success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
     camera_notes:
       wrist_r: "close view of the power strip's ports: count the plugs seated in ports and compare with the stage start"
       scene: "top view: every cable's far end lies loose on the table all the time; do not count those as unplugged"
-    timeout_s: 60          # Dream's time only: the harness's own grip and pull do not count against it
+    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 99       # pass bar: keep trying until the clock runs out
     min_run_s: 4
     settle_s: 4
@@ -136,13 +135,13 @@ stages:
   # Only when Dream unplugged without the assist and still holds the cable: the assist puts it down itself.
   # ---- Stage 2: tower of 4 cubes (2 blue, pink, green), one cube per step, each step flowing into the next ----
   - name: stack_2
-    prompt: "put one blue cube on top of the other blue cube"
+    prompt: "put one blue foam cube on top of the other blue foam cube"
     write_prompt: false
-    lock_prompt: "put the pink cube on top of the two stacked blue cubes"   # flow straight into the next cube: no arms-up, no restart
+    lock_prompt: "put the pink foam cube on top of the two stacked blue foam cubes"   # flow straight into the next cube: no arms-up, no restart
     success: "Is one blue cube resting on top of the other blue cube, standing on its own, with no gripper holding it?"
     camera_notes:
       scene: "top view of the table: the cubes and the stack"
-    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
+    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
@@ -152,13 +151,13 @@ stages:
     on_fail: skip
 
   - name: stack_3
-    prompt: "put the pink cube on top of the two stacked blue cubes"
+    prompt: "put the pink foam cube on top of the two stacked blue foam cubes"
     write_prompt: false
-    lock_prompt: "put the green cube on top of the pink cube"   # flow straight into the next cube: no arms-up, no restart
+    lock_prompt: "put the green foam cube on top of the pink foam cube"   # flow straight into the next cube: no arms-up, no restart
     success: "Is the pink cube resting on top of the two stacked blue cubes, standing on its own, with no gripper holding it?"
     camera_notes:
       scene: "top view of the table: the cubes and the stack"
-    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
+    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
@@ -168,13 +167,13 @@ stages:
     on_fail: skip
 
   - name: tower
-    prompt: "put the green cube on top of the pink cube"
+    prompt: "put the green foam cube on top of the pink foam cube"
     write_prompt: false
     lock_prompt: "open both grippers and move the arms up"   # tower done: lift clear
     success: "Are four cubes stacked in one tower (two blue, then pink, then green on top), standing on its own, with no gripper holding or touching it?"
     camera_notes:
       scene: "top view of the table: the cubes and the stack"
-    timeout_s: 45          # Kaushik, 8 Nov: three 45 s steps (2 blue, 1 pink, 1 green cube on the table)
+    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
@@ -190,7 +189,7 @@ stages:
     writer_notes: "Pick the ONE legal ball (green, yellow or orange golf ball; never the white ball or a black ball) that is closest to one of the arms and reachable without passing over the tower, the blocks or the white basket. Prefer a ball the RIGHT arm can reach and say \"With the right arm, ...\" (8 Nov: both balls near the right gripper went in; the left arm and mid-table balls failed). Only for a ball right next to the left gripper and far from the right one say \"With the left arm, ...\". Say where the ball is (e.g. \"the orange golf ball at the front right of the table\"). If no legal ball outside the basket is in easy reach of either arm, the answer is SKIP."
     success: "Compared with the stage-start images, is there one more {ball} resting inside the bin than at the start of this stage, with no white or black ball in the bin and the tower (if any) still standing?"
     expect: "The right arm picks up one named {ball}, staying clear of the white ball, any black ball and the tower, and releases it over the bin."
-    timeout_s: 40
+    timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     min_run_s: 3
     stall_s: 30
     confirm: 1
