@@ -80,8 +80,8 @@ sequenceDiagram
     participant S as Station agent
     participant M as Monitor (fast) / Confirm (Sonnet)
     participant G as LiveGuard (10 Hz)
-    H->>S: GET /status (preflight: idle, arms alive, cameras < 2 s old)
-    H->>S: POST /reset (reset_first; skipped while the live guard is armed)
+    H->>S: GET /status (preflight: idle, arms alive, cameras under 2 s old)
+    H->>S: POST /reset (reset_first, skipped while the live guard is armed)
     loop each stage
       H->>G: arm(stage) if the plan guard covers it
       H->>H: compose prompt (template+slots) or stage.prompt
@@ -96,12 +96,12 @@ sequenceDiagram
         alt done twice (confirm 2)
           H->>S: lock: /prompt "open both grippers and move the arms up"
           H->>M: confirm_check (Sonnet, synchronous)
-          M-->>H: yes -> stage passes / no -> resume
+          M-->>H: yes = stage passes, no = resume
         end
       end
       G-->>S: POST /stop (3 yes frames in a row on one camera)
     end
-    H->>S: POST /stop; POST /reset (reset_last, not after a guard trip)
+    H->>S: POST /stop, then POST /reset (reset_last, not after a guard trip)
 ```
 
 ### 3.3.1 Preflight and the guarded `/reset`

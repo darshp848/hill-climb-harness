@@ -87,14 +87,18 @@ the station retune (§12.1).
 - Small counts throughout: 12 held-out detector frames, 137 cable crops, 5 test rollouts for joint faults, 30 guard
   questions per judge config, 3–26 steps per prompt family.
 
-## Building the PDF
+## Building the PDF and the Word file
 
-`docs/TECHNICAL_REPORT.pdf` is built from this file and `docs/report/*.md` with pandoc and XeLaTeX:
+`docs/TECHNICAL_REPORT.pdf` and `docs/TECHNICAL_REPORT.docx` are built from this file and `docs/report/*.md`:
 
 ```bash
-cd docs && pandoc TECHNICAL_REPORT.md report/0*.md report/1*.md -o TECHNICAL_REPORT.pdf --pdf-engine=xelatex --toc --lua-filter=report/pandoc_math.lua -H report/pdf_header.tex -V geometry:margin=0.75in -V mainfont="DejaVu Serif" -V monofont="DejaVu Sans Mono" -V fontsize=10pt
+docs/report/build/build.sh all
 ```
 
-`report/pandoc_math.lua` turns the ```` ```math ```` blocks into equations and sizes table columns by content;
-`report/pdf_header.tex` sets tables and code in a smaller font. Mermaid diagrams appear as code blocks in the PDF;
-view them rendered on GitHub.
+Needs pandoc; XeLaTeX with the DejaVu fonts for the PDF; and for the Word file Python with `lxml`, plus Node with
+mermaid-cli and a Chromium to render the diagrams (`MMDC`, `PUPPETEER_CONFIG` and `PYTHON` override the defaults).
+`build/pandoc_math.lua` turns the ```` ```math ```` blocks into equations (native Word equations in the .docx) and
+sizes table columns by content; `build/mermaid_png.lua` renders each Mermaid diagram to a PNG for the .docx (the PDF
+shows them as code); `build/docx_cleanup.lua` drops the "Back to the index" links; `build/reference.docx` sets
+US Letter pages, 0.75 in margins and bordered tables; `build/fix_docx.py` puts `settings.xml` in schema order and
+asks Word to fill in the table of contents when the file is opened (accept the prompt to update fields).
