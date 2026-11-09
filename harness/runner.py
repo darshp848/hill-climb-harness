@@ -724,6 +724,13 @@ class Runner:
                         recent = last_done_t is not None and elapsed - last_done_t <= DONE_WINDOW_S
                         last_done_t, last_done_sig = elapsed, sig
                         if verdict.immediate or consec_done >= confirm or recent:
+                            if self.plan.confirm_before_lock and stage.confirm_check:
+                                check = self._confirm_check(stage, verifier)
+                                if check is not None:   # not confirmed: Dream keeps its prompt, nothing switched
+                                    consec_done, last_done_t, last_done_sig = 0, None, None
+                                    continue
+                                self._lock_success(stage)
+                                return _Attempt(True, verdict.reason or "verified", max_p, hint)
                             locked = self._lock_success(stage)
                             check = self._confirm_check(stage, verifier)
                             if check is not None:

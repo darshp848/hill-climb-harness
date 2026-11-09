@@ -48,6 +48,7 @@ claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: t
 reset_first: true
 reset_last: true       # Kaushik, 8 Nov: end every run at the start pose too
 stop_on_pass: true
+confirm_before_lock: true   # Sonnet confirms BEFORE Dream is switched on (8 Nov live: a wrong fast look switched and undid)
 lock_prompt: "open both grippers and move the arms up"   # lock without /stop: Dream stays warm, arms lift clear
 hands_off: true        # attempts end only on a pass, a guard or the timeout (no drop-the-cube recoveries)
 rewrite_prompts: true
@@ -113,6 +114,7 @@ stages:
       put_down_prompt: "With the right gripper half open, move down onto the plug of an orange USB cable standing upright in a port on top of the black power strip, then close the gripper on that plug, pull it straight up and toss the cable to the far right of the table."   # the same single prompt (Kaushik: unplug + place is one Dream prompt), resent after the harness pull   # 8 Nov live: the shorter wording set it back on the strip
       put_down_s: 15
       min_z: 0.035         # table cable ~0.023 m, plugs gripped at 0.045-0.08 m (8 Nov live): never pull from the table
+      loop_until_s: 105    # Kaushik, 8 Nov: cables keep a time limit (but never move on with 0 cables)
       pass_on_pull: true   # a pull that held + Sonnet's seated-plug count = pass now (Flash-Lite missed a real one)
     success: "Compared with the stage-start images, is at least one plug that was seated in a port of the power strip at the start now fully out of its port (held up in the right gripper, or lying loose next to the strip or on the table)? Count the seated plugs; loose far ends of cables do not count."
     expect: "The right gripper closes on one plug's hard body at the port and the plug comes straight up out of it; then the cable is put down on the table to the right."
@@ -133,52 +135,56 @@ stages:
     on_fail: retry_in_place
 
   # Only when Dream unplugged without the assist and still holds the cable: the assist puts it down itself.
-  # ---- Stage 2: tower of 4 cubes (2 blue, pink, green), one cube per step, each step flowing into the next ----
+  # ---- Stage 2: tower of 4 foam cubes, one cube per step; colours don't matter (8 Nov live: a real blue-on-pink
+  # stack was rejected for not being blue-on-blue). Sonnet confirms before Dream is switched to the next step. ----
   - name: stack_2
     prompt: "put one blue foam cube on top of the other blue foam cube"
     write_prompt: false
-    lock_prompt: "put the pink foam cube on top of the two stacked blue foam cubes"   # flow straight into the next cube: no arms-up, no restart
-    success: "Is one blue cube resting on top of the other blue cube, standing on its own, with no gripper holding it?"
+    lock_prompt: "put another foam cube on top of the stacked foam cubes"   # flow on: no arms-up, no restart
+    success: "Are at least two foam cubes (any colours) stacked on top of each other in one stack, standing on its own, with no gripper holding it?"
     camera_notes:
-      scene: "top view of the table: the cubes and the stack"
+      scene: "overhead view: judge stacking HERE. A cube on top of another sits raised and partly hides the one below"
+      wrist: "in a wrist view two cubes side by side, one behind the other, look stacked: check the overhead view before saying a cube is on another"
     timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
     confirm: 2
-    confirm_check: "In the NOW images, is one blue cube resting on top of the other blue cube, standing on its own, with no gripper holding or touching either?"
+    confirm_check: "Look at the OVERHEAD (scene) image first. Are at least two foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
     resume_on_no: true
     on_fail: skip
 
   - name: stack_3
-    prompt: "put the pink foam cube on top of the two stacked blue foam cubes"
+    prompt: "put another foam cube on top of the stacked foam cubes"
     write_prompt: false
-    lock_prompt: "put the green foam cube on top of the pink foam cube"   # flow straight into the next cube: no arms-up, no restart
-    success: "Is the pink cube resting on top of the two stacked blue cubes, standing on its own, with no gripper holding it?"
+    lock_prompt: "put another foam cube on top of the stacked foam cubes"   # flow on: no arms-up, no restart
+    success: "Are at least three foam cubes (any colours) stacked on top of each other in one stack, standing on its own, with no gripper holding it?"
     camera_notes:
-      scene: "top view of the table: the cubes and the stack"
+      scene: "overhead view: judge stacking HERE. A cube on top of another sits raised and partly hides the one below"
+      wrist: "in a wrist view two cubes side by side, one behind the other, look stacked: check the overhead view before saying a cube is on another"
     timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
     confirm: 2
-    confirm_check: "In the NOW images, is there a stack of three cubes (two blue at the bottom, the pink cube on top), standing on its own, with no gripper holding or touching it?"
+    confirm_check: "Look at the OVERHEAD (scene) image first. Are at least three foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
     resume_on_no: true
     on_fail: skip
 
   - name: tower
-    prompt: "put the green foam cube on top of the pink foam cube"
+    prompt: "put another foam cube on top of the stacked foam cubes"
     write_prompt: false
     lock_prompt: "open both grippers and move the arms up"   # tower done: lift clear
-    success: "Are four cubes stacked in one tower (two blue, then pink, then green on top), standing on its own, with no gripper holding or touching it?"
+    success: "Are at least four foam cubes (any colours) stacked on top of each other in one stack, standing on its own, with no gripper holding it?"
     camera_notes:
-      scene: "top view of the table: the cubes and the stack"
+      scene: "overhead view: judge stacking HERE. A cube on top of another sits raised and partly hides the one below"
+      wrist: "in a wrist view two cubes side by side, one behind the other, look stacked: check the overhead view before saying a cube is on another"
     timeout_s: 295         # no per-stage limit (Kaushik, 8 Nov): only the 5 min match cap
     max_attempts: 1
     min_run_s: 4
     stall_s: 30
     confirm: 2
-    confirm_check: "In the NOW images, is there a single tower of four stacked cubes with the green cube on top, standing on its own, with no gripper holding or touching it?"
+    confirm_check: "Look at the OVERHEAD (scene) image first. Are at least four foam cubes, of any colours, stacked on top of each other in a single stack, standing on its own, with no gripper holding it? Cubes side by side do not count, even if one is behind the other in a wrist view."
     resume_on_no: true
     on_fail: skip
 

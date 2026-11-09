@@ -203,7 +203,7 @@ def test_bot_v1_plan():
     assert plan.claude_user["confirm_model"] == plan.claude_user["writer_model"] == "claude-sonnet-5-5"
     unplugs = [s for s in plan.stages if s.name.startswith("cable_unplug")]
     assert len(unplugs) == 1 and all(s.grip_assist and s.confirm_check and not s.write_prompt for s in unplugs)
-    assert unplugs[0].grip_assist.loop_until_s is None
+    assert unplugs[0].grip_assist.loop_until_s == 105
     ga = unplugs[0].grip_assist
     assert (ga.regrip, ga.pull_up_m, ga.pull_s, ga.repull, ga.hold) == (2, [0.10], 4.0, 0, (0.062, 0.20))
     assert ga.put_down_prompt and unplugs[0].prompt.endswith(ga.put_down_prompt)   # one prompt: unplug + place
@@ -211,11 +211,10 @@ def test_bot_v1_plan():
     assert unplugs[0].prompt.startswith(plan.prompt_prefix) and "half open" in unplugs[0].prompt and "port on top of" in unplugs[0].prompt and "orange USB cable" in unplugs[0].prompt
     stacks = plan.stages[first_stack:first_ball]
     assert [x.name for x in stacks] == ["stack_2", "stack_3", "tower"]
-    assert [x.prompt for x in stacks] == ["put one blue foam cube on top of the other blue foam cube",
-                                          "put the pink foam cube on top of the two stacked blue foam cubes",
-                                          "put the green foam cube on top of the pink foam cube"]
-    assert stacks[0].lock_prompt == stacks[1].prompt and stacks[1].lock_prompt == stacks[2].prompt
-    assert all(x.confirm == 2 and x.confirm_check and not x.write_prompt and x.timeout_s == 295 for x in stacks)
+    assert stacks[0].prompt == "put one blue foam cube on top of the other blue foam cube"
+    assert stacks[1].prompt == stacks[2].prompt == "put another foam cube on top of the stacked foam cubes"
+    assert stacks[0].lock_prompt == stacks[1].prompt and plan.confirm_before_lock
+    assert all("any colours" in x.confirm_check and x.timeout_s == 295 for x in stacks)
     assert not plan.tower_prompts
     balls = plan.stages[first_ball:]
     assert all(s.write_prompt and "nearest" in s.prompt and "white basket" in s.prompt and s.writer_notes
@@ -524,3 +523,16 @@ def test_drop_at_carries_the_cable_to_the_basket_without_dream(fake, write_plan,
     assert drop["moves"] >= 1 and drop["dist"] <= 0.40
     assert _moves(fake)[-1]["gripper"] == 0.8                            # opened at the end
     assert not any(PUT in b["prompt"] for _, rt, b in fake.posts() if rt == "/start")   # Dream never restarted for it
+
+
+def test_confirm_before_lock_never_switches_on_a_wrong_look(fake, write_plan, tmp_path):
+    nxt = "put another foam cube on top of the stacked foam cubes"
+    path = write_plan([stage("stack_2", prompt="put one blue foam cube on top of the other blue foam cube", confirm=1,
+                             confirm_check="2 stacked?", lock_prompt=nxt, timeout_s=1.0, max_attempts=1, on_fail="skip")],
+                      stop_on_pass=True, confirm_before_lock=True, hands_off=True)
+    v = Confirming([mv(True, progress=1.0)], [False, False, True])
+    r = build(fake, path, tmp_path, v)
+    r.run()
+    sent = prompts(fake)
+    assert sent[0].startswith("put one blue") and sent.count(nxt) == 1   # switched once, only after the yes
+    assert [c["yes"] for c in events(r.log, "confirm_check")][:3] == [False, False, True]
