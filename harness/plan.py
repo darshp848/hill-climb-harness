@@ -19,7 +19,7 @@ MAX_PROMPT_CHARS = 512
 _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
               "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first",
               "write_prompts", "rewrite_max", "rewrite_cooldown_s", "stop_on_pass", "hands_off", "lock_prompt",
-              "prompt_engine", "reset_last"}
+              "prompt_engine", "reset_last", "confirm_before_lock"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
 _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
@@ -241,6 +241,9 @@ class Plan:
     # POST /reset when the run ends (done, time up, operator stop), except after a guard trip: the arm then holds a
     # ball that must not be dropped. Kaushik, 8 Nov: start and end every run from the start pose.
     reset_last: bool = False
+    # With stop_on_pass: ask the confirm_check FIRST and switch Dream (lock prompt) only on a yes. 8 Nov live: a wrong
+    # fast look switched Dream to the next cube, the confirm said no, Dream was switched back: two motion restarts.
+    confirm_before_lock: bool = False
     # Lock a success: stop Dream at the first look that would pass the stage (before the confirm_check), so it can't
     # undo it (8 Nov: "stack ... as high as possible" built blue on blue, then took it apart). A confirm that says
     # no starts Dream again on the same prompt.
@@ -517,6 +520,7 @@ def parse_plan(data: Any) -> Plan:
         prompt_prefix=prefix.strip(),
         reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
         reset_last=_bool(data.get("reset_last", False), "plan.reset_last"),
+        confirm_before_lock=_bool(data.get("confirm_before_lock", False), "plan.confirm_before_lock"),
         stop_on_pass=_bool(data.get("stop_on_pass", False), "plan.stop_on_pass"),
         lock_prompt=_prompt(data["lock_prompt"], "plan.lock_prompt") if data.get("lock_prompt") else "",
         hands_off=_bool(data.get("hands_off", False), "plan.hands_off"),
