@@ -36,12 +36,13 @@ def _example_dir():
     pytest.skip("Dream's yam_mujoco example is not installed (pip install dreamlabs) and no --example-dir")
 
 
-@pytest.fixture(scope="module")
-def sim():
+@pytest.fixture(scope="module", params=[None, 10], ids=["sync", "async"])
+def sim(request):
+    """Every state-machine test runs on Dream's example loop and on the async pacing loop (execution_horizon 10)."""
     example = _example_dir()
     try:
         station = sim_station.SimStation(policy="scripted", api_port=0, view_port=0, realtime=False,
-                                         example_dir=example).start()
+                                         example_dir=example, execution_horizon=request.param).start()
     except Exception as exc:  # no usable GL, etc.
         pytest.skip(f"simulator could not start here: {exc}")
     yield station
@@ -100,6 +101,29 @@ def test_bad_requests(sim):
     assert call(sim, "POST", "/prompt", {})[0] == 400
     assert call(sim, "GET", "/nope")[0] == 404
     assert call(sim, "POST", "/nope", {})[0] == 404
+
+
+def test_light_frames_and_measured_arms(sim):
+    from PIL import Image
+    from harness.frames import FrameSource
+    from harness.station_client import StationClient
+
+    settle(sim)
+    for cam in ("scene", "wrist_l", "wrist_r"):
+        for width, expected in [(320, (320, 180)), (4096, (640, 360))]:
+            with urllib.request.urlopen(sim.api_url + f"/frame/{cam}.jpg?w={width}") as response:
+                assert response.headers["Content-Type"] == "image/jpeg"
+                im = Image.open(io.BytesIO(response.read()))
+                assert im.size == expected and np.asarray(im).std() > 5
+    assert set(FrameSource(sim.view_url, station_url=sim.api_url).latest()) == {"scene", "wrist_l", "wrist_r"}
+    assert call(sim, "GET", "/frame/missing.jpg")[0] == 404
+    for width in ("nope", "0", "-1", "4097"):
+        assert call(sim, "GET", f"/frame/scene.jpg?w={width}")[0] == 400
+    arms = StationClient(sim.api_url).grippers()
+    assert set(arms) == {"left", "right"}
+    for arm in arms.values():
+        assert 0 <= arm["gripper"] <= 1 and 0 <= arm["commanded_gripper"] <= 1
+        assert len(arm["positions_rad"]) == 6 and arm["gripper_effort"] is None
 
 
 def test_run_prompt_frames_stop_home_reset(sim):
@@ -186,3 +210,103 @@ def test_live_view_serves_page_state_and_cameras(sim):
         assert resp.headers["Content-Type"] == "image/jpeg" and resp.read()[:2] == b"\xff\xd8"
     with pytest.raises(urllib.error.HTTPError):
         urllib.request.urlopen(sim.view_url + "/live/cam/nope.jpg", timeout=10)
+
+
+def test_hedged_policy_returns_the_first_reply_and_feeds_every_session():
+    import time as _t
+
+    from sim_station import HedgedPolicy
+
+    class Fake:
+        def __init__(self, delay, fail=False):
+            self.delay, self.fail, self.obs, self.closed = delay, fail, 0, False
+
+        def set_observation(self, *a, **k):
+            self.obs += 1
+
+        def get_action(self):
+            _t.sleep(self.delay)
+            if self.fail:
+                raise RuntimeError("boom")
+            return {"from": self.delay}
+
+        def close(self):
+            self.closed = True
+
+    sessions = [Fake(0.3), Fake(0.02, fail=True), Fake(0.05)]
+    hp = HedgedPolicy(sessions)
+    hp.set_observation("frames", "state", timestamp=0.0)
+    t = _t.monotonic()
+    assert hp.get_action() == {"from": 0.05}            # the failing fast one is skipped, the next fastest wins
+    assert _t.monotonic() - t < 0.25 and hp.last_winner == 2
+    assert all(s.obs == 1 for s in sessions)
+    hp.close()
+    assert all(s.closed for s in sessions)
+
+
+def test_stop_while_the_first_request_is_in_flight_returns_to_idle(sim, monkeypatch):
+    settle(sim)
+    monkeypatch.setattr(sim, "scripted_latency_s", 3.0)        # the first reply is slow
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert sim.state == "starting"
+    code, status = call(sim, "POST", "/stop", {})
+    assert code == 200 and status["state"] == "idle"
+    monkeypatch.undo()
+    assert call(sim, "POST", "/start", {"prompt": "again"})[0] == 200   # nothing left stuck
+    assert wait_until(lambda: sim.state == "running", 60)
+    settle(sim)
+
+
+def test_a_failure_mid_run_goes_to_error_and_a_new_start_recovers(sim, monkeypatch):
+    settle(sim)
+    real_open = sim._open
+    calls = {"n": 0}
+
+    def flaky_open(model, poses):
+        policy = real_open(model, poses)
+        real_get = policy.get_action
+
+        def get_action(commanded=None):
+            calls["n"] += 1
+            if calls["n"] > 3:
+                raise RuntimeError("model fell over")
+            return real_get()
+        policy.get_action = get_action
+        return policy
+
+    monkeypatch.setattr(sim, "_open", flaky_open)
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert wait_until(lambda: sim.state == "error", 60)
+    assert call(sim, "GET", "/status")[1]["last_error"]["message"] == "model fell over"
+    monkeypatch.undo()
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert wait_until(lambda: sim.state == "running", 60)
+    settle(sim)
+
+
+def test_a_retryable_refusal_waits_in_starting_then_runs(sim, monkeypatch):
+    settle(sim)
+    real_open = sim._open
+    refusals = {"n": 0}
+
+    class Warming(Exception):
+        retryable, reason, retry_after_s = True, "pool_warming", 0.2
+
+    def warming_open(model, poses):
+        policy = real_open(model, poses)
+        real_get = policy.get_action
+
+        def get_action(commanded=None):
+            if refusals["n"] < 2:
+                refusals["n"] += 1
+                raise Warming("pool warming")
+            return real_get()
+        policy.get_action = get_action
+        return policy
+
+    monkeypatch.setattr(sim, "_open", warming_open)
+    assert call(sim, "POST", "/start", {"prompt": "go"})[0] == 200
+    assert wait_until(lambda: sim.state == "running", 60)
+    assert refusals["n"] == 2
+    monkeypatch.undo()
+    settle(sim)

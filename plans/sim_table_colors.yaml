@@ -1,0 +1,19 @@
+# Detector colours for the SIM scene (sim_scenes/hill_climb_table.py), PIL HSV scale 0..255, measured on the top
+# camera with MuJoCo's segmentation render (8 Nov): green ball H 91-96, yellow 41-43, orange 17-26 (S >= 140),
+# white ball S <= 15, black ball V <= 40. As on the real table (plans/table_colors.yaml): the green, yellow and orange
+# golf balls are legal targets; the white golf ball and the black 8-ball are illegal (avoid). The yellow sticks and
+# orange plugs share hues with balls: shapes decide (ball = round).
+annotate: true
+table_roi: [0.05, 0.15, 0.95, 0.95]
+guard:
+  wrist_roles: [wrist]
+  grip_roi: [0.25, 0.35, 0.75, 1.0]
+  grip_min_frac: 0.01
+classes:
+  white:  {hsv: [[0, 0, 200], [255, 13, 255]], min_frac: 0.00025, max_frac: 0.10, kinds: {ball: avoid}, small_ball: true}   # table S ~21
+  black:  {hsv: [[0, 0, 0], [255, 255, 55]], min_frac: 0.0005, max_frac: 0.10, kinds: {ball: avoid}, small_ball: true}
+  green:  {hsv: [[80, 90, 90], [110, 255, 255]], min_frac: 0.00025, kinds: {ball: target}, small_ball: true}
+  orange: {hsv: [[10, 140, 110], [30, 255, 255]], min_frac: 0.00025, kinds: {ball: target}, small_ball: true}
+  yellow: {hsv: [[35, 130, 120], [55, 255, 255]], min_frac: 0.00025, kinds: {ball: target, cube: info, stick: info}, small_ball: true}
+  blue:   {hsv: [[130, 90, 90], [165, 255, 255]], min_frac: 0.0003, kinds: {cube: info, stick: info}}
+  pink:   {hsv: [[195, 70, 90], [235, 255, 255]], min_frac: 0.0003, kinds: {cube: info, stick: info}}

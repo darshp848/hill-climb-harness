@@ -1,0 +1,2 @@
+Will submit Cloud Build from the allowlisted checkout and push us-central1-docker.pkg.dev/hill-climb-sims/hill-climb/sim:cloud-v1. No local Docker.
+DRY RUN: gcloud builds submit 'C:\Users\darsh\TAMU\EMPE_Lab\Actuator-controls\hill_climb_harness_test\cloud-sims' --config 'C:\Users\darsh\AppData\Local\Temp\hill-climb-build-dio_vl07\build.json' --ignore-file 'C:\Users\darsh\TAMU\EMPE_Lab\Actuator-controls\hill_climb_harness_test\cloud-sims\cloud\gcloudignore' --gcs-source-staging-dir gs://hill-climb-sims-results/build-source --project hill-climb-sims --quiet

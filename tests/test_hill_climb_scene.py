@@ -53,8 +53,8 @@ def test_full_relay_scores_by_rubric(env):
     hx, hy = h.HUB_POS
     # Stage 1: pull one plugged cable out, seat one loose cable in a free port.
     place(env, "plugged_0", (h.HUB_POS[0] - 0.18, -0.16, h.TABLE_Z + 0.03))   # out, clear of everything
-    free_port = next(p for p in range(4) if p not in h.PLUGGED_PORTS)
-    place(env, "loose_0", (hx + h.PORT_X[free_port], hy, ref.hub_top + 0.0005))
+    free_port = next(p for p in range(4) if p not in h.PLUGGED_PORTS and h.PORT_KIND[p] == "a")   # USB-A in A
+    place(env, "loose_0", (hx + h.PORT_X[free_port], hy, ref.hub_top + 0.0005), (0.7071068, 0, 0, 0.7071068))
     settle(env, ref, 1)
     assert ref.stage1_at is not None
     # Stage 2: two cubes stacked is 12 cm, over the 4-inch bar; free-standing for 3 s.

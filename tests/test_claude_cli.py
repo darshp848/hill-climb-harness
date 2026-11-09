@@ -36,6 +36,10 @@ def fake_claude(tmp_path, monkeypatch):
     exe = tmp_path / "claude"
     exe.write_text(FAKE.format(python=sys.executable))
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    if os.name == "nt":      # Windows can't run a shebang script: launch it through a .cmd next to it
+        wrapper = tmp_path / "claude.cmd"
+        wrapper.write_text(f'@"{sys.executable}" "{exe}" %*' + chr(10))
+        exe = wrapper
     log = tmp_path / "log.json"
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
     monkeypatch.setenv("HARNESS_CLAUDE_BIN", str(exe))

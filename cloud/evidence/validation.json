@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-08",
+  "full_suite": {
+    "command": "../hill_climb_harness/.venv/Scripts/python.exe -m pytest -q",
+    "passed": 318,
+    "skipped": 1,
+    "failed": 2,
+    "seconds": 371.71,
+    "known_windows_failures": [
+      "tests/test_claude_cli.py::test_cli_transport_sends_the_request_unchanged",
+      "tests/test_claude_cli.py::test_backend_switch"
+    ],
+    "failure_cause": "WinError 193 when executing the fake claude shell script"
+  },
+  "focused_cloud_and_sim_suite": {"passed": 16, "seconds": 12.00,
+    "note": "Final focused run includes two additional oracle semantic tests added after the full suite."},
+  "original_and_relay_build_step_render_api_detector": "passed locally",
+  "bash_syntax": "passed for setup.sh, build.sh, submit.sh",
+  "script_dry_runs": "passed without invoking gcloud or reading credentials",
+  "linux_wheel_only_resolution": "incomplete: Dream pins source-only portal 3.7.3",
+  "cloud_build": "not run: prohibited by brief",
+  "cloud_resources_changed": false,
+  "real_dream_calls": 0,
+  "claude_calls": 0,
+  "pushed": false
+}

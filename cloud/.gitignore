@@ -1,0 +1,4 @@
+generated/
+evidence/smoke/
+evidence/*.log
+evidence/pytest-*.txt

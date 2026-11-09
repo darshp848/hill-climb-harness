@@ -43,6 +43,7 @@ class MonitorVerdict(Verdict):
     tower: list[str] | None = None  # the tower the monitor sees, bottom to top (stacking stages with a tower_target)
     next_prompt: str | None = None  # the monitor's own instruction for the robot (plan.rewrite_prompts)
     latency_s: float | None = None  # how long the Claude call took
+    stage_done: bool | None = None  # raw model answer, before the confidence gate (offline judge benchmarks)
 
 
 def valid_jpeg(data: bytes) -> bool:
@@ -236,7 +237,7 @@ NEXT_PROMPT_MAX_CHARS = 300
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-BACKENDS = ("api", "subscription")
+BACKENDS = ("api", "subscription", "openrouter")
 CLI_SYSTEM_PROMPT = ("You are a vision monitor for a robot station. Judge only from the images and text given, and "
                      "answer exactly in the output format the user asks for.")
 
@@ -301,11 +302,147 @@ def default_transport(timeout_s: float = 60.0, api_key: str | None = None, what:
     """The transport $HARNESS_CLAUDE_BACKEND asks for: the API (ANTHROPIC_API_KEY) or the subscription (claude CLI)."""
     if api_key is None and claude_backend() == "subscription":
         return claude_cli_transport(max(timeout_s, 90.0))
+    if api_key is None and claude_backend() == "openrouter":
+        return openrouter_transport(timeout_s=timeout_s)
     key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise ValueError(f"{what} needs ANTHROPIC_API_KEY to be set (or HARNESS_CLAUDE_BACKEND=subscription / "
                          "--claude-backend subscription to use your Claude subscription through the claude CLI)")
     return anthropic_transport(key, timeout_s)
+
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def to_openai_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Anthropic Messages payload -> OpenAI chat messages (system first; image blocks as data URLs)."""
+    out: list[dict[str, Any]] = []
+    system = payload.get("system")
+    if system:
+        out.append({"role": "system", "content": system if isinstance(system, str) else
+                    " ".join(b.get("text", "") for b in system if isinstance(b, dict))})
+    for m in payload.get("messages", []):
+        content = m.get("content")
+        if isinstance(content, str):
+            out.append({"role": m["role"], "content": content})
+            continue
+        parts = []
+        for b in content or []:
+            if b.get("type") == "text":
+                parts.append({"type": "text", "text": b.get("text", "")})
+            elif b.get("type") == "image":
+                src = b.get("source") or {}
+                parts.append({"type": "image_url", "image_url": {
+                    "url": f"data:{src.get('media_type', 'image/jpeg')};base64,{src.get('data', '')}"}})
+        out.append({"role": m["role"], "content": parts})
+    return out
+
+
+REASONING_LEVELS = ("none", "low", "medium", "high")
+
+
+def openrouter_reasoning(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenRouter's unified `reasoning` field. $HARNESS_OPENROUTER_REASONING (none|low|medium|high) wins; otherwise
+    the effort the harness asks Claude for (output_config.effort, `low` in the monitor) is passed on, so every model
+    reasons at the same requested level. Measured 8 Nov: with no field, Gemini Flash-Lite does not reason at all,
+    Haiku 5.5 reasons a little and GPT-5 nano a lot; GPT-5 nano refuses `none`."""
+    level = (os.environ.get("HARNESS_OPENROUTER_REASONING") or
+             str((payload.get("output_config") or {}).get("effort") or "")).strip().lower()
+    if not level:
+        return None
+    if level not in REASONING_LEVELS:
+        raise ValueError(f"reasoning level must be one of {REASONING_LEVELS}, not {level!r}")
+    return {"enabled": False} if level == "none" else {"effort": level}
+
+
+def openrouter_request_body(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """The credential-free wire body, shared with offline request validation."""
+    body = {"model": model, "messages": to_openai_messages(payload),
+            "max_tokens": int(payload.get("max_tokens", 1024))}
+    reasoning = openrouter_reasoning(payload)
+    if reasoning is not None:
+        body["reasoning"] = reasoning
+    return body
+
+
+def openrouter_transport(models: list[str] | None = None, api_key: str | None = None,
+                         timeout_s: float = 60.0,
+                         on_attempt: Callable[[dict[str, Any]], None] | None = None,
+                         mode: str = "race") -> Transport:
+    """The same monitor request sent to other multimodal models through OpenRouter (OPENROUTER_API_KEY).
+
+    Models: `models`, else $HARNESS_OPENROUTER_MODELS (comma-separated OpenRouter ids). With more than one model,
+    every call races them (harness.hedge.first_of) and takes the first reply that has text: a fast model answers
+    first when it can, a slower, more reliable one covers when it can't. The key goes only in the Authorization
+    header to openrouter.ai and is never logged. Optional on_attempt receives accounting for every HTTP attempt,
+    including empty responses and losing calls, from worker threads. It must be thread-safe and must not raise.
+    Only model, usage, response ID, provider, latency and exception type are included, never request headers."""
+    key = api_key or os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise ValueError("the openrouter backend needs OPENROUTER_API_KEY")
+    names = models or [m.strip() for m in os.environ.get("HARNESS_OPENROUTER_MODELS", "").split(",") if m.strip()]
+    if not names:
+        raise ValueError("the openrouter backend needs model ids in HARNESS_OPENROUTER_MODELS (comma-separated)")
+
+    def one(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+        started = time.monotonic()
+        reply: dict[str, Any] = {}
+        error = None
+        try:
+            body = openrouter_request_body(model, payload)
+            req = urllib.request.Request(
+                OPENROUTER_URL, data=json.dumps(body).encode("utf-8"), method="POST",
+                headers={"Authorization": f"Bearer {key}", "content-type": "application/json",
+                         "X-Title": "hill-climb-harness"})
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                decoded = json.loads(resp.read())
+                if not isinstance(decoded, dict):
+                    raise ValueError("OpenRouter response must be an object")
+                reply = decoded
+            text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if isinstance(text, list):
+                text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+            if not text.strip():
+                raise RuntimeError(f"{model}: empty reply")
+            return {"content": [{"type": "text", "text": text}], "usage": reply.get("usage"), "model": model}
+        except Exception as exc:
+            error = type(exc).__name__
+            raise
+        finally:
+            if on_attempt is not None:
+                on_attempt({"model": model, "usage": reply.get("usage"), "id": reply.get("id"),
+                            "provider": reply.get("provider"), "latency_s": time.monotonic() - started,
+                            "error_type": error})
+
+    if mode not in ("race", "alternate"):
+        raise ValueError("openrouter mode: race or alternate")
+    turn = {"k": 0}
+    turn_lock = threading.Lock()
+
+    def send(payload: dict[str, Any]) -> dict[str, Any]:
+        if len(names) == 1:
+            return one(names[0], payload)
+        if mode == "alternate":
+            # Each call goes to the next model in turn. With claude.parallel 2 and confirm 2, two "done" verdicts in
+            # a row then come from two different models: a fast model proposes, the other one confirms.
+            with turn_lock:
+                k = turn["k"] % len(names)
+                turn["k"] += 1
+            return one(names[k], payload)
+        from .hedge import first_of  # noqa: PLC0415
+        it = iter(range(len(names)))
+        lock = threading.Lock()
+
+        def next_call() -> dict[str, Any]:
+            with lock:
+                k = next(it)
+            return one(names[k], payload)
+        res = first_of(next_call, len(names), timeout_s=timeout_s)
+        if res.value is None:
+            raise RuntimeError("all OpenRouter models failed: " + "; ".join(res.errors)[:300])
+        return res.value
+
+    return send
 
 
 def anthropic_transport(api_key: str, timeout_s: float = 60.0) -> Transport:
@@ -334,10 +471,27 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
         return MonitorVerdict(None, 0.0, f"monitor error: {why}")
 
     start, end = text.rfind("<json>"), text.rfind("</json>")
-    if start < 0 or end < start:
-        return bad(f"no <json> block in reply: {text[-100:]!r}")
+    if start >= 0 and end > start:
+        raw = text[start + len("<json>"):end]
+    else:
+        # Other models often answer with a ```json fenced block or bare JSON instead of the <json> tags: take the
+        # last JSON object in the reply (format quirks are not wrong answers).
+        fence = text.rfind("```json")
+        if fence >= 0:
+            close = text.find("```", fence + 7)
+            raw = text[fence + 7:close if close > 0 else None]
+        else:
+            close, depth, begin = text.rfind("}"), 0, -1
+            for i in range(close, -1, -1):
+                depth += {"}": 1, "{": -1}.get(text[i], 0)
+                if depth == 0:
+                    begin = i
+                    break
+            if close < 0 or begin < 0:
+                return bad(f"no <json> block in reply: {text[-100:]!r}")
+            raw = text[begin:close + 1]
     try:
-        obj = json.loads(text[start + len("<json>"):end])
+        obj = json.loads(raw)
     except ValueError:
         return bad("unparseable JSON")
     guard = obj.get("guard") if isinstance(obj, dict) and isinstance(obj.get("guard"), bool) else None
@@ -369,7 +523,7 @@ def parse_monitor_reply(text: str, menu_len: int) -> MonitorVerdict:
             reason = f"low confidence: {reason}"
     return MonitorVerdict(done, confidence, reason, progress=_clamp01(obj.get("progress")), status=status,
                           recovery=rec, scene_ok=scene, holding=holding, guard=guard, watch_ok=watch_ok,
-                          tower=tower, next_prompt=nxt)
+                          tower=tower, next_prompt=nxt, stage_done=obj["stage_done"])
 
 
 class MonitorVerifier:
@@ -400,6 +554,10 @@ class MonitorVerifier:
         # lands about twice as often (a call took ~10 s on the station on 8 Nov). The newest launched result wins.
         self.max_inflight = max(1, int(user.get("parallel", 1)))
         self.stitch = bool(user.get("stitch", False))   # claude.stitch: one labelled grid image per check
+        # claude.hedge: each check sends this many identical requests at once and uses the first answer that
+        # parses (harness.hedge). Cuts the latency tail; costs `hedge` x the calls. 1 = off.
+        self.hedge = max(1, int(user.get("hedge", 1)))
+        self.hedge_wins: list[int] = []   # which copy won each hedged call (for the logs / tuning)
         self._inflight = 0
         self._seq = self._result_seq = 0
         self._last_launch = 0.0
@@ -462,6 +620,11 @@ class MonitorVerifier:
         lines.append(f"Current stage question: {stage.success}")
         if stage.expect:
             lines.append(f"What correct behaviour looks like: {stage.expect}")
+        if getattr(stage, "technique", None):
+            lines.append(f"Operator's technique for this stage: {stage.technique}")
+        if getattr(stage, "watch_for", None):
+            lines.append("Error detection: if you see any of these, the attempt is going wrong (set `failing` "
+                         f"true and pick a recovery if one fits): {stage.watch_for}")
         if stage.camera_notes:
             lines.append("Camera notes (judge depth and alignment from the view that shows it best):")
             lines += [f"  {k}: {n}" for k, n in stage.camera_notes.items()]
@@ -564,12 +727,25 @@ class MonitorVerifier:
     def _call(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         payload = dict(payload)
         sig = payload.pop("_frames_sig", None)
+        if self.hedge > 1:
+            from .hedge import first_of  # noqa: PLC0415
+            res = first_of(lambda: self._call_once(payload, menu_len), self.hedge,
+                           timeout_s=float(self.plan.claude_user.get("timeout_s", 60.0)),
+                           good=lambda v: not v.reason.startswith("monitor error"))
+            verdict = res.value if res.value is not None else MonitorVerdict(
+                None, 0.0, f"monitor error: all {self.hedge} hedged calls failed ({'; '.join(res.errors)[:200]})")
+            if res.winner is not None:
+                self.hedge_wins.append(res.winner)
+        else:
+            verdict = self._call_once(payload, menu_len)
+        verdict.frames_sig = sig
+        return verdict
+
+    def _call_once(self, payload: dict[str, Any], menu_len: int) -> MonitorVerdict:
         try:
             reply = self._transport(payload)
             text = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
-            verdict = parse_monitor_reply(text, menu_len)
-            verdict.frames_sig = sig
-            return verdict
+            return parse_monitor_reply(text, menu_len)
         except urllib.error.HTTPError as exc:
             return MonitorVerdict(None, 0.0, f"monitor error: HTTP {exc.code}")
         except Exception as exc:  # any failure means "can't tell"

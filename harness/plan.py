@@ -14,12 +14,11 @@ RECOVERY_KINDS = ("retry", "reset")
 ON_FAIL = ("retry_in_place", "home_and_retry", "skip", "abort")
 MAX_PROMPT_CHARS = 512
 
-_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts",
-              "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first"}
+_PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars", "guard", "tower_target", "tower_prompts", "start_pose", "decide", "system_prompt", "rewrite_prompts", "prompt_prefix", "reset_first", "confirm_gap_s", "fast", "prompt_level", "operator_notes", "prompt_technique"}
 TOWER_STAGES = ("stack", "tower", "higher")   # stage-name prefixes the tower target applies to
-_STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
+_STAGE_KEYS = {"retry_skip", "name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
                "stall_s", "settle_s", "skip_if_done", "skip_unless", "confirm", "expect",
-               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check"}
+               "cameras", "camera_notes", "history_cameras", "watch", "requires_stage", "needs_grip", "confirm_check", "technique", "watch_for"}
 _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
 
 
@@ -67,6 +66,9 @@ class Stage:
     # frames before the stage may pass. For stages where a false pass costs the match (an unplug: blocks touched
     # before a cable is out are a DQ).
     confirm_check: str | None = None
+    retry_skip: bool = False       # on_fail skip stages: use max_attempts before moving on (operator notes)
+    technique: str | None = None   # operator technique (plans/operator_notes.yaml): Dream prompt + monitor
+    watch_for: str | None = None   # error detection: signs this stage is going wrong, for the monitor
 
     def note_for(self, role: str) -> str:
         return next((n for k, n in self.camera_notes.items() if k in role), "")
@@ -115,6 +117,26 @@ class Watch:
     max_fixes: int = 2
 
 
+_START_POSE_KEYS = {"reference", "tolerance_rad", "home_before", "home_pose", "max_homes"}
+
+
+@dataclass
+class StartPose:
+    """Compare the arms' joints with the starts in the teleop data before a stage's prompt (harness.start_pose).
+    Every check is logged. On stages matching `home_before` (name prefixes), a start farther than `tolerance_rad`
+    from every reference start sends the arms home first, if `home_pose` is itself a reference start for that
+    prompt, at most `max_homes` times per stage. Only for stages where a homing path can't knock anything over."""
+
+    reference: str
+    tolerance_rad: float = 0.35
+    home_before: list[str] = field(default_factory=list)
+    home_pose: dict[str, list[float]] = field(default_factory=lambda: {"left": [0.0] * 6, "right": [0.0] * 6})
+    max_homes: int = 1
+
+    def homes(self, stage_name: str) -> bool:
+        return any(stage_name.startswith(p) for p in self.home_before)
+
+
 @dataclass
 class Plan:
     task: str
@@ -122,6 +144,9 @@ class Plan:
     checkpoint: str | None = None
     time_budget_s: float = 900.0
     check_every_s: float = 3.0
+    confirm_gap_s: float = 0.0   # min seconds between two "done" verdicts that count toward confirm
+    prompt_level: int = 1        # harness.promptgen level for base Dream-1 (1 = the plan's prompt as written)
+    fast: dict[str, Any] = field(default_factory=dict)   # harness.fastloop settings (rate_hz, mode, weights)
     verifier: str = "manual"
     claude: dict[str, Any] = field(default_factory=lambda: {"model": "claude-haiku-5-5", "max_tokens": 200})
     cameras_for_check: list[str] = field(default_factory=list)  # empty = all cameras
@@ -139,6 +164,10 @@ class Plan:
     # tower the monitor last reported; an optional <top> names the piece it goes on. Off (empty) for a fine-tune
     # that only knows its recorded texts.
     tower_prompts: dict[str, str] = field(default_factory=dict)
+    start_pose: StartPose | None = None
+    # Optional weights for harness.decide's shadow run ({done: {...}, fail: {...}}); None = today's rules as weights.
+    # The shadow only logs `decide` events next to the runner's own calls; it never decides anything.
+    decide: dict[str, Any] | None = None
     system_prompt: str = ""        # the monitor's system prompt: station rules and lessons from testing
     # Let the monitor write the robot's next prompt (its `next_prompt`), with a cooldown and a cap per attempt.
     # Base Dream-1 only: a fine-tune follows only its recorded task texts.
@@ -147,6 +176,9 @@ class Plan:
     # work without the "no power" sentence); added when the monitor drops it.
     prompt_prefix: str = ""
     reset_first: bool = False      # POST /reset and wait for idle before the first stage: both grippers start open
+    operator_notes: str | None = None   # plans/operator_notes.yaml applied at load (harness.operator_notes)
+    # Add each stage's operator technique to the Dream prompt (harness.promptgen). Base Dream-1 only.
+    prompt_technique: bool = False
 
 
 def _roles(value: Any, where: str) -> list[str]:
@@ -155,6 +187,10 @@ def _roles(value: Any, where: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(c, str) and c.strip() for c in value):
         raise ValueError(f"{where}: must be a list of camera role names")
     return [c.strip() for c in value]
+
+
+def _bad_level(v: Any) -> int:
+    raise ValueError(f"plan.prompt_level: an integer 0-5, got {v!r}")
 
 
 def _num(value: Any, where: str, *, integer: bool = False) -> float:
@@ -299,6 +335,7 @@ def parse_plan(data: Any) -> Plan:
                 success=success.strip(),
                 timeout_s=float(_num(raw.get("timeout_s", 60.0), f"{label}.timeout_s")),
                 max_attempts=int(_num(raw.get("max_attempts", 3), f"{label}.max_attempts", integer=True)),
+                retry_skip=bool(raw.get("retry_skip", False)),
                 min_run_s=float(_num(raw.get("min_run_s", 4.0), f"{label}.min_run_s")),
                 verifier=_enum(raw.get("verifier", default_verifier), VERIFIERS, f"{label}.verifier"),
                 recovery=recs,
@@ -316,6 +353,8 @@ def parse_plan(data: Any) -> Plan:
                 requires_stage=prerequisite,
                 needs_grip=_bool(raw.get("needs_grip", False), f"{label}.needs_grip"),
                 confirm_check=None if raw.get("confirm_check") is None else _text(raw["confirm_check"], f"{label}.confirm_check"),
+                technique=None if raw.get("technique") is None else _text(raw["technique"], f"{label}.technique"),
+                watch_for=None if raw.get("watch_for") is None else _text(raw["watch_for"], f"{label}.watch_for"),
             )
         )
 
@@ -362,13 +401,20 @@ def parse_plan(data: Any) -> Plan:
         rewrite_prompts=_bool(data.get("rewrite_prompts", False), "plan.rewrite_prompts"),
         prompt_prefix=prefix.strip(),
         reset_first=_bool(data.get("reset_first", False), "plan.reset_first"),
+        operator_notes=data.get("operator_notes") or None,
+        prompt_technique=_bool(data.get("prompt_technique", False), "plan.prompt_technique"),
         tower_target=[x.strip() for x in tower],
         tower_prompts=_tower_prompts(data.get("tower_prompts"), [x.strip() for x in tower]),
+        start_pose=_start_pose(data.get("start_pose"), [st.name for st in stages]),
+        decide=_decide(data.get("decide")),
         done_message=done_message,
         stages=stages,
         checkpoint=checkpoint,
         time_budget_s=float(_num(data.get("time_budget_s", 900.0), "plan.time_budget_s")),
         check_every_s=float(_num(data.get("check_every_s", 3.0), "plan.check_every_s")),
+        confirm_gap_s=float(_num(data["confirm_gap_s"], "plan.confirm_gap_s")) if "confirm_gap_s" in data else 0.0,
+        fast=dict(data.get("fast") or {}),
+        prompt_level=int(data.get("prompt_level", 1)) if isinstance(data.get("prompt_level", 1), int) and 0 <= int(data.get("prompt_level", 1)) <= 5 else _bad_level(data.get("prompt_level")),
         verifier=default_verifier,
         claude=claude,
         cameras_for_check=list(cams),
@@ -392,6 +438,44 @@ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
         prompt = next(v for k, v in raw.items() if name.endswith(k)).replace("<piece>", name).replace("<top>", name)
         _prompt(prompt, "plan.tower_prompts")
     return {k: v.strip() for k, v in raw.items()}
+
+
+def _decide(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("plan.decide: must be a mapping")
+    from .decide import weights_from  # noqa: PLC0415
+    weights_from(raw)                 # validate now: a typo in a weight name fails at load, not mid-match
+    return raw
+
+
+def _start_pose(raw: Any, names: list[str]) -> StartPose | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("plan.start_pose: must be a mapping")
+    extra = set(raw) - _START_POSE_KEYS
+    if extra:
+        raise ValueError(f"plan.start_pose: unknown key(s): {', '.join(sorted(extra))}")
+    ref = _text(raw.get("reference"), "plan.start_pose.reference")
+    home_before = raw.get("home_before") or []
+    if not isinstance(home_before, list) or not all(isinstance(x, str) and x.strip() for x in home_before):
+        raise ValueError("plan.start_pose.home_before: must be a list of stage-name prefixes")
+    for prefix in home_before:
+        if not any(n.startswith(prefix) for n in names):
+            raise ValueError(f"plan.start_pose.home_before: {prefix!r} matches no stage name")
+    home = raw.get("home_pose")
+    if home is None:
+        home = {"left": [0.0] * 6, "right": [0.0] * 6}
+    if not isinstance(home, dict) or set(home) != {"left", "right"} or not all(
+            isinstance(v, list) and len(v) == 6 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
+            for v in home.values()):
+        raise ValueError("plan.start_pose.home_pose: must map left and right to 6 joint angles (rad)")
+    return StartPose(reference=ref, tolerance_rad=float(_num(raw.get("tolerance_rad", 0.35), "plan.start_pose.tolerance_rad")),
+                     home_before=[x.strip() for x in home_before],
+                     home_pose={k: [float(x) for x in v] for k, v in home.items()},
+                     max_homes=int(_num(raw.get("max_homes", 1), "plan.start_pose.max_homes", integer=True)))
 
 
 def _guard(raw: Any) -> Guard | None:
@@ -432,10 +516,13 @@ def substitute(text: str, variables: dict[str, str] | None) -> str:
     return _VAR.sub(lambda m: variables[m.group(1)], text)
 
 
-def load_plan(path: str | Path, variables: dict[str, str] | None = None) -> Plan:
+def load_plan(path: str | Path, variables: dict[str, str] | None = None, *,
+              operator_notes: bool | None = None, prompt_technique: bool | None = None) -> Plan:
     """Reads and validates a plan YAML file. Raises ValueError (or OSError if unreadable).
 
-    {name} placeholders are filled from the plan's own `vars:` defaults, then from `variables` (--var wins)."""
+    {name} placeholders are filled from the plan's own `vars:` defaults, then from `variables` (--var wins).
+    The plan's `operator_notes` file is applied unless operator_notes=False; prompt_technique overrides the plan's."""
+    plan_dir = Path(path).resolve().parent
     text = Path(path).read_text(encoding="utf-8")
     merged: dict[str, str] = {}
     try:
@@ -452,4 +539,15 @@ def load_plan(path: str | Path, variables: dict[str, str] | None = None) -> Plan
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ValueError(f"{path}: invalid YAML: {exc}") from None
+    if isinstance(data, dict):
+        notes_file = data.get("operator_notes")
+        if notes_file is not None and not isinstance(notes_file, str):
+            raise ValueError("plan.operator_notes: must be a path to a notes YAML file")
+        if notes_file and operator_notes is not False:
+            from .operator_notes import apply_raw, load  # noqa: PLC0415
+            data = apply_raw(data, load(plan_dir / notes_file))
+        elif operator_notes is False:
+            data = {k: v for k, v in data.items() if k != "operator_notes"}
+        if prompt_technique is not None:
+            data = {**data, "prompt_technique": prompt_technique}
     return parse_plan(data)

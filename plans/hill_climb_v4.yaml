@@ -34,13 +34,21 @@ task: >-
 checkpoint: "{model}"
 time_budget_s: 295          # 5-minute match, a little margin for the start
 check_every_s: 3.0
+# Darsh's operator decisions (docs/decisions.pdf): per-stage technique + error detection, the retry rule
+# (2 tries, 3 for high points), push the white ball off first. prompt_technique adds the technique to the
+# Dream prompt: base Dream-1 only (a fine-tune needs its recorded texts byte for byte; set it false then).
+operator_notes: operator_notes.yaml
+# This plan sends only recorded task texts (fine-tune ready): no technique text, no new stages.
+prompt_technique: false
 verifier: monitor
 confirm: 2
 done_message: "ALL STAGES DONE: CALL STOP NOW"
 # Camera role of the arm that stacks (the right arm), for the monitor's notes only.
 # The prompts never name an arm, so changing these does not change what the model is asked.
 vars: {stack_cam: wrist_r, model: dreamlabs/dream-1-beta}
-claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
+# 600 tokens cut off every reply (Haiku 5.5 thinks first). history_frames 4, one stitched grid image of the earlier
+# frames and two calls in flight (from hybrid-harness): live, a verdict every ~4.9 s instead of ~9.7 s.
+claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 4, stitch: true, parallel: 2}
 # Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
 # the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
 # confirm 1, because a ball goes from gripper to bin in a few seconds; a false yes only costs the balls still to come.
@@ -53,6 +61,20 @@ guard:
   # No guard answer for this long on a ball stage (Claude API down, bad frames) also stops the run: balls are +5
   # each, a black ball in the bin loses the match, and nobody would be looking for one.
   max_blind_s: 20
+
+# Start pose (harness/start_pose.py). VLAs lose most to an unfamiliar start pose (LIBERO-Plus: -60 points vs -16 for
+# reworded instructions). start_poses.json holds the first frame of every task segment in the NUC teleop sets
+# (tools/start_poses.py), keyed by the exact task text, so only unplug and put-down have references so far.
+# Every stage start and retry logs the distance (`start_pose` events). Before unplug_cable only, a start farther
+# than tolerance_rad from every recorded start sends the arms home first (once per stage): every recorded unplug
+# set includes home starts, and nothing is built yet that a homing path could knock over.
+# Joint angles come from GET /arms positions_rad (station add-on, needs the new sitecustomize.py) or, while a run
+# is going, from the newest debug-view trip.
+start_pose:
+  reference: start_poses.json
+  tolerance_rad: 0.35
+  home_before: [unplug_cable]
+  max_homes: 1
 
 # The tower to build, bottom to top. Colour order doesn't matter (Darsh, 8 Nov): only the shapes are compared, cubes first, then sticks. The monitor gets it as the expected
 # result on stack_* / tower_* / higher_* stages and reports the tower it sees; events.jsonl logs `tower` and

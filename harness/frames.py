@@ -40,6 +40,18 @@ class FrameSource:
             self.last_error = f"{type(exc).__name__}: {exc}"
         return None
 
+    def latest_observation(self) -> dict[str, Any] | None:
+        """The newest trip's observation (the state sent to the policy, e.g. state.right_arm), or None."""
+        try:
+            trips = self._get_json("/trips")
+            if isinstance(trips, list) and trips:
+                trip = self._get_json(f"/trip/{int(trips[-1]['n'])}")
+                obs = trip.get("observation") if isinstance(trip, dict) else None
+                return obs if isinstance(obs, dict) else None
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+        return None
+
     def latest(self) -> dict[str, bytes]:
         """role -> JPEG bytes: the newest frame of each camera in the newest round trip. {} if none."""
         if self.station_url:

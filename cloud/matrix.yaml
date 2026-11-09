@@ -1,0 +1,13 @@
+# Seeds select judge latency and label repetitions. The scene has a fixed layout;
+# Dream inference is not deterministically seedable through this example's API.
+version: 1
+scene_randomisation: none
+configs:
+  - name: hill_climb_v4
+    plan: plans/hill_climb_v4.yaml
+    args: [--match, --detect, plans/sim_table_colors.yaml, --live-guard]
+    seeds: {start: 0, count: 500}
+  - name: hybrid_v4
+    plan: plans/hybrid_v4.yaml
+    args: [--match, --skip, cable_extra, --detect, plans/sim_table_colors.yaml, --live-guard]
+    seeds: {start: 0, count: 500}

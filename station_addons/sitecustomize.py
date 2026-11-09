@@ -13,7 +13,9 @@ try:
             for name, st in self.server.api.controller.arm_states().items():
                 out[name] = {"gripper": float(st.gripper),
                              "commanded_gripper": None if st.commanded_gripper is None else float(st.commanded_gripper),
-                             "gripper_effort": None if st.gripper_effort is None else float(st.gripper_effort)}
+                             "gripper_effort": None if st.gripper_effort is None else float(st.gripper_effort),
+                             # joint angles (rad) for the harness's start-pose check (harness/start_pose.py)
+                             "positions_rad": [float(x) for x in st.positions_rad]}
             return self._reply(200, out)
         m = _re.match(r"^/frame/([A-Za-z0-9_]+)\.jpg$", self.path.split("?", 1)[0])
         if not m:

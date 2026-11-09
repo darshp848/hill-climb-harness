@@ -265,6 +265,7 @@ def test_monitor_async_never_blocks_and_one_in_flight():
         calls.append(payload)
         started.set()
         release.wait(5)
+        release.clear()  # each new call must wait for its own release
         return api_reply(reply_text(stage_done=True, progress=0.9))
 
     mon = MonitorVerifier(plan, transport=slow)
@@ -279,6 +280,7 @@ def test_monitor_async_never_blocks_and_one_in_flight():
     v = mon.check(st, FRAMES, 3)
     assert v.done is True and v.progress == 0.9
     assert mon.check(st, FRAMES, 4).done is None                # a result is consumed exactly once
+    release.set()
     mon.wait_idle(3)
 
 
@@ -559,7 +561,7 @@ def test_reset_scene_not_ok_to_the_end_fails_stage(fake, write_plan, tmp_path):
 
 def test_menu_exhausted_falls_back_to_on_fail(fake, write_plan, tmp_path):
     recs = [{"name": "again", "kind": "retry", "max_uses": 1}]
-    path = write_plan([stage("a", max_attempts=3, recovery=recs, on_fail="home_and_retry")])
+    path = write_plan([stage("a", max_attempts=3, recovery=recs, on_fail="home_and_retry")], time_budget_s=300)
     fv = FakeVerifier({"a": [False, False, True, True]})
     result = build(fake, path, tmp_path, fv).run()
     assert result.ok and result.stages[0].attempts == 3
@@ -569,7 +571,7 @@ def test_menu_exhausted_falls_back_to_on_fail(fake, write_plan, tmp_path):
 
 def test_max_uses_two_but_never_same_item_twice_in_a_row(fake, write_plan, tmp_path):
     recs = [{"name": "again", "kind": "retry", "max_uses": 2}]
-    path = write_plan([stage("a", max_attempts=4, recovery=recs, on_fail="home_and_retry")])
+    path = write_plan([stage("a", max_attempts=4, recovery=recs, on_fail="home_and_retry")], time_budget_s=300)
     fv = FakeVerifier({"a": [False, False, False, True, True]})
     log = RunLog(tmp_path / "runs")
     assert build(fake, path, tmp_path, fv, log).run().ok
@@ -586,7 +588,7 @@ def test_legacy_string_recovery_still_in_order(fake, write_plan, tmp_path):
 
 
 def test_legacy_string_recovery_ignored_under_home_and_retry(fake, write_plan, tmp_path):
-    path = write_plan([stage("a", recovery=["r1"], on_fail="home_and_retry")])
+    path = write_plan([stage("a", recovery=["r1"], on_fail="home_and_retry")], time_budget_s=300)
     fv = FakeVerifier({"a": [False, True, True]})
     assert build(fake, path, tmp_path, fv).run().ok
     assert "r1" not in prompts(fake) and "/home" in routes(fake)
