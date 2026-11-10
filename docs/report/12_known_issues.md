@@ -1,4 +1,4 @@
-# 12. Known issues, open TODOs, dead ends, and what we would do next
+# 12. Known issues, open TODOs, dead ends, and what to do next
 
 [Back to the index](../TECHNICAL_REPORT.md)
 
@@ -6,11 +6,11 @@
 
 | # | Issue | Evidence | Fix |
 |---|---|---|---|
-| 1 | **The live guard's white range on main is the phone-photo range**; it missed both held-white-ball test frames that the station retune catches | §5.2.4 (our run); audit A07; `fix/guard-real-frames` dcd76c5 | Port `plans/table_colors.yaml` and the `detect.py` changes from `fix/classifiers-8nov` (PR 7) to main; re-check on fresh wrist frames with a real held white ball |
+| 1 | **The live guard's white range on main is the phone-photo range**; it missed both held-white-ball test frames that the station retune catches | §5.2.4 (this report's run); audit A07; `fix/guard-real-frames` dcd76c5 | Port `plans/table_colors.yaml` and the `detect.py` changes from `fix/classifiers-8nov` (PR 7) to main; re-check on fresh wrist frames with a real held white ball |
 | 2 | A missing or frozen wrist frame on the carrying arm is masked by a clear view on the other wrist (`TableDetector.guard` returns "none held") | audit A06 | Require the carrying arm's wrist frame to be fresh; report blindness per camera |
 | 3 | Blocking I/O can carry motion past the deadline (station client timeout 70 s, monitor transport 60–90 s, synchronous entry/confirm checks) | audit A09; `harness/station_client.py:31` | Bound every synchronous call by the time left; send `/stop` when the deadline passes during a call |
 | 4 | A station restart after a fault keeps old done evidence (`_poll_health` → `_start_run`, not `_issue`, so `notify_prompt_change` and `last_done_t` are not reset) | audit A11; `runner.py:341` | Clear done state and bump the verifier generation on every restart |
-| 5 | Correlated confirming looks: two in-flight calls on near-identical frames can satisfy `confirm: 2`; the 15 s sticky-done window can pass a re-placed tower | stress sweep (2 DQs); audit A03 | Minimum gap between confirming verdicts; second look from a different model (as the bot line's Sonnet `confirm_check` does for unplug) |
+| 5 | Correlated confirming looks: two in-flight calls on near-identical frames can satisfy `confirm: 2`; the 15 s sticky-done window can pass a re-placed tower | stress sweep (2 DQs); audit A03 | Turn on and stress-test the minimum gap between confirming verdicts (`confirm_gap_s` exists on cloud-sims, default 0, unset in every plan); second look from a different model (as the bot line's Sonnet `confirm_check` does for unplug) |
 | 6 | `tower_pass` in `hill_climb_v4.yaml` passes on one synchronous entry look (`skip_if_done: true`) without the 3 s dwell | audit A02 (critical); `plans/hill_climb_v4.yaml:188` | Drop `skip_if_done` there (done on `prompt-engine`'s relay plan); `bot_v1` is not affected |
 | 7 | `test_bot_v1_plan` fails: the cable prompt contains "toss" | §13.1; 716c4d0 vs bec9975 | Decide which is right (the only confirmed 13:57 unplug used "toss"; earlier "toss it" sent Dream to the balls) and align test and plan |
 | 8 | `tests/test_hill_climb_scene.py` errors at collection without `dreamlabs` | §13.1 | Wrap `find_spec` in `try/except ModuleNotFoundError` or use `pytest.importorskip("dream_examples.yam_mujoco")` |
@@ -44,10 +44,10 @@
 
 | Idea | What happened | Source |
 |---|---|---|
-| The fine-tune `relay-final` | worse than base on every task: aimed 5.5 cm high (Quest gravity sag), 0 cable grips in ~10 min, cold starts of 3+ min | §9 |
+| The fine-tune `relay-final` | worse than base on every task: aimed high (Quest commands 3.7–5.4 cm above the tool from gravity sag), 0 cable grips in ~10 min, cold starts of 3+ min | §9 |
 | Monitor-written free-text rewrites | judge-written micro-rewrites unplugged nothing; 9 of 15 were sent mid-grasp and 5 dropped the plug; Flash-Lite rewrote 11 times in one run | §7.6; `bot_v1.yaml` notes |
 | Long, coached prompts | a 574-character cable prompt unplugged nothing in 286 s; motion scripts for stacking stacked 0 of 10 | §7.6 |
-| Naming an arm | 0/4 in sim; "the right arm" sent the far arm for stacking on the station; left-arm prompts 0 of 4 on 8 Nov | §7.5.2 |
+| Naming an arm | 0/4 in a 12-trial two-arm sim test; "the right arm" sent the far arm for stacking on the station; left-arm prompts 0 of 4 on 8 Nov | §7.5.2 |
 | Two arms in one prompt | no grip (station), 2/4 single-goal successes (sim) | §7.5.2, §7.6 |
 | Watcher arm | depends on Dream holding one arm still on command, which it does not reliably do | `DECISION_MODEL.md` §2 |
 | Plug-in stages | base Dream-1 never seated a plug; dropped from the match plan on 7 Nov; plug-in prompts were refused in the sim | TELEOP_PLAN, §10.1 |
@@ -60,7 +60,7 @@
 | Pull-force add-on | fired 70 times, mostly on empty or irrelevant closes | §3.6 |
 | A harness wait at timeout for an in-flight verdict | no difference (54.9 vs 54.8), dropped | task_simulation README |
 
-## 12.4 What we would do next, in order
+## 12.4 What to do next, in order
 
 1. **Make main safe to run as is**: port the station colour retune (issue 1), fix the guard's per-camera blindness
    (2), bound blocking calls by the deadline (3), clear done evidence on restart (4), merge `engine-bot-live` (9), and

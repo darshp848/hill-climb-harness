@@ -9,8 +9,8 @@ read from the NUC over SSH (no robot commands, no acting station calls, no Dream
 
 | Item | Value |
 |---|---|
-| Model | **`dream-1-ft:bb4b9e5f-relay-final`**, ready 07:02, warm 07:14 (8 Nov) |
-| Job / dataset | `ftj_fdff469db8e2b643` / `ds_5ae1c3b4e8739af1` (`relay-final`), queued 22:54–23:00 7 Nov from tmux `finetune` |
+| Model | **`relay-final`** fine-tune of Dream-1, ready 07:02, warm 07:14 (8 Nov) |
+| Job | queued 22:54–23:00 7 Nov |
 | Data | 170 episodes, 48,413 frames (§8.3) |
 | Hyperparameters | 1,000 steps, lr 1e-5, batch 32, `use_eef: true`, constant schedule, `base_share` 0.5; final loss 0.0034 |
 | Training time | queued 23:00, training 23:20 → 05:56 (0.4 min/step), saving to 07:01 |
@@ -60,7 +60,7 @@ Mean action − state, right arm, **slow frames only** (joint speed < 0.15 rad/s
 Mechanism: the kit's `MetalFollower` sends zero torque, so each joint sits below its target by gravity over kp; the
 leader path adds `FollowerGravity`; Dream's station driver also sends gravity torque (live command − measured on slow
 frames ≤ 0.016 rad). In a Quest episode the model learns that holding the arm at height z takes a command at
-**z + 5.5 cm**. Live, that command is reached, so the arm rises and is asked to rise again. Leader episodes say the
+**z + 3.7 to 5.4 cm**, depending on the Quest recording set (+54, +37 and +48 mm on slow frames; leader sets −5 to +7 mm). Live, that command is reached, so the arm rises and is asked to rise again. Leader episodes say the
 opposite for the same scene and state: **two incompatible state → action maps**. Quest datasets also show 9–10°
 median rotation error between action and state (leader 2–3°).
 
@@ -77,7 +77,7 @@ The effect on behaviour is an inference from these numbers; the policy was not r
 | 2 | Almost no demos start from home: **9 of 69 unplugs** start within 0.3 rad of it (median start distance 2.14 rad); put-down 0 of 55; plug-in 0 of 19 | solid as a fact, effect unproven | no (the start-pose gate logs it) |
 | 3 | Stack and balls thin and left-armed (4 block demos, all left arm; 12 balls); "open both grippers and move the arms up" and `tower_prompts` texts are not in the trained set | solid | yes: base Dream-1 for those stages |
 | 4 | Left arm parked elsewhere in 17 Quest episodes (4.4 / 2.1 / 2.5–2.7 rad from live home) | moderate | no |
-| 5 | 20 Hz playback of a 30 fps-trained model; live command→measured lag 160–200 ms vs 83–117 ms in the recordings (~80 ms extra) | real but ~1 cm at < 0.1 m/s | optional A/B (`control_hz: 30`, `PAH_FF_TAU_S=0.15`) — not together with a data fix |
+| 5 | 20 Hz playback of a model trained on nominal-30 fps data; live command→measured lag 160–200 ms vs 83–117 ms in the recordings (~80 ms extra) | real but ~1 cm at < 0.1 m/s | optional A/B (`control_hz: 30`, `PAH_FF_TAU_S=0.15`) — not together with a data fix |
 | 6 | One 257 mm action jump (Quest ep 36, frame 245); ~20 Quest episodes with 30–52 mm steps | minor | drop ep 36 |
 
 Ruled out: camera keys, swaps, rotation, colour, resolution (640×360 from 1280×720), overhead camera moved (< 2 px),
@@ -121,7 +121,7 @@ the client turns them into joints in `dream.client_ik.ClientIK.solve` on the sta
 
 Checked in sim on run-3 chunks with Dream's real ClientIK (`station_addons/bench_eef_override.py`): no override →
 solved path within 0.1 cm (right) / 0.3 cm (left); `0,0,-0.02` → right hand −1.97 cm, left −1.57 cm. This is the
-"ft-joint-offset / EEF override" of the brief. It was never tried on the arm with the fine-tune; the station ran base
+"ft-joint-offset / EEF override" of the brief. It was never tried on the arm with the fine-tune; the last bot plans ran base
 Dream-1. (The Cartesian z-offset variants hit joint limits on 971–4,138 of 13,595 ticks in the replay, which is why
 the diagnosis preferred a joint-space offset.)
 
@@ -136,7 +136,7 @@ the diagnosis preferred a joint-space offset.)
 5. Consider `lr_schedule: cosine`.
 
 A 500-step job takes ~5 h from queueing; `resume_from` also has a 500-step minimum and starts from the biased
-weights. **A fair sim A/B cannot run with our sims**: `sim_station.py` drives Dream's YAM simulator and the fine-tune
+weights. **A fair sim A/B cannot run with these sims**: `sim_station.py` drives Dream's YAM simulator and the fine-tune
 is a Metal embodiment.
 
 ## 9.7 Base vs fine-tune from the station logs [D]

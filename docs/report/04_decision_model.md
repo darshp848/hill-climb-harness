@@ -14,7 +14,7 @@ match decision**: it ran in shadow mode only.
 T_\text{stage} = T_\text{start} + \frac{T_\text{robot}}{u} + T_\text{detect} + T_\text{decide}
 ```
 
-with $u$ the share of time the arms actually move. On the station $u \approx 0.70$ because 2/3 of chunks were
+with $u$ the share of time the arms actually move. In stop-and-wait mode $u \approx 0.68$ (2.4 s of motion per 3.54 s cycle), and 2/3 of station chunks were
 stop-and-wait (F1). The levers ranked by expected gain (`DECISION_MODEL.md` §1): L1 get Dream into async (network,
 light frames), L2 event-driven stage-done from local sensors (4–7 s per boundary), L3 never `/start` mid-match
 (2.9 s each), L4 skip VLM checks the gripper sensors can answer (~4 s per skippable stage), L5 faster judge.
@@ -102,7 +102,7 @@ timeouts late in a match and longer ones early. This replaces a fixed `timeout_s
 | put_cable_down, release_before_stack, stack_two, plug_loose_cable | 0.02 (floor) | 0 | 292.84 | 19 / 9 / 8 / 5 | 0 |
 | watcher_into_place | 1.0 | 5.71 | 2.81 | — | — |
 
-The commit message (c2098dc) and the paper say "unplug p_max 0.64, none before ~23 s, **median 56 s**".
+The commit message (c2098dc) and an earlier draft of the paper say "unplug p_max 0.64, none before ~23 s, **median 56 s**".
 **Not reproducible from the JSON:** with these parameters the time to half the ceiling is
 $t_\text{min} + \tau_c\ln 2 \approx 96$ s (88 s if conditioned on success within 292 s). The 56 s may be the
 empirical median of the 19 successful attempts; the attempt-level data is not in the repo. Flagged in §13.
@@ -122,8 +122,8 @@ the expected detection delay. Example: $\alpha = 0.10$, $k=2$ gives 1 %; $k=3$ g
 **The independence assumption is the weak point.** The stress sim found two DQs (`false_done_unplug` and
 `false_done_all`, same seed) where two false "cable out" verdicts from **two calls in flight** landed seconds apart
 on near-identical frames and passed `confirm: 2` (`FINAL_HARNESS.md`). Correlated looks make the effective $k$ close
-to 1. The fixes are a minimum gap between confirming verdicts (`confirm_gap_s`, 3 s default in `statespace.py`, 0 on
-cloud-sims' runner per audit A03) and a confirming look from a different model (Sonnet `confirm_check` on the bot
+to 1. Two candidate fixes are a minimum gap between confirming verdicts (`confirm_gap_s`, 3 s default in `statespace.py`, 0 on
+cloud-sims' runner per audit A03; no plan sets it and it was never stress-tested) and a confirming look from a different model (Sonnet `confirm_check` on the bot
 line). Audit A03 also notes that the 15 s sticky-done window lets a tower that falls and is re-placed pass.
 
 ## 4.6 Tuning objective (planned, not run)

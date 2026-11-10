@@ -51,12 +51,12 @@ Offline on the kit's test arm with 2 mm tracking noise: tool jitter 4.7× lower 
 - **`TrackingJumpGuard`** (line 74): a controller jump of 8 cm or 45° in one reading is a glitch; the arm holds until
   the clutch re-engages.
 - **`per_joint_caps`** (line 102): wrist joints 4 rad/s instead of 2.5, plus a faster rotation filter: wrist lag
-  105 → 27 ms in the offline replay [D].
+  105 → 27 ms on a separate 14-episode leader-motion bench [D].
 - Homing: a low tool lifts straight up at 0.1 m/s before the joint-space move home; pressing home twice within 2 s
   discards the episode and homes.
 - `quest/bench/` (`bench_ik.py`, `resp.py`, `final.py`, `ratio.py`, `guard.py`, `metal.urdf`): the replay bench behind
   these numbers; needs numpy, pandas, pyarrow ≥ 21, mujoco and mink 1.1.0 and the datasets copied off the NUC.
-- **Never run on the robot**: the NUC dry run was held at 02:49 UTC 8 Nov while the team was recording; the 5 new
+- **Never run on the robot**: the NUC dry run was put on hold at 02:49 UTC 8 Nov while the team was recording and has not happened; the 5 new
   tests have not run on the NUC either. An uncommitted NUC edit to `metal/leader_collect.py` on this branch is saved as
   `nuc/follower_code_quest-continuity_uncommitted.diff` on `station-tuning` (dashboard grip override with ramp,
   kinesthetic mode, read retry per Kaushik's notes).
@@ -107,7 +107,7 @@ review applied:
 | **Total** | **73 Quest + 97 leader** | **170** |
 
 Per task: 69 unplug, 55 put down, 19 plug-in, 12 ball, 10 cylinder in a block's hole, 4 block, 1 cylinder on top;
-26.9 min; **48,413 frames** at 30 fps (Dream's check) — the kit's check said 48,428. State 34 wide, action 32. Final
+26.9 min; **48,413 frames** at a nominal 30 fps (Dream's check) — the kit's check said 48,428. State 34 wide, action 32. Final
 checks at 23:00 all passed (`check_dataset.py --videos`: 0 errors, 0 warnings; laptop copies byte-identical).
 
 Human teleop speeds: unplug median 8.5 s (15 demos), put-down 4.8 s (9 demos) [D].

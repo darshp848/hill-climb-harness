@@ -4,7 +4,7 @@
 
 ## 1.1 The event
 
-Physical AI Hacks (MakerMods × Dream Labs), 7–8 Nov 2026. Our team (Daniel Carrera, David Carrera, Kaushik Kanna,
+Physical AI Hacks (MakerMods × Dream Labs), 7–8 Nov 2026. The team (Daniel Carrera, David Carrera, Kaushik Kanna,
 Muhammad Mukthar, Darsh Patel) entered the **Hill Climb** track: a timed, five-minute, 1v1 relay on a two-arm
 MakerMods Metal station driven by Dream Labs' hosted **Dream-1** vision-language-action (VLA) policy. No human input
 is allowed after "go". The only controls a team has are the words sent to the policy, when to stop, home or reset
@@ -28,7 +28,7 @@ Two properties of this rubric shaped the whole design:
 
 1. **Gates are irreversible.** A false "stage done" on a pass bar makes the harness move on, and touching a block
    before a cable is out is a DQ. A supervisor false positive is therefore worse than a supervisor false negative.
-2. **One illegal ball loses everything.** On our table the **white** golf ball is illegal and the green, yellow and
+2. **One illegal ball loses everything.** On the team's table the **white** golf ball is illegal and the green, yellow and
    orange balls are legal (Darsh, 8 Nov; `plans/table_colors.yaml` header). The rubric also mentions black 8-balls;
    the harness guards against both. In the MuJoCo sim the colours were at first reversed (white legal, black
    8-ball illegal), which matters when reading sim results (§6).
@@ -58,11 +58,11 @@ only in the relay state machine draft (`docs/STATE_MACHINE.md`, `plans/relay_sm_
 flowchart LR
     subgraph Cloud[Dream Labs cloud]
       D1[Dream-1 model<br/>~293 ms serve]
-      GW[Gateway<br/>~650-990 ms overhead]
+      GW[Gateway<br/>993 ms median as logged]
     end
     subgraph NUC[Station NUC]
       AG[Station agent HTTP :8091<br/>/status /start /stop /home /reset /prompt]
-      ADD[Our add-ons via sitecustomize<br/>/frame /arms /move /pose<br/>+ opt-in PAH_* hooks]
+      ADD[Harness add-ons via sitecustomize<br/>/frame /arms /move /pose<br/>+ opt-in PAH_* hooks]
       PACE[Pacer: async if median RTT < 900 ms<br/>else sync stop-and-wait]
       CMD[Command thread 250 Hz<br/>interpolates 20 Hz rows]
       BUS[Metal bus thread 30 Hz<br/>reads state, sends MIT frames]
@@ -75,7 +75,7 @@ flowchart LR
 
 | Layer | Rate | Notes |
 |---|---|---|
-| Policy chunk | 48 rows played at **20 Hz** = 2.4 s per chunk | `control_hz` 20; the fine-tune was trained at 30 fps ("20 Hz plays every plan at two thirds speed") |
+| Policy chunk | 48 rows played at **20 Hz** = 2.4 s per chunk | `control_hz` 20; the fine-tune data has a nominal 30 fps timestamp rate ("20 Hz plays every plan at two thirds speed") |
 | Command thread | 250 Hz (240 measured) | interpolates rows |
 | Metal bus thread | **30 Hz, hard-coded** (`robots/metal.py ARM.tick_hz`) | so 7 of every 8 interpolated commands never reach a motor |
 | Velocity feed-forward | low-pass `FF_ALPHA = 0.04` per tick ≈ **0.8 s** time constant | lags any motion shorter than ~1 s |
@@ -89,7 +89,7 @@ The **station agent** (Dream's) serves, on `127.0.0.1:8091`: `/status`, `/start`
 `/prompt`. One prompt drives **both** arms; there is no per-arm command and no way to run two sessions on one
 station (`docs/DECISION_MODEL.md` §2).
 
-Our **station add-on** (`station_addons/sitecustomize.py`, loaded with `PYTHONPATH=.../station_addons dreamcli robot up`)
+The **station add-on** (`station_addons/sitecustomize.py`, loaded with `PYTHONPATH=.../station_addons dreamcli robot up`)
 adds:
 
 | Route | What | Used by |

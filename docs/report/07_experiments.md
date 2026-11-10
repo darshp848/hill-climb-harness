@@ -17,9 +17,9 @@ Raw file: `task_simulation/data/station_nuc_20261108_late/robots-inference.jsonl
 | Round trip (rtt_ms): median / p10 / p90 / max | **1,116 / 800 / 2,733 / 8,655 ms** |
 | Model serving (`serve_infer_ms`) median | 293 ms |
 | Network (`network_ms`) median | 40 ms |
-| Gateway (`gateway_ms`, as logged; includes upload) median | 992 ms |
+| Gateway (`gateway_ms`, as logged; includes upload) median | 993 ms |
 | RTT − serve − network, median over all chunks | 740 ms |
-| Chunks with uplink ≥ 50 Mbit/s: n, RTT median, gateway median | 619, 900 ms, 780 ms (→ ~607 ms fixed overhead beyond the 293 ms model) |
+| Chunks with uplink ≥ 50 Mbit/s: n, RTT median, gateway median | 619, 900 ms, 780 ms (the separately logged medians do not add up, so no fixed overhead follows by subtraction) |
 | Chunks with uplink ≤ 9 Mbit/s: n, RTT median | 266, 2,228 ms |
 | Request size median | 1.61 MB |
 | Sync vs async chunks | **1,101 sync (66.7 %)**, 549 async |
@@ -28,11 +28,11 @@ Raw file: `task_simulation/data/station_nuc_20261108_late/robots-inference.jsonl
 | Errors | 16 (table in §10) |
 
 The first 19 runs alone (`data/station_nuc_20261107/`, 1,186 chunks to 00:02 UTC 8 Nov) give median 1,062 ms, 767
-sync / 419 async. The paper's "at 8.8 Mbit/s up, calls took 4.7 s" is a single example we did not re-derive.
+sync / 419 async. The paper's "at 8.8 Mbit/s up, calls took 4.7 s" is a single example from the project notes, taken at 12:03–12:05 PST on 8 Nov, outside this log's window.
 
 Interpretation: the pacer switches to stop-and-wait above a 0.9 s median, and the median sits right on it, so the
-arms stood still ~30 % of the time (2.4 s of motion per 3.54 s). The harness adds 5–8 s per stage boundary (a poll, a
-judge call, a confirming look), 25–40 s of a 300 s match [D: `DECISION_MODEL.md` F4].
+arms had queued motion for about two thirds of each stop-and-wait cycle (2.4 s per 3.54 s; computed, not observed). The harness adds 5–8 s per stage boundary (a poll, a
+judge call, a confirming look), an estimated 25–40 s over four or five stages [D: `HARNESS_SPEED_STATE_SPACE_2026-11-07.md`, which says of a 3-minute match].
 
 ### 7.1.1 Metal driver on a simulated Damiao bus [D]
 
@@ -64,7 +64,7 @@ Files: `task_simulation/results/stress/main_3055bf3_part{1,2}.txt`, `main_d93864
 | IK SVD failure | 10, 0, 10, 10 (ended) | 83, 84, 95, 95 |
 | Corrupt first frame | 20, 15, 20, 20 | 83, 94, 95, 95 (the paper prints "83–90") |
 | Policy keeps the unplugged plug | re-plugged it 4/4 (`replug=4`) | never |
-| Illegal ball, 6 seeds, frames 2 s old | lost 4/6 (`black_ball_lagged`) | lost 2/6 with the local detector guard |
+| Illegal ball, 6 seeds, frames 2 s old (a separate comparison on one build: without vs with the local detector) | lost 4/6 without (`black_ball_lagged`) | lost 2/6 with the local detector guard |
 | Unplug brushes a block (`reach_across`) | DQ 4/4 | DQ 4/4 |
 
 The plug case mattered most: when the policy kept the unplugged plug, the old harness's next prompt led it to plug the
@@ -86,10 +86,10 @@ Recomputed with `results/stress/final_20261108/analyze.py` over `out/*.jsonl`:
 | **final_hybrid_fast_live** | 185 | **69.8** | **4 (4 / 0)** | 179 | 139 | 2.90 | 35 |
 | build_v4 / build_hybrid (8 scenarios, 5 seeds) | 40 / 40 | 50.0 / 52.0 | 0 | 35 | 29 | 0.00 / 0.03 | 0 |
 
-`FINAL_HARNESS.md` and the paper give a 95 % CI of 65.3–74.4 for final_hybrid_fast_live; we did not recompute the
-bootstrap. Readings: judge speed is the main lever on points (a slow judge rarely reaches the balls); a fast judge
-**without** the live guard lost 28 (hybrid) and 34 (long plan) matches to the illegal ball; with the guard and sensor
-overrides none. The 4 shared losses are `reach_across` DQs, which no supervisor can undo. Two extra DQs in
+`FINAL_HARNESS.md` and the paper give a 95 % CI of 65.3–74.4 for final_hybrid_fast_live, which a later recomputation with `paper/make_figures.py` reproduced.
+Readings: judge speed is the main lever on points (a slow judge rarely reaches the balls); a fast judge
+**without** the live guard lost 28 (hybrid) and 34 (long plan) matches to the illegal ball; the final build with the guard
+lost none. Both runs used `--grippers`, the builds differ, and the guard's detector here reads the simulated held object. The 4 shared losses are `reach_across` DQs, which no supervisor can undo. Two extra DQs in
 final_v4_fast_live came from two correlated false "cable out" verdicts with two calls in flight (§4.5). Removing
 synchronous entry checks from stages the sensors can answer raised mean points 54.9 → 60.0 with no new losses
 (24 scenarios × 4 seeds, `--latency 6.5-13`; task_simulation README) [D].
@@ -97,7 +97,7 @@ synchronous entry checks from stages the sensors can answer raised mean points 5
 **Caveat:** the sweep's 13 extra scenarios are not in any committed file and the worktree commits it used are not
 recorded, so it cannot be re-run exactly (§13).
 
-### 7.2.3 Our own reruns of the committed stress sim (9 Nov) [V]
+### 7.2.3 This report's reruns of the committed stress sim (9 Nov) [V]
 
 `python experiments/stress_match.py --seeds 5 -j 8` on each branch's own code and default per-scenario settings
 (each scenario's own plan, default latency, no `--live-guard`), 24 scenarios × 5 seeds = 120 matches:
@@ -119,7 +119,7 @@ See §5.1.3 (full 25-configuration table, verified).
 ## 7.4 Local classifiers on station data
 
 See §5.2 (detector: held-out ball recall 20/27 → 26/27 at 100 % precision; blocks 16/23 → 23/23), §5.3 (cable ends:
-USB-A recall 0.68 → 0.84, USB-C precision 0.83 → 0.92), §5.5 (joint faults), and our main-vs-retune guard check
+USB-A recall 0.68 → 0.84, USB-C precision 0.83 → 0.92), §5.5 (joint faults), and this report's main-vs-retune guard check
 (§5.2.4).
 
 ## 7.5 The policy under the harness in MuJoCo (table v1)
@@ -138,9 +138,9 @@ USB-A recall 0.68 → 0.84, USB-C precision 0.83 → 0.92), §5.5 (joint faults)
 | smoke | 1 | 0 | 0 | 0 |
 | **Total** | **25** | **14** | **3** | |
 
-Base Dream-1 unplugged a cable in 14 of 25 matches; first unplug median 57 s, range 28–269 s [D:
-`LAST_NIGHT_2026-11-08.md`; per-match `stage1_at` is in the referee JSON]; then it **kept holding the plug**: put-down
-0 of 54 tries, stack 0 of 25, balls never reached [D]. All 3 DQs came with the hub on the left, where the prompts no
+Base Dream-1 unplugged a cable in 14 of 25 matches (one of the 25 is a smoke test). A successful unplug stage took a median of 57 s, range 28–269 s; the referee's time to first unplug has a median of 38.3 s (17.6–189.4 s) [V; notes in
+`LAST_NIGHT_2026-11-08.md`]. Then it **kept holding the plug**: put-down
+0 of 54 tries [D, notes only]; a stacking stage started in 9 matches and all 23 tries failed [V, `events.jsonl`]; balls never reached. All 3 DQs (two block touches, one ball touch) came with the hub on the left, where the prompts no
 longer matched the scene.
 
 ### 7.5.2 Arm naming (dual-arm benchmark, `codex/dual-arm-experiment`) [D]
@@ -172,7 +172,7 @@ lift ≥ 5 cm while holding, scripted pull still holding after +10 cm, closures/
 
 | Task | Prompt family (abridged) | Outcome |
 |---|---|---|
-| Unplug | U10 "With the right gripper **half open**, move down onto the plug…, close…" + harness +10 cm `/move` | jaws on the plug body in **15 of 26** steps (58 %); 12 scripted pulls, **8 still held the plug** after the lift |
+| Unplug | U10 "With the right gripper **half open**, move down onto the plug…, close…" + scripted +10 cm `/move`, sent by hand in a Claude Opus session (11:10–13:04) | jaws on the plug body in **15 of 26** steps (58 %); 12 scripted pulls, **8 still held the plug** after the lift |
 | Unplug | U7 "Remove the first cable on the right… then place it on the right side" | one cable by Dream alone, then 0 in 4 repeats |
 | Unplug | U6 "grip the plug body of the rightmost cable… pull it straight up" | 1 cable, lifted 23 cm (n = 1) |
 | Unplug | U3 writer default "grip the **hard** plug body…" | 4 plug / 7 wire grips (31 % on the plug); 0 confirmed |
@@ -218,7 +218,7 @@ Invalid reasons: "harness stopped on an error" + "no judge verdicts" (11), "harn
 stopped at **12:04:48 UTC** when every Dream call began returning `DA-1000 UNAUTHORIZED (disabled)` — the account had
 run out of inference credit while account calls (listing models) kept working; ~28 sessions were open. Arm B has no
 valid match at all, so `HILL_CLIMB_LOG.md` stays empty and **round 1 cannot separate the arms**. A rerun of the
-relay batch hit the same limit 34–99 s into each match [D]. Six invalid laptop-run errors were Dream refusing the
+relay batch hit the same limit 34–99 s into each match [U, no log in any repo]. Six invalid laptop-run errors were Dream refusing the
 plug-in prompt (DA-4000 "Plugging cords into power strips…"). Lesson: probe Dream with one call before every batch
 (asked for at 14:57, never built; `LAST_NIGHT` to-do #3).
 
@@ -231,6 +231,6 @@ all day was one block carried for ~110 s at 13:18; cold starts of 3+ min.
 ## 7.9 What is missing
 
 There is **no logged per-stage success rate from complete five-minute harness matches on the station**. The
-inference log records calls and errors, not outcomes; the prompt study scores individual rollouts; match-day results
+inference log records calls and errors, not outcomes; the prompt study scores individual rollouts; the team placed 5th of 8, and per-match results
 (if any were recorded) are not in the repos. The harness was also never compared against plain Dream-1 on the station
 with the same prompt.

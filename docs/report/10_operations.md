@@ -30,7 +30,7 @@ electrical/equipment…").
 
 | Error | When | Meaning |
 |---|---|---|
-| `DA-1000 UNAUTHORIZED (disabled)` | 12:04:48 UTC to the end of the runs, 83 log lines | **Out of inference credit.** Reads like a revoked key while account calls (listing models) keep working. ~28 concurrent sessions were open; happened twice on 8 Nov. Topped up by Darsh. |
+| `DA-1000 UNAUTHORIZED (disabled)` | 12:04:48 UTC to the end of the runs, 83 log lines | **Out of inference credit.** Reads like a revoked key while account calls (listing models) keep working. ~28 concurrent sessions were open; happened twice on 8 Nov. |
 | DA-4000 (plug-in prompt) | round 1, 6 lines | safety refusal |
 | `DA-6000 GATEWAY_FAULT (connection_timed_out)` | night of 8 Nov, 2 mentions | transient; restart |
 
@@ -42,8 +42,8 @@ match (c80189c).
 
 | Failure | Cause | Mitigation |
 |---|---|---|
-| Arm stands still ~30 % of the time | median RTT above the 900 ms pacer threshold → sync | light frames; wired network; station-side hedging; keep the harness's own traffic small |
-| Calls of 2–6 s | the harness pulled ~2 MB debug-view trips | `/frame/<cam>.jpg?w=640` (~35 KB) |
+| Arm has no queued motion for about a third of each stop-and-wait cycle (computed) | median RTT above the 900 ms pacer threshold → sync | light frames; wired network; station-side hedging; keep the harness's own traffic small |
+| Calls of 2–6 s | the harness pulled ~2 MB debug-view trips (one note, no controlled comparison) | `/frame/<cam>.jpg?w=640` (~35 KB) |
 | 7–12 s discarded first answers after `/start`; fine-tune cold start 3–15 min | session warm-up | never `/start` mid-match; lock with a prompt instead of `/stop` |
 | Lost run record | Dream overwrites `last-run.csv` on every `/start`; the archiver polls every 3 s | `ARCHIVE_WAIT_S = 4` before a restart |
 | Restart from 10+ cm up → SVD error → full `/reset` | IK seeded far from Dream's last state | the pull skill lowers back before handing back to Dream (`runner.py:970-973`, e8e1489) |

@@ -7,15 +7,15 @@ are marked with the branch name.
 
 ## 3.1 Principles
 
-1. **Never command a motor.** The harness has no robot driver. It talks only to Dream's station agent and our add-on
+1. **Never command a motor.** The harness has no robot driver. It talks only to Dream's station agent and the harness add-on
    over HTTP. Speed caps, clamps, the control loop and homing stay inside Dream's code. The one exception is the
    add-on's bounded `/move` (≤ 12 cm per call), used by the grip-assist skill while Dream is stopped.
 2. **Keep safety off the slow path.** Anything that must stop the arms (the illegal-ball live guard) runs locally at
    frame rate and sends `/stop` itself.
 3. **Confirm from independent evidence.** A false "done" on a pass bar is a DQ, so passes need two agreeing looks,
    sensors can veto images, and the same frames judged twice count once.
-4. **No free text to the robot** (prompt-engine line). Every instruction comes from a template that worked on the
-   station, linted at load.
+4. **No free text to the robot** (prompt-engine line). Stage instructions come from templates that worked on the
+   station, linted at load; lock, recovery and put-down prompts are fixed text.
 
 ## 3.2 Component map
 
@@ -80,7 +80,7 @@ sequenceDiagram
     participant S as Station agent
     participant M as Monitor (fast) / Confirm (Sonnet)
     participant G as LiveGuard (10 Hz)
-    H->>S: GET /status (preflight: idle, arms alive, cameras under 2 s old)
+    H->>S: GET /status (preflight: idle or error, arms alive, cameras under 2 s old)
     H->>S: POST /reset (reset_first, skipped while the live guard is armed)
     loop each stage
       H->>G: arm(stage) if the plan guard covers it
@@ -161,7 +161,7 @@ Per poll (every `check_every_s`, 1.0 s in `bot_v1.yaml`):
 
 `on_fail` ∈ `retry_in_place` (default), `home_and_retry`, `skip`, `abort`, `retry_then_skip` (`plan.py:16`).
 Retries use `/prompt` on the running session, not `/stop` + `/start`, because a fresh `/start` costs 2.9 s median.
-Pass-bar stages use `max_attempts: 99` ("keep trying until the clock runs out"), because moving on from an unmet pass
+Four v4 stages (`unplug_cable`, `stack_2`, `stack_3`, `tower_pass`) use `max_attempts: 99` ("keep trying until the clock runs out"), because moving on from an unmet pass
 bar means touching the next stage's objects (a DQ). The relay state machine adds `retry_then_skip` with Darsh's rule
 (2 tries, 3 at ≥ 20 points; pass bars exempt) and `not_after_s` match-clock cutoffs (`runner.py:1242-1243,
 1385-1386`; `docs/STATE_MACHINE.md`).
@@ -213,7 +213,7 @@ fast monitor missed a four-cube tower.
 |---|---|---|
 | Match budget | `time_budget_s: 295` (bot_v1); checked in `_check_global` | `runner.py:316-323` |
 | Per-stage cutoff on the match clock | `not_after_s` (relay plans: no new plug-in try after 150 s, tower extras by 230 s) | `runner.py:1242`; `docs/STATE_MACHINE.md` |
-| Retry budget | `max_attempts` (99 for pass bars, 1 + `on_fail: skip` for bot_v1 stacking) | `runner.py:1365-1369` |
+| Retry budget | `max_attempts` (99 for the four v4 pass-bar stages, 1 + `on_fail: skip` for bot_v1 stacking) | `runner.py:1365-1369` |
 | Per-try timeout | `timeout_s` + one `CONFIRM_GRACE_S = 10` s when a done awaits its confirming look + one `EXTEND_S = 20` s when the monitor sees the gripper on the target with progress ≥ 0.5 | `runner.py:826-837, 1078-1084` |
 
 In the final `bot_v1.yaml` every stage has `timeout_s: 295` ("no per-stage limit (Kaushik, 8 Nov): only the 5 min
@@ -262,7 +262,7 @@ stick upright on top of the stack"); 72bf0b3 made `hill_climb_v4.yaml` send only
 Base Dream-1 refuses cable work without a true safety statement (4 × DA-4000 on 7 Nov). The `safe` variable
 (`plans/bot_v1.yaml:43`): "The power strip is unplugged from the wall and has no power; the orange cords are
 insulated low-voltage USB cables, not bare wires." `FINAL_HARNESS.md` insists: keep it only while it is literally
-true. We did not try to trick the filter.
+true. No prompt tried to trick the filter.
 
 ### 3.5.3 Mid-grasp rule
 
@@ -305,7 +305,7 @@ close → re-read; check `min_z` from `/pose`; squeeze in place and re-read (Dre
 error and a full `/reset`); then put-down / drop / re-approach. Every `/move` goes through `_motion`.
 
 The harness pull was the only thing that unplugged reliably on the bot: "2/2 plugs held through the pull on 8 Nov"
-(`plans/bot_v1.yaml:4-6`), and in Daniel's study 8 of 12 harness pulls still held the plug after a 10 cm lift (§7.6).
+(`plans/bot_v1.yaml:4-6`), and in Daniel's study 8 of 12 scripted pulls still held the plug after a 10 cm lift (§7.6; a Claude Opus session sent them by hand).
 An opt-in station hook (`ee-pull-force`, `PAH_PULL_FORCE_N=r:20`) adds a 20 N upward force while the right gripper
 holds; in the 13:47–14:28 replay it **fired 70 times, including on empty closes at home**, and 65 of 70 ended "moved:
 out, or nothing held it", which cannot tell a pulled plug from an empty gripper. Verdict there: gate it to unplug
@@ -313,10 +313,10 @@ steps or turn it off.
 
 ## 3.7 Keeping the policy fed: pacing, light frames, hedging, pipelining
 
-| Change | Where | Effect (as measured) |
+| Change | Where | Effect (as noted or measured) |
 |---|---|---|
-| Light frames: `/frame/<cam>.jpg?w=640` (~35 KB) instead of ~2 MB debug-view trips | hybrid → main | Dream's round trip went from 2–6 s to ~0.8 s once the harness stopped pulling trips (`FINAL_HARNESS.md`) |
-| Dream async pacing at 2 Hz in the sim (`execution_horizon` 10 at 20 Hz), physics never holds for inference | cloud-sims (090df7c) | A laptop match logged **5.96 requests/s at 0.625 s p50 RTT** in a live snapshot (`results/cloud_round1_20261108/laptop/.../hybrid_v4-6/live/status.json`); the final `match.json` of that match says 5.52 Hz |
+| Light frames: `/frame/<cam>.jpg?w=640` (~35 KB) instead of ~2 MB debug-view trips | hybrid → main | Dream's round trip went from 2–6 s to ~0.8 s once the harness stopped pulling trips (a single note in `FINAL_HARNESS.md`, not a controlled comparison) |
+| Dream async pacing at 2 Hz in the sim (`execution_horizon` 10 at 20 Hz), physics never holds for inference | cloud-sims (090df7c) | A laptop match logged 5.96 requests/s at 0.625 s p50 RTT in a late live snapshot (`results/cloud_round1_20261108/laptop/.../hybrid_v4-6/live/status.json`); over the whole match its `match.json` gives **5.52 requests/s at a 0.61 s median** |
 | `PipelinedPolicy`: two sessions in turn so a request leaves before the previous answer returns | cloud-sims | doubles Dream usage |
 | Hedged Dream calls on the station: `HedgedPolicy`, N sessions fed the same observation, first reply drives the arms, losers' sockets cut | `station_addons/pah_hedge.py` (main) | env `PAH_HEDGE_N=2 PAH_HEDGE_CUTOFF_S=1.5 PAH_HEDGE_MAX_CALLS=3`; a cut call may still be billed; tested offline only (`tests/test_pah_hedge.py`) |
 | Hedged monitor calls: `claude.hedge: 2` | `harness/hedge.py` | first parseable answer wins; cost × N |
@@ -324,9 +324,9 @@ steps or turn it off.
 
 Pacing facts behind this (`docs/DECISION_MODEL.md` F1–F2, verified in §7.1): Dream's client goes **sync** whenever the
 median round trip is over **900 ms**, waiting for each 2.4 s chunk; sync chunks arrived every **3.54 s** (median)
-against **1.55 s** in async mode, so the arms stood still about 30 % of the time. The round trip is ~950 ms even with
-a fast uplink because roughly **650 ms is gateway overhead** we cannot change: on chunks with ≥ 50 Mbit/s uplink the
-median RTT was 900 ms with a 293 ms model time (our recomputation: ~607 ms overhead; over all chunks RTT − serve −
+against **1.55 s** in async mode, so in sync mode about a third of each cycle has no queued motion (computed from the log, not observed). The round trip stays near the threshold even with
+a fast uplink: on chunks with ≥ 50 Mbit/s uplink the
+median RTT was 900 ms with a 293 ms model time. The gateway's own logged median is 993 ms over all chunks, and the separately logged medians do not add up, so no fixed overhead follows by subtraction (over all chunks RTT − serve −
 network has a median of 740 ms). Each request carries ~1.6 MB of images, so uplink matters: chunks at ≤ 9 Mbit/s had
 a median RTT of 2.2 s.
 
@@ -356,8 +356,8 @@ the phone-photo range.
 `harness/start_pose.py` (on `start-pose-live-guard` and the cloud-sims family, **not on main**). Reference: the first
 frame of every task segment in the teleop episodes, keyed by the exact task text (`plans/start_poses.json`, built by
 `tools/start_poses.py`). Joint state comes from `GET /arms` `positions_rad` or the newest trip's observation. Before
-each stage the harness logs the distance to the recorded starts for that prompt; on stages marked `home_before` it
-homes once if any joint is more than **0.35 rad** from every recorded start (paper §4.7). Motivation: LIBERO-Plus
+each stage the harness logs the distance to the recorded starts for that prompt; on stages marked `home_before` (the unplug stage) it
+homes and restarts once if any joint is more than **0.35 rad** from every recorded start (paper §4.7). Motivation: LIBERO-Plus
 reports the initial state as the largest single robustness loss for a VLA, and the FT diagnosis found only 9 of 69
 unplug demos started within 0.3 rad of the home pose every live run starts from. The audit (A25) notes the gate is
 advisory on several failure paths.

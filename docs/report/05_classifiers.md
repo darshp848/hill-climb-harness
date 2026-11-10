@@ -57,7 +57,7 @@ The design rule: slow, general judgements gate progress; fast, narrow ones guard
 
 Same frames for every configuration: the real `MonitorVerifier` request built from station photos and two MuJoCo
 scenes with known answers, translated to OpenRouter's Chat Completions format (`docs/OPENROUTER_RESEARCH.md`).
-60 decisions per configuration, 30 of them the guard question ("is a gripper holding the illegal ball?"). Results in
+60 calls per configuration, six fixed cases asked ten times each. 30 calls carry the guard question ("is a gripper holding the illegal ball?"): ten looks at one simulated held-8-ball image and twenty at frames with none. Results in
 `task_simulation/results/judge_bench_20261108/bench_fair/*/summary.csv` [V], sorted by accuracy then latency:
 
 | Config (backend:model, reasoning) | Done acc. % | Guard acc. % | Parse fail % | Transport fail % | p50 s | p90 s | $ per 60 decisions |
@@ -92,21 +92,21 @@ Readings:
 
 - Done questions are easy for strong models; **the guard question separates them**. GPT-6.1 Terra with no reasoning:
   98 % done, 97 % guard at a 2.78 s median, **$0.047 per 60-decision match** [V]; with low reasoning 100 %/100 % at
-  3.72 s, $0.066 (the paper's "about $0.07"). Haiku 5.5 low 100/93 at 4.5 s; Sonnet 5.5 (subscription) 100/100 at
+  3.72 s, $0.066 (the paper's "about $0.07"). Haiku 5.5 low (OpenRouter) 100/93 at 4.5 s; Sonnet 5.5 (subscription CLI, low effort) 100/100 at
   7.1 s. Gemini Flash-Lite was the fastest usable judge but missed stage completions (80–90 % done).
-- With 30 guard questions a perfect score has a 95 % lower bound near 88 % (rule of three: 1 − 3/30 = 0.90; Wilson
-  ≈ 0.886), so the ranking is coarse.
-- A separate 120-decision run (`bench_fair/TABLE.md`, hedge 1) caught a held 8-ball with Haiku 5.5 only **55 %** of
-  the time, Gemma 4 85 %, Flash-Lite 70 % [V]. **No judge stands alone on safety**, which is why the guard decision is
+- The 30 guard calls are repeats of a few images, ten of them on one held-8-ball render, so they are not 30 independent
+  questions and the ranking is coarse.
+- Held 8-ball catches out of 10 looks: Haiku 5.5 via OpenRouter 3 (no reasoning) and 8 (low), Haiku CLI 7, Gemma 4 7 and 10, Flash-Lite 5 (no
+  reasoning), Terra 9 and 10, Sonnet 10 [V]. `bench_fair/TABLE.md` summarises Haiku at 55 %, Gemma 4 at 85 % and Flash-Lite at 70 %. **No judge stands alone on safety**, which is why the guard decision is
   on the local detector.
-- The paper says "30 model and reasoning-level configurations"; the committed `bench_fair` holds **25** (24 usable)
-  [V]. The other five are not in the repos [U].
+- `bench_fair` holds **25** configurations, 24 usable [V]. The `anthropic_claude-haiku-5.5_*` rows went through OpenRouter, and the
+  `subscription_*` rows ran the Claude CLI with `--effort low`.
 
 ### 5.1.4 Judges in the stress sim
 
 The stress sim's scripted judge answers from the table state at the newest frame's time after a virtual latency.
-Judge **speed** is the main lever on points because a slow judge rarely reaches the balls: at Haiku's measured
-6.5–13 s, configurations binned 0–0.09 balls per match; at 4–6 s ("fast"), 2.4–3.4 [V, §7.2]. A fast judge without
+Judge **speed** is the main lever on points because a slow judge rarely reaches the balls: at the slower input latency of
+6.5–13 s (taken from a Haiku check), configurations binned 0–0.09 balls per match; at 4–6 s ("fast"), 2.4–3.4 [V, §7.2]. A fast judge without
 the live guard lost **28 of 185** matches to the illegal ball [V]. **The real judge was never run against the MuJoCo
 referee**, so false and late done rates on simulated frames are unmeasured.
 
@@ -159,7 +159,7 @@ On the right wrist camera the white ball reads H 147, S 47, V 169–227 (median 
 `grip_roi: [0.33, 0.6, 0.67, 1.0]`, `grip_min_frac: 0.015` (the old box let balls lying past the fingertips through:
 3 false trips in one take).
 
-### 5.2.4 Our check: main's live guard on the committed real frames [V]
+### 5.2.4 This report's check: main's live guard on the committed real frames [V]
 
 `fix/classifiers-8nov` commits six station test frames (`tests/data/guard_real/`): two **composite** frames with a
 white ball pasted between the right fingers, three real frames with a white ball visible but not held, one overhead.
@@ -173,7 +173,7 @@ Running `TableDetector.guard` with each branch's own `plans/table_colors.yaml`:
 | overhead_green_ep39_0 | None (no wrist view) | None |
 
 **Main's guard configuration does not see a held white ball on these station frames; the retuned configuration
-does.** Caveats: the held frames are composites, and we do not know which `table_colors.yaml` the station laptop
+does.** Caveats: the held frames are composites, and it is not recorded which `table_colors.yaml` the station laptop
 actually loaded in the final runs. This corroborates audit finding A07 and is the most important open safety item
 (§12).
 
@@ -318,7 +318,7 @@ threshold, split, metrics), loadable with `FaultModel.load(...)`; the runtime ze
 ## 5.6 Start-pose gate
 
 See §3.9. Reference starts per exact task text (`plans/start_poses.json`); 0.35 rad threshold; logs a `start_pose`
-event before each stage and homes once on `home_before` stages. Evidence: only 9 of 69 unplug demos start within
+event before each stage and homes and restarts once on the unplug stage (`home_before`). Evidence: only 9 of 69 unplug demos start within
 0.3 rad of home (§9).
 
 ## 5.7 Planned: USB port finder (`docs/USBC_PORT_CLASSIFIER_PLAN.md`, cloud-sims family)

@@ -104,7 +104,7 @@ One match, event by event:
 python experiments/stress_match.py -s no_release --seeds 1 -v
 ```
 
-At the judge latency Haiku 5.5 measured, against a chosen plan:
+At the slower judge-latency input (6.5–13 s, from a Haiku 5.5 check), against a chosen plan:
 
 ```bash
 python experiments/stress_match.py --latency 6.5-13 --plan plans/hybrid_v4.yaml --seeds 5 -j 4
@@ -270,7 +270,7 @@ python -m harness plans/bot_v1.yaml --live --no-operator --monitor-model google/
 ```
 
 **Before you do:** main's `plans/table_colors.yaml` still has the phone-photo white range, which missed both
-held-white test frames in our check (§5.2.4). Use the station-retuned colours from `fix/classifiers-8nov` (or
+held-white test frames in this report's check (§5.2.4). Use the station-retuned colours from `fix/classifiers-8nov` (or
 `fix/guard-real-frames`) and re-check on your own wrist frames:
 
 ```bash

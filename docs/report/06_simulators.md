@@ -99,7 +99,7 @@ physics ran at 0.55× the match clock; `apply_render_quality` drops shadows and 
 | Result | Table | Branch at run time |
 |---|---|---|
 | 25 cluster matches, 7–8 Nov (`results/cluster_mujoco/`) | **v1** hub table | main / codex sim-table line |
-| Sim-time template-engine matches (six matches 42, 42, 41, 15, 15, 15) and the relay-order batch (12/12 first unplug) | **v1** (they branched from main) | `prompt-engine` |
+| Sim-time template-engine matches (six matches 42, 42, 41, 15, 15, 15) and the relay-order batch (12/12 first unplug); no logs in any repo [U] | **v1** (they branched from main) | `prompt-engine` |
 | Stage curves in `plans/stage_curves_sim.json` | v1 (Dream's YAM sim runs before 9c89ae3) | cloud-sims |
 | Cloud round 1 (r1-a/b/c/E) | **both**: it ran while the table was being rebuilt; its saved frames show both versions | cloud-sims images `cloud-v*` |
 | Paper teaser figure (b, c) | rebuilt | `paper/render_sim_table.py` |
