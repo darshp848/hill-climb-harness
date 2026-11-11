@@ -1,0 +1,1828 @@
+diff --git a/README.md b/README.md
+index cf7eea2..f5e9524 100644
+--- a/README.md
++++ b/README.md
+@@ -7,6 +7,12 @@ with the camera frames it looked at.
+ 
+ Python 3.12+, stdlib + PyYAML only. The design contract is `DESIGN.md`.
+ 
++## Status (8 Nov 2026)
++
++Tougher in simulation, not yet proven on the real table. Read [last night's report](docs/LAST_NIGHT_2026-11-08.md) for
++the results, Dream errors, the open tower-order question, Darsh's strategy notes and the data still to collect. His
++notes are coded on branch `cloud-sims`, not on `main` yet.
++
+ ## Safety model
+ 
+ - **It never touches a motor.** It has no robot driver, no joint commands, no camera drivers. It only
+diff --git a/TELEOP_PLAN.md b/TELEOP_PLAN.md
+index 9939263..0cf50a9 100644
+--- a/TELEOP_PLAN.md
++++ b/TELEOP_PLAN.md
+@@ -122,33 +122,129 @@ separate folders, so `--episodes all` is right. Dream's checks pass on a frozen
+ (30, 15, 46 and 96 s). Long multi-task takes stay in `plug-unplug-v1` and never go up as they are: only their
+ reviewed splits do.
+ 
+-## Queue the fine-tune (when recording stops, arms not needed)
+-
+-What goes in: the four reviewed folders above, and whatever is recorded from now on (leader takes: split or
+-recorded short with the exact text, then left wrist frozen). Each as its `-eef` copy:
++## Queue the fine-tune: `~/hackathon_data/ft-final` (ready 22:30, check passed)
++
++Built 22:30 from every take (42 episodes, 13:20-21:07), the unplugs re-cut to the top of the pull, and David's
++review applied (his drops and his relabels from `~/hackathon_review/review_marks.json` and
++`leader-split-v4-frozen_fix-ep8.json`). The kit's check: "ready to upload: 170 episodes, 48428 frames at 30 fps".
++
++| Folder in ft-final | Episodes |
++| --- | --- |
++| `quest-split-v4-final-eef` (Quest 18:12-18:31, David's 9 drops) | 65 |
++| `leader-split-v4-final-frozen-eef` (leader takes 25-35, David's fix and 5 drops) | 28 |
++| `leader-split-v6-frozen-eef` (leader takes 39-40, 20:56-21:02: cable unplug / put down / plug-in) | 21 |
++| `leftarm-split-v5-frozen-eef` (left arm 36-38, 41: balls, cylinders, blocks) | 16 |
++| `leader-split-v1-frozen-eef` | 14 |
++| `plugin-split-v1-final-frozen-eef` (David's 1 drop) | 11 |
++| `unplug-split-v1-final-eef` (David's 1 drop) | 5 |
++| `stack-split-v1-frozen-eef` | 4 |
++| `leader-split-v2-frozen-eef` | 3 |
++| `unplug-v1-split-eef` | 3 |
++
++Per task: 69 unplug, 55 put down, 19 plug-in, 12 ball, 10 cylinder in a block's hole, 4 block, 1 cylinder on top
++of the stack (David's text). 26.9 min. Not reviewed by David yet: `leader-split-v6` and `leftarm-split-v5`.
++`ft-v1` / `ft-v2` (21:22 / 21:41) are older: built before the unplug re-cut, without takes 36-41.
++
++### Final checks (23:00), all passed
++
++- `tools/check_dataset.py --videos` on the 10 source folders: 0 errors, 0 warnings. Meta vs tables, frame and index
++  continuity, timestamps, no NaN, joints and grippers in range, one working arm with the other parked, every
++  camera's frame count, every leader camera frozen, no duplicates, and how each task ends (every unplug holding
++  the plug, every other task released). It found one ball take that ended re-closing an empty gripper; it now ends
++  at the release.
++- The laptop copies are byte-identical to the station's (checksums of every file).
++- The `-eef` data the job trains on (all 170 episodes, 96,826 rows): state 34 wide, action 32 (Dream trains up to
++  34), every hand rotation orthonormal, grips 0..1, hands within 0.9 m.
++- Dream's own check: `finetune.py --check` -> "ready to upload: 170 episodes, 48413 frames at 30 fps".
++- A random last-frame sample of every task matches its label.
++- Cross-checked against Dream's docs and the kit's `finetune.py`: embodiment `hackathon-metal` (makermods.json,
++  3 cameras, head camera `scene`), `use_eef=True` (required for Metal), service defaults (1000 steps, lr 1e-5,
++  constant schedule, base_share 0.5: half Dream data keeps general skill), dataset as a parent of subfolders (one
++  session each). The account has no jobs, datasets or embodiments yet (no name clash). Dream's queue at 22:43: 0
++  jobs ahead, 36 of 50 slots free. `/tmp` has 5.5 GB for the upload's temporary pack (ft-final is 727 MB).
++
++### Queued 23:00 (Sat 7 Nov)
++
++- Started 22:54 from the `finetune` tmux session on the station, with the fine-tune account's key held only in
++  that shell (`tools/start_finetune.sh`; the station's saved key is a different account and was not changed).
++- Dataset `ds_5ae1c3b4e8739af1` (`muhammad.mukthar11/relay-final`), uploaded 22:54, processed 23:00.
++- Job `ftj_fdff469db8e2b643`, suffix `relay-final`, queue position 1. The service's settings: 1000 steps, lr 1e-5,
++  batch 32, `use_eef`, constant schedule, resumable. The model will be `dream-1-ft:<account>-relay-final`, and only
++  that account's key can run it: on Sunday the station needs that key (export `DREAM_API_KEY` in the shell that
++  runs `dreamcli robot up`, or save it with Step 2 of Dream's Getting started).
++
++### Start it, and the overnight watcher (`tools/finetune_watch.py`, copied to the station)
++
++One command does the upload, the processing, the job and the watching, inside tmux on the station:
+ 
+ ```bash
+-cd ~/physical-ai-hacks
+-# add_eef on each new folder (the frozen copy for leader takes); the four reviewed ones already have -eef
+-mkdir -p ~/hackathon_data/ft-v1 && cp -r ~/hackathon_data/{quest-split-v4,leader-split-v4-frozen,plugin-split-v1-frozen,leader-split-v1-frozen,unplug-split-v1,leader-split-v2-frozen,unplug-v1-split,stack-split-v1-frozen,leftarm-split-v5-frozen}-eef ~/hackathon_data/ft-v1/
+-(cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/ft-v1)   # T1, T2 counts
+-~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1 --check
+-# PAID, about $200 (1000 steps): only with the team's yes
+ tmux new -A -s finetune
+-~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1
++~/dream-env/bin/python ~/hill-climb-harness/tools/finetune_watch.py start ~/hackathon_data/ft-final \
++    --name relay-final --suffix relay-final --max-requeues 1 --i-accept-charges
+ ```
+ 
+-The platform reads each subfolder of `ft-v1` as one session. Keep the default constant learning rate (not cosine),
+-which keeps `resume_from` possible. Training takes 7-8 h, so the model is ready around 04:00, and its first call can
+-take up to 1 h to warm up.
++It queues exactly what `tools/finetune.py --arm metal` would (the kit's embodiment and settings). Overnight:
++retries network and 5xx errors forever; renames on a used suffix or dataset name; waits on the account's job limit;
++re-queues a failed training once (`--max-requeues 1`, a second charge) on the same processed dataset under
++`relay-final-r2`; stops and says why for anything that needs a person (no credits, a data problem, a bad key).
++When the model is published it writes `~/finetune_watch/MODEL.txt` and warms the model up (its first start can
++take an hour). `--keep-warm-until 08:30` keeps it warm until then (each ping is a small inference charge).
+ 
+-## Sunday morning
++```bash
++cat ~/finetune_watch/STATUS.txt            # one line: where it is
++tail -f ~/finetune_watch/watch.log         # every poll
++cat ~/finetune_watch/MODEL.txt             # the model id, once ready
++~/dream-env/bin/python ~/hill-climb-harness/tools/finetune_watch.py resume   # after a crash or reboot
++```
+ 
+-1. Warm the model up early: `dreamcli robot run --checkpoint dream-1-ft:<account>-unplug-v1 --task "unplug the USB
+-   cable at the end of the hub nearest the right arm" --dry-run` (the first call may wait up to an hour).
+-2. Start the agent with `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up --view --view-port 8093`:
+-   plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
+-3. Compare fine-tune and base on the same plan, `--verifier monitor+manual`, a few runs each: unplug success first,
+-   then stacking. Put the winner's id in `plans/hill_climb_v4.yaml` (`checkpoint:`). If the fine-tune unplugs better
+-   but stacks worse, splitting the checkpoint by stage is a harness change to make then.
+-4. Match: `--live` with `monitor` only.
++Without `--i-accept-charges` it refuses. The kit's own command still works too (no watcher):
++`~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-final --arm metal --name relay-final --suffix relay-final`.
++
++Training takes 7-8 h plus up to 1 h warm-up: queued at 23:15, the model is ready and warm around 07:00-08:30.
++
++## Sunday morning: the fine-tune is ready
++
++**Model: `dream-1-ft:bb4b9e5f-relay-final`**, ready 07:02, warm 07:14 (8 Nov). Only the fine-tune account's key runs
++it, and that key is not the station's saved one: start every Dream program below in a shell that has it, either the
++tmux session `finetune` (it still holds the key: `tmux attach -t finetune`) or a new shell after
++`read -rs DREAM_API_KEY; export DREAM_API_KEY`. Base Dream-1 runs under that key too, so one agent serves both
++models. Every call is billed to that account.
++
++Checked with no arm moving (8 Nov 08:30): the plan's prompts against the trained texts (`python -m harness.tasks`:
++T1 69 episodes, T2 55, stacking 4 and balls 12 "low", T6 none: the fine-tune keeps base Dream-1's half for it),
++the Claude monitor live on the table photo (4/4 right, 8.5 s a reply), the harness tests.
++
++Before the match, at the robot, a hand on the e-stop. These move the arms; a person runs them.
++
++1. **Dream's own check of the loop and the model** (`python -m dream.check`, about 2 minutes; the station agent must
++   be stopped). LOOP moves the arms in small circles; INPUTS asks the person whether the cameras on its page
++   (`http://127.0.0.1:8643/`) look right; MODEL asks the fine-tune about 8 moments of a recorded unplug, with nothing
++   moving (8 billed calls), and sets each answer against the recording:
++
++       ~/dream-env/bin/python -m dream.check --recording ~/hackathon_data/ft-final/quest-split-v4-final-eef -- \
++         ~/dream-env/bin/dreamcli robot run --checkpoint dream-1-ft:bb4b9e5f-relay-final \
++         --task "unplug the USB cable at the end of the hub nearest the right arm"
++
++   FAULT `none found` means go on. `your control loop` means fix that line first; `the model` means the fine-tune
++   answers wrongly on its own training data (use base Dream-1 for the match and send Dream the four lines).
++2. **Look before it moves**: the same `dreamcli robot run ... --dry-run --view-3d` (runs the model, writes no target
++   to an arm) for each model, with the cables in the hub. The 3D page draws each chunk's hand path: the fine-tune's
++   right hand should head to the plug at the hub's right end and close on it.
++3. **A/B on Stage 1** (the station agent up: `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up
++   --view --view-port 8093`, plain `up`). Alternate base and fine-tune run by run, 5 runs each, all 4 cables in the
++   hub before each run:
++
++       python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench
++       python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench \
++         --var model=dream-1-ft:bb4b9e5f-relay-final
++       python -m harness.report runs/bench --by-checkpoint
++
++   Pick the model with the higher unplug rate (then the fewer attempts). A tie goes to the fine-tune only if
++   put_cable_down is better too.
++4. **Stacking and balls**: the fine-tune saw only 4 block and 12 ball episodes. Two runs of the whole match plan on
++   each model (`plans/hill_climb_v4.yaml`, same `--var model=...`) show whether it stacks as well as base Dream-1.
++   If the fine-tune wins the cable but stacks worse, a per-stage model is a harness change to make then. If stacking
++   runs on the fine-tune, delete `tower_prompts` from the plan (the fine-tune only knows "put a block on top of the
++   stack").
++5. **Match**: `python -m harness plans/hill_climb_v4.yaml --live` (verifier `monitor` only, no human input after go),
++   with `--var model=dream-1-ft:bb4b9e5f-relay-final` if the fine-tune won.
+diff --git a/docs/HOW_THE_HARNESS_WORKS.md b/docs/HOW_THE_HARNESS_WORKS.md
+new file mode 100644
+index 0000000..f0fd648
+--- /dev/null
++++ b/docs/HOW_THE_HARNESS_WORKS.md
+@@ -0,0 +1,254 @@
++# How the Hill Climb harness works
++
++_Written 8 Nov 2026 from all branches of this repo and `darshp848/task_simulation`. Also published as a page with a drawn diagram, and as [Hill_Climb_Harness_Explained.pdf](Hill_Climb_Harness_Explained.pdf)._
++
++The harness is a supervisor that runs on the match laptop. It never drives a motor. It gives Dream-1 one short prompt per stage through Dream's own station agent, watches the cameras with a Claude vision monitor and a local colour detector, decides when a stage is done or failing, and recovers, moves on or stops. Every decision is logged with the frames it was made on.
++
++Read from `darshp848/hill-climb-harness` (all 14 branches, `main` at `9db93f6`, `cloud-sims` at `0c34f62`) and `darshp848/task_simulation` (`60d6846`), 8 Nov 17:30 UTC. Code paths are on `main` unless marked *\[cloud-sims\]*.
++
++## Big picture
++
++There are three machines. The **match laptop** runs the harness (`python -m harness plans/hill_climb_v4.yaml --live`). The **station NUC** (`nuck-5`) runs Dream's agent, `dreamcli robot up --view-port 8093`, which owns the two Metal arms, the three cameras and every safety limit. The **cloud** holds Dream-1, which turns camera frames and a prompt into action chunks, and Claude, which the monitor asks about the frames.
++
++The harness talks to the station only over HTTP on `127.0.0.1:8091` (control) and `:8093` (frames). The only module that can make an arm move is `harness/station_client.py`, and it does that only by asking the agent to start, change prompt, stop, home or reset.
++
++```mermaid
++flowchart LR
++  subgraph LAPTOP[Match laptop: harness]
++    P[Plan YAML] --> R[Runner state machine]
++    R <--> M[Claude monitor]
++    R <--> D[Colour detector + guard]
++    R --> L[runs/ logs]
++  end
++  subgraph NUC[Station NUC: Dream agent]
++    API[Station API :8091<br/>/status /start /prompt /stop /home /reset<br/>add-on /arms /frame]
++    DV[Debug view :8093 /trips]
++    CL[Dream control loop<br/>speed caps, clamps, grip cap]
++    ARMS[2 Metal arms]
++    CAM[3 cameras]
++  end
++  subgraph CLOUD[Cloud]
++    DREAM[Dream-1 VLA<br/>base or relay-final fine-tune]
++    CLAUDE[Claude Haiku 5.5<br/>API or claude -p]
++  end
++  R -- prompts --> API
++  D -. /stop .-> API
++  DV -- frames --> R
++  API --> CL --> ARMS
++  CAM --> CL
++  CAM --> DV
++  CL -- frames + prompt --> DREAM -- action chunks --> CL
++  M -- jpegs --> CLAUDE
++  subgraph PRE[Before the match]
++    T[Quest / leader teleop] --> DS[LeRobot dataset] --> SP[split + check] --> FT[Dream fine-tune] --> CK[checkpoint]
++  end
++  CK -. --var model= .-> API
++```
++
++Dashed arrows: the guard's emergency `/stop`, and the fine-tune checkpoint chosen before the match. The live guard and `/frame` add-on route are on `cloud-sims`.
++
++## The match: four stages in 295 seconds
++
++The match plan is `plans/hill_climb_v4.yaml`, written for rubric v4. Points: the first cable out is +10 and passes Stage 1, each further cable +5; a tower over 4 in that stands 3 s after release is +20, then +3 per full inch (+10 for the taller tower on Sunday); each golf ball in our bin +5. A black 8-ball in the bin loses the match, and on our table Darsh ruled the **white** ball illegal too. Touching a later stage's objects before the current pass bar is met is a DQ, and so is any human input after "go". There is no time bonus, so the plan uses the whole clock (`time_budget_s: 295`).
++
++Plug-in stages were dropped on 7 Nov at 17:50: base Dream-1 never seated a plug, and no teleop demo completed one.
++
++| Stage (in order)                    | Prompt sent to Dream-1                                                              | Timeout    | Tries | If it fails                                                     | Confirm |
++|-------------------------------------|-------------------------------------------------------------------------------------|------------|-------|-----------------------------------------------------------------|---------|
++| `unplug_cable` *\[pass bar\]*       | unplug the USB cable at the end of the hub nearest the right arm                    | 60 s       | 99    | retry in place, recoveries keep_pulling ×4 / let_go_and_lift ×3 | 2       |
++| `put_cable_down`                    | put the held cable down on the table away from the hub                              | 20 s       | 1     | skip                                                            | 1       |
++| `release_cable`                     | open both grippers and move the arms up                                             | 10 s       | 1     | skip                                                            | 1       |
++| `unplug_more` *\[+5\]*              | same text as unplug_cable                                                           | 20 s       | 1     | skip                                                            | 2       |
++| `put_more_down`, `arms_clear`       | put-down text, then open-and-lift text                                              | 12 s, 10 s | 1     | skip                                                            | 1       |
++| `stack_2`, `stack_3` *\[pass bar\]* | put a block on top of the stack                                                     | 40 s       | 99    | retry in place, keep_going / let_go_and_lift                    | 2       |
++| `tower_pass` *\[pass bar\]*         | put a block on top of the stack (skipped at once if the tower is already over 4 in) | 40 s       | 99    | retry in place                                                  | 2       |
++| `higher_1`, `higher_2`              | put a block on top of the stack                                                     | 30 s       | 1     | skip                                                            | 1       |
++| `ball_1` … `ball_8` *\[guarded\]*   | put a golf ball in the bin                                                          | 25 s       | 1     | skip                                                            | 1       |
++
++Pass-bar stages never skip, because moving on means touching the next stage's objects. They retry until the clock runs out. With `tower_prompts` set (base Dream-1 only), the stack stages instead name the next piece, for example "put the cube on top of the stack".
++
++## Inside one stage
++
++The first stage starts the run with `/start`. Each later stage swaps the prompt live with `/prompt`, so the arms never stop between stages. Then `Runner._watch` loops every `check_every_s` (3 s):
++
++1.  **Health.** `GET /status`. A dead arm ends the run. State `error` goes to the fault rules in the next section. Going idle ends the attempt.
++2.  **Local guard** (ball stages, with `--detect`): the colour detector looks at the wrist frames. A yes stops the run at once.
++3.  **Ask the verifier** once `max(min_run_s, settle_s)` has passed. The monitor answers with the result of its previous call and starts the next one in the background, so the loop never waits for Claude.
++4.  **Decide.**
++    - *Done:* `confirm` "done" looks in a row, or two within 15 s (`DONE_WINDOW_S`) even with a flicker between. The same frames judged twice count once, so a frozen camera can't confirm. Monitor "done" needs confidence ≥ 0.7.
++    - *Failing:* `confirm` failing looks, and only after half the timeout (`FAIL_MIN_FRACTION`). A progress drop of 0.3 below the attempt's best counts as failing.
++    - *Stalled:* progress hasn't risen 0.05 in `stall_s` (20 s), or the monitor says "stalled" twice.
++    - *Timeout:* if a "done" is waiting for its confirming look, 10 s grace. If the gripper holds the target with progress ≥ 0.5, one 20 s extension.
++5.  **On a failed attempt** it picks a recovery from the stage's menu: the monitor's suggestion if it has uses left, else the next unused one, never the same one twice in a row. A `retry` re-sends the stage prompt. A `reset` sends its own prompt (for example "open both grippers and move the arms up"), waits up to `min(timeout/2, 20 s)` for the monitor's `scene_ok`, then re-sends the stage prompt. When the menu is used up, `on_fail` decides: `retry_in_place`, `home_and_retry` (stop, home, start), `skip` or `abort`.
++
++```mermaid
++flowchart LR
++  A[stage prompt sent] --> B{every 3 s: status ok?}
++  B -- arm dead / hard fault --> X[POST /stop, run ends]
++  B -- ok --> G{ball stage: guard yes?}
++  G -- yes --> X
++  G -- no --> V[take last monitor verdict, start next call]
++  V --> D{done x confirm?}
++  D -- yes --> N[next stage, /prompt live]
++  D -- no --> F{failing, stalled or timeout?}
++  F -- no --> B
++  F -- yes --> R{recovery left?}
++  R -- yes --> RC[retry or reset prompt] --> A
++  R -- no --> O{on_fail}
++  O -- skip --> N
++  O -- retry_in_place --> A
++  O -- abort / out of tries --> X
++```
++
++The run ends on the last stage, the 295 s budget, Ctrl+C, `s` + Enter, SIGTERM, or a guard trip. Each of these sends `POST /stop`, so the arms hold where they are. The harness never homes at the end. Before anything starts, preflight refuses a station that isn't idle, has a dead arm, or has a camera older than 2 s.
++
++## How Dream-1 is called
++
++### Routes
++
++- `POST /start {prompt, checkpoint}` starts a run. The checkpoint is `dreamlabs/dream-1-beta` by default, or the fine-tune via `--var model=dream-1-ft:bb4b9e5f-relay-final` on main.
++- `POST /prompt` changes the instruction while running.
++- `/stop`, `/home`, `/reset`. `--dry-run` sends no POST at all and prints what it would send.
++- Frames: `/trips` on 8093 on main (about 2 MB a round trip). On cloud-sims, `/frame/<cam>.jpg?w=640` (about 35 KB) from the station add-on, which brought Dream's round trip from 2–6 s down to about 0.8 s.
++- Gripper sensors: `GET /arms` tells the monitor "closed fully on nothing" from "stopped partway: holding something".
++
++### Errors and retries
++
++- **Refusal** (`DA-4000 … unsafe instruction`): restart the same prompt once, then fail that attempt but keep the match going.
++- **Transient** (gateway `DA-5000/6000`, `DA-0001` session replaced, empty action buffer, `SVD did not converge`): restart with the same prompt, up to 5 times a run. On cloud-sims an SVD error is first cleared with `/reset` (at most 2).
++- **Anything else** (an arm, a motor, a safety stop): never retried. The run stops.
++- Credits running out shows up as `DA-1000 UNAUTHORIZED (disabled)`, which reads like a revoked key. The harness treats it as a hard error. The "check Dream once before a batch" step asked for at 14:57 is not built yet.
++
++Station numbers, 1650 calls on 7–8 Nov: round trip median 1115 ms, 90th percentile 2732 ms, worst 8655 ms. Most of that is Dream's gateway; the model itself is about 293 ms.
++
++## The Claude monitor
++
++Stages use `verifier: monitor`. It's the `MonitorVerifier` class in `harness/verifiers.py`, set in the plan as `claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}`. It needs 4000 tokens because Haiku 5.5 thinks before it answers; 600 cut off every reply. Each call sends:
++
++- the overhead view's frame from the stage start, up to 6 earlier frames, and the newest one, all with time labels, plus the newest wrist frames;
++- the whole plan with the current stage marked, the stage's yes/no question, an "expect" line describing correct behaviour, camera notes, the gripper sensor reading, time left, the last prompt sent, and the recovery menu;
++- on ball stages, the guard question; on stack stages, the target tower to report back.
++
++It answers in JSON: `stage_done, progress 0–1, status ok|stalled|failing, holding {left,right}, recovery, scene_ok, confidence`, plus `guard` and `tower` where asked. Only one call is in flight at a time. An answer computed before a prompt or stage change is dropped, except a guard "yes", which still counts. Bad JPEGs are filtered out, because one would make the API reject the whole request.
++
++**Backends:** `api` (`ANTHROPIC_API_KEY`), or `--claude-backend subscription`, which pipes the same request through `claude -p` with no tools. Measured on 7 Nov: 12/12 right on known photos, median 8.4 s, max 12.7 s a call. On *\[cloud-sims\]*, a stitched grid of earlier frames plus two calls in flight (`parallel: 2`) gives a verdict about every 4.9 s instead of 9.7 s, and OpenRouter judges are an option. In the 60-decision benchmark, GPT-6.1 Terra was 98–100% right at 2.8–3.7 s.
++
++**Rules check.** Whether an outside model may judge for the harness is still marked as a question for the organizers in the guide.
++
++## The illegal-ball guard
++
++The `guard:` block covers every stage whose name starts with `ball_`. On each ball check the monitor also answers: "Is either gripper holding the white ball or a black 8-ball (balls that must never go in the bin), or closed or closing around one?" A single yes (`confirm: 1`) raises `_Guard`. That sends `POST /stop`, which leaves the ball held in the gripper and out of the bin, and the CLI prints `ILLEGAL BALL HELD: RUN STOPPED. CALL STOP NOW` for the person who calls stop. If there has been no guard answer for 20 s (`max_blind_s`), for example because the API is down, it stops too: nobody would be watching for a black ball.
++
++There are three ways the guard can say yes, from slow to fast:
++
++1.  the monitor's `guard` field, 6.5–13 s old by the time it lands;
++2.  the local detector on every 3 s poll (`--detect plans/table_colors.yaml`), which takes milliseconds and works offline;
++3.  *\[cloud-sims\]* the live guard (`--live-guard`): its own thread at 10 Hz on `/frame/<wrist>.jpg`. Three yes frames in a row send `/stop` by themselves. While it is armed, `/home` and `/reset` are blocked.
++
++In the 185-match stress run, a fast judge without the live guard lost 28 matches to an illegal ball, and the merged config with the live guard lost none.
++
++## The local colour detector
++
++`harness/detect.py` uses only numpy, Pillow and scipy. It shrinks each frame to 640 px, converts it to HSV, thresholds each colour class from `plans/table_colors.yaml`, labels blobs, and sorts each blob by shape into ball (round), cube (compact) or stick (long and thin). Each colour lists which shapes count and what role they have: *avoid* (white ball, black ball), *target* (green, orange and yellow balls) or *info* (blocks and sticks). Black lists only the ball shape, so the black gripper fingers are never reported.
++
++- **Guard:** an avoid ball inside the wrist image's grip region (x 0.25–0.75, y 0.35–1.0) of at least 1% of the image counts as held.
++- **Boxes:** it draws labelled boxes on the frames the monitor sees and adds a legend, so Claude counts marked objects instead of guessing. Dream-1's own input is never changed.
++- **Overhead view:** anything above 32% of the image height (people, laptops) is ignored.
++
++The colours were tuned on a phone photo of station C (IMG_2698), not on the station's own cameras, and there is no photo of a black 8-ball. Re-tune before a match with `python -m harness.detect plans/table_colors.yaml frame.jpg --out boxed.jpg`. On *\[cloud-sims\]* a small CNN (`models/cable_end.onnx`) also boxes the USB-C and USB-A cable ends. The `mac-arm64` branch has a 3–5x faster detector that gives the same output, checked against real wrist frames.
++
++## The plan file
++
++A plan is YAML, validated before anything runs. A bad field is rejected with the stage and field named. The fields that matter in v4:
++
++| Field                            | v4 value                                                                                                                                 | What it does                                                                                                                                             |
++|----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
++| `checkpoint`                     | `"{model}"`, var default `dreamlabs/dream-1-beta`                                                                                        | Model for `/start`. Pass `--var model=dream-1-ft:…` for the fine-tune. On cloud-sims it is hard-coded to base; use `--checkpoint` instead.               |
++| `time_budget_s`, `check_every_s` | 295, 3.0                                                                                                                                 | Whole-run clock and poll period.                                                                                                                         |
++| `verifier`, `confirm`            | monitor, 2                                                                                                                               | Default judge and number of agreeing looks. Stages can override both.                                                                                    |
++| `claude`                         | haiku-5-5, 4000 tokens, 6 history frames                                                                                                 | Monitor settings. cloud-sims: 4 frames, `stitch: true`, `parallel: 2`.                                                                                   |
++| `guard`                          | question, `stages: [ball_]`, confirm 1, max_blind_s 20                                                                                   | Safety question that stops the run on a yes.                                                                                                             |
++| `tower_target`                   | 3 cubes then 2 upright sticks                                                                                                            | Expected tower. The monitor reports what it sees and `tower_order_ok` is logged, but it never gates a stage. Colour order doesn't matter (Darsh, 8 Nov). |
++| `tower_prompts`                  | `put the <piece> on top of the stack`                                                                                                    | Names the next piece, for base Dream-1. Delete it for a fine-tune, which only knows its recorded text.                                                   |
++| stage fields                     | `prompt, success, expect, timeout_s, max_attempts, min_run_s, settle_s, stall_s, recovery, on_fail, skip_if_done, camera_notes`          | Per-stage behaviour, as above. `skip_unless`, `watch`, `cameras` and `history_cameras` also exist.                                                       |
++| *\[cloud-sims\]* only            | `operator_notes, prompt_technique, start_pose, rewrite_prompts, prompt_prefix, reset_first, requires_stage, confirm_gap_s, decide, fast` | Darsh's decisions, the start-pose gate, monitor-written prompts and so on. Explained in the branch section.                                              |
++
++CLI: `python -m harness PLAN (--dry-run | --live | --mock) [--detect COLORS] [--verifier …] [--claude-backend api|subscription] [--var NAME=VALUE]`. cloud-sims adds `--match --live-guard --skip --checkpoint --no-rewrite --cable-ends --joints`.
++
++## Teleop and the fine-tune
++
++Teleop is not used in a match, since any human input after "go" is a DQ. It is how the fine-tune got its data. `TELEOP_PLAN.md` is the recording plan. Each take is recorded under one exact task text with a Meta Quest or the leader arm (`darshp848/follower_code`, branch `quest-continuity`) and lands in a LeRobot dataset on the NUC. The 7 Nov decision was to put the fine-tune on **unplug (T1)** and **put-down (T2)** only, because unplugging is the Stage 1 pass bar and base Dream-1 manages it about 1 try in 6. Stacking and balls stay on base skill. The fine-tune mixes in Dream's own data (`base_share` 0.5).
++
++Long takes are cut into one episode per sub-task with `tools/auto_split.py` (it proposes cuts from the right gripper's grasps) and `tools/split_episodes.py`. All 42 takes were checked: 70 unplug, 52 put-down, 15 plug-in, 11 upright stick, 12 ball and 4 block episodes. `tools/check_dataset.py` and `tools/finetune_watch.py` (main only) check the data and watch the job. Main says fine-tune `relay-final` is ready.
++
++A fine-tune follows only the texts it was trained on, so every v4 prompt is one of the recorded texts, byte for byte. Check before a run:
++
++```bash
++python -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/unplug-v1 ~/hackathon_data/relay-v1
++```
++
++The stack, ball and open-gripper texts show as MISSING there, which is expected: those stages run on base skill.
++
++## Simulators and stress tests
++
++| Tool                                                 | What it is                                                                                                                                                                            | What it tells you                                                                                                         |
++|------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|
++| `fake_station.py` (`--mock`)                         | An HTTP stand-in with Dream's real state machine and scenarios: happy, arm_dies, start_error, slow_start, camera_stale                                                                | Harness logic and the safety stops, no network needed                                                                     |
++| `experiments/stress_match.py`                        | Whole matches on a virtual clock (5 min in about 1 s). The real Runner and monitor code, with a rule-based table and policy, and faults taken from the NUC logs                       | 37 scenarios × 5 seeds. Mean points and losses per config. It's scripted, so it can't tell you if a robot can do the task |
++| `live_stress.py`, `sweep_variants.py`                | Watch a stress match in the browser at 10x, and A/B harness constants or plan edits on the same seeds and latencies                                                                   | Tuning, for example dropping three entry checks: 54.9 → 60.0 points                                                       |
++| `sim_station.py` + `sim_scenes/hill_climb_table.py`  | Dream's own MuJoCo YAM sim with the relay table and a rubric v4 referee, served on the same ports as the station                                                                      | The real Dream-1 on a simulated table. `--policy scripted` runs offline                                                   |
++| `experiments/sim_match.py`, `cluster/run_matches.sh` | Full matches in the MuJoCo sim with an oracle verifier (ground truth), in parallel Docker workers on the lab cluster                                                                  | 25 matches: a cable came out in 14, put-down 0/54, stack 0/25, balls never reached                                        |
++| *\[cloud-sims\]* `cloud/`                            | Google Cloud Batch: a 1,000-match matrix (v4 against hybrid), one fresh sim per match, uploads to `gs://hill-climb-sims-results`. Everything is a dry run unless you pass `--execute` | Round 1 died at 12:05 UTC when Dream credits ran out. Only 10/28 matches were valid, so don't draw conclusions from it    |
++
++Sim-to-real caution: the MuJoCo arms are YAM, not Metal, and the Hill Climb track runs on Metal arms. The table layout is an estimate from photos.
++
++## Tests
++
++Run them with `python -m pytest -q`. You need `numpy pillow pyyaml scipy pytest`. On cloud-sims, `psutil` and `opencv-python-headless` too, or two test files fail to import. Tests that need MuJoCo or the `dreamlabs` package skip themselves.
++
++- **main**, 22 test files, run here at 17:45 UTC: **231 passed, 4 skipped** in 3 min 36 s.
++- **cloud-sims**, 35 test files: run here at 17:50 UTC with `psutil` and `opencv` installed: **373 passed, 5 failed, 10 skipped** in 5 min 39 s. All 5 failures are in `test_async_pacing.py`, and they fail only because that file needs Dream's `yam_mujoco` example (the `dreamlabs` package) and, unlike the other sim tests, doesn't skip itself when it's missing. They tell you nothing about the harness logic. The 13:07 UTC run had failures in `test_cli_transport` and `test_backend_switch`; those now pass.
++
++What they cover: `test_runner` and `test_v2` (the state machine: confirm, regression, stall, grace, recoveries), `test_stress` (whole matches per fault scenario), `test_guard` and `test_tower_target`, `test_detect` (the detector on the real station C photo), `test_fake_station` and `test_sim_station`, `test_match_plans` (the v4 plan obeys the DQ rules), `test_claude_cli` (the subscription backend sends the request unchanged), plus the dataset and tool tests.
++
++## All 14 branches
++
++Most branches build on each other. Branches lower in the table contain the ones above them unless noted. "Ahead/behind" counts commits against `main`.
++
++| Branch                                                                                            | Ahead / behind | What only it has                                                                                                                                                                                                                                                                | Status                                                           |
++|---------------------------------------------------------------------------------------------------|----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------|
++| `main`                                                                                            | 0 / 0          | The core above, the 7–8 Nov report, fine-tune `relay-final` tooling (`check_dataset`, `finetune_watch`, cable A/B bench), tower shapes only                                                                                                                                     | Default branch                                                   |
++| `stress-test-fixes`                                                                               | 0 / 11         | Nothing, fully merged into main                                                                                                                                                                                                                                                 | Can be deleted                                                   |
++| `codex/watcher-dimos` → `dual-arm-experiment`, `hill-climb-review-fixes` → `hill-climb-sim-table` | 1–15 / 26      | Codex's 7 Nov afternoon chain, based on old main. Their ideas (watcher, DimOS skills, sim table, fault restarts, dual-arm bench) were re-landed on main as separate commits. Left only here: `MATCH_DESIGN.md`, v2 plans `hill_climb_full/sprint`, three match-supervisor tests | Superseded. The LiveKit observer was ported to final-harness     |
++| `tools/episode-review-page`                                                                       | 7 / 9          | `tools/review_page.py`: a page to review teleop episodes side by side and keep or drop them                                                                                                                                                                                     | Not merged. Useful for data cleaning                             |
++| `hybrid-harness` (kaupau)                                                                         | 12 / 8         | `plans/hybrid_v4.yaml` for base Dream-1: colour and position prompts, monitor-written prompt rewrites, `reset_first`, light frames, gripper sensors, `requires_stage`, operator console, fixes from station runs 1–3                                                            | Merged into final-harness                                        |
++| `start-pose-live-guard`                                                                           | 10 / 8         | The 10 Hz live guard, the start-pose gate (home before unplug if the pose is unfamiliar), the cable-end CNN, `decide.py` in shadow mode                                                                                                                                         | Merged into final-harness                                        |
++| `final-harness`                                                                                   | 30 / 5         | main + the two above + LiveKit observer + `--match` (refuses human verifiers and the operator console) + `/reset` through the motion checks + `FINAL_HARNESS.md`. Last commit: Darsh's `docs/decisions.pdf` and `DECISIONS.md`                                                  | Its decisions commit is in no other branch                       |
++| `hedged-calls`                                                                                    | 34 / 5         | final-harness (without decisions) + hedged calls, the 20 Hz fast loop with a state-space observer, layered prompts (`promptgen`), OpenRouter judges and the judge benchmark                                                                                                     | Mostly in cloud-sims, except the last fix (`bench_judges` costs) |
++| `mac-arm64`                                                                                       | 38 / 5         | hedged-calls + Apple Silicon setup, the 3–5x faster detector with golden wrist-frame tests, macOS CI                                                                                                                                                                            | Not in cloud-sims                                                |
++| `cloud-sims`                                                                                      | 58 / 5         | hedged-calls + Darsh's operator notes (`operator_notes.yaml`: technique, watch_for, the 2-try/3-try rule, `ball_push_white`), Dream async at 2 Hz in the sim, GCP Batch, a sim table like the real one, live joint telemetry, joint observer and learned fault detector         | The candidate match branch. Missing main's last 5 commits        |
++
++### main against cloud-sims, for the match
++
++| Behaviour                           | main                                                           | cloud-sims                                                                                          |
++|-------------------------------------|----------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
++| Fine-tune checkpoint                | `--var model=dream-1-ft:bb4b9e5f-relay-final`                  | Base hard-coded in the plan; pass `--checkpoint`                                                    |
++| Illegal-ball stop speed             | Monitor plus local detector every 3 s                          | Plus the 10 Hz live guard (`--live-guard`)                                                          |
++| Monitor cadence                     | One call in flight, about 9.7 s a verdict                      | Stitched grid, two in flight, about 4.9 s                                                           |
++| Frames                              | Debug-view trips (about 2 MB)                                  | `/frame` add-on (about 35 KB), debug view as fallback                                               |
++| "Fail twice, move on"               | No: one try on skip stages                                     | 2 tries, 3 on stages worth 20+ points. Pass bars still retry                                        |
++| Push the white ball off             | No                                                             | Only in `hybrid_v4` (needs `prompt_technique: true`), not in `hill_climb_v4`. Untested on the robot |
++| Last cube hole up                   | No                                                             | `tower_target_last_cube`                                                                            |
++| Start pose, `--match` safety checks | No                                                             | Yes                                                                                                 |
++| MuJoCo table balls                  | White balls are the legal ones, which contradicts the v4 guard | Coloured legal, white and black illegal, like the real table                                        |
++| Report and dataset tools            | `LAST_NIGHT` report, `check_dataset`, `finetune_watch`         | Missing                                                                                             |
++
++## Open problems worth knowing
++
++**No real-table success data yet.** 52 policy runs on the station logged no per-stage outcome. Every points figure above comes from simulation. Before tuning anything else, run the match plan on the real table and log each stage.
++
++- **Pick the match branch.** If it's cloud-sims, merge main into it first: it lacks main's last 5 commits, including the fine-tune checkpoint var and the dataset tools. Pull in final-harness's `decisions.pdf` and mac-arm64's detector if you want them.
++- **A false "cable out" caused a DQ in the sim** when two calls were in flight. `confirm_gap_s` exists on cloud-sims but no plan sets it, so it is 0.
++- **Detector colours** come from a phone photo, and there is no black 8-ball photo. Re-tune on the station's cameras.
++- **Stale text:** HARNESS_GUIDE still lists plug-in stages for v4 and prints "BLACK BALL HELD". `cloud/README.md` still says white balls are targets in the sim, which `run.py` no longer does.
++- **Grip strength:** 1.5 N·m now. Going to 2.0 N·m is a manual step (`docs/STATION_TOMORROW.md`), and the gripper latches off at 55 °C.
+diff --git a/docs/LAST_NIGHT_2026-11-08.md b/docs/LAST_NIGHT_2026-11-08.md
+new file mode 100644
+index 0000000..3088e70
+--- /dev/null
++++ b/docs/LAST_NIGHT_2026-11-08.md
+@@ -0,0 +1,224 @@
++# Last night's work, 7-8 Nov 2026
++
++Written 8 Nov from the session logs, the three repos and the station logs copied to Darsh's laptop. The newest
++station log on that laptop ends at 05:22 UTC on 8 Nov, so anything the team ran later is not counted here. All
++times are UTC.
++
++## Short version
++
++- The harness got much tougher in simulation. Faults that used to end a match now cost a few points at most.
++- We have no proof yet that it works on the real table. No per-stage success numbers exist from real runs.
++- The big cloud test (round 1) died at 12:05 when the Dream account ran out of credits. Its results can't be used
++  to compare anything.
++- Darsh's handwritten strategy notes are coded, but only on branch `cloud-sims`, which is 56 commits ahead of
++  `main`. The team needs to decide which branch is the match harness.
++
++## What got built
++
++| Where | What |
++|---|---|
++| `main` | Stress-test fixes, tower target and `tower_prompts`, local ball and block detector, monitor by Claude subscription, live sim viewers, all 42 teleop takes split and labelled |
++| `start-pose-live-guard` | A 10 Hz guard on the wrist cameras that sends `/stop` by itself |
++| `hybrid-harness` | The monitor rewrites Dream prompts, shorter whole-task prompts, fixes from station run 3 |
++| `hedged-calls` | Several model calls for one decision, first answer wins, plus the OpenRouter judge benchmark |
++| `final-harness` | Merge of the best branch ideas, see `FINAL_HARNESS.md` |
++| `mac-arm64` | Changes for running the match laptop on Apple Silicon |
++| `cloud-sims` | Everything above plus Darsh's notes (`plans/operator_notes.yaml`), Dream at 2 Hz in async mode, prompt levels (`harness/promptgen.py`), GCP Batch jobs, a sim table modelled on the real one, cable-end classifier (`models/cable_end.onnx`), live joint telemetry, learned joint fault detector |
++| `codex/dual-arm-experiment` | Sequential against combined two-arm prompts in the sim. Pushed 8 Nov, not merged |
++| [follower_code](https://github.com/darshp848/follower_code) `quest-continuity` | Quest teleop fixes, Metal leader/follower |
++| [task_simulation](https://github.com/darshp848/task_simulation) | Sims, scenarios, cluster scripts and all result files |
++
++The last full test run on `cloud-sims` (13:07) was 407 passed, 4 failed, 5 skipped. The failures are two cases of
++`test_async_pacing_calls_at_2hz_and_physics_keeps_running`, plus `test_cli_transport_sends_the_request_unchanged`
++and `test_backend_switch`. Nobody has fixed them yet.
++
++## Results
++
++Keep these three groups apart. The offline sim is scripted, so it tells us the harness logic is sound and says
++little about whether a robot can do the task.
++
++### Offline stress sim (simulated, scripted policy, virtual clock)
++
++Points per seed, 4 seeds. "Before" is main at `3055bf3`, "after" is main at `d938644`.
++
++| Scenario | Before | After |
++|---|---|---|
++| Happy path | 87 74 90 116 | 83 94 95 95 |
++| Dream refuses on the first start | 0 0 0 0, match ended | 83 94 95 95 |
++| Refused twice | 0 0 0 0, match ended | 78 74 95 90 |
++| Action buffer empties mid-run | 10 10 15 15, match ended | 79 94 95 100 |
++| SVD did not converge | 10 0 10 10, match ended | 83 84 95 95 |
++| Policy keeps holding the unplugged plug | plugged it back in 4 of 4 | never |
++| 12 s of corrupt frames | 20 15 20 20 | 83 94 95 95 |
++| Arm dies | match ended, then sent `/start` | 15 10 15 15, no `/start` |
++| Illegal ball, 6 seeds, frames 2 s old | lost 4 of 6 | lost 2 of 6 with the local detector |
++| Unplug brushes a block | DQ 4 of 4 | DQ 4 of 4 |
++
++Full run: 37 scenarios, 5 seeds each, 185 matches per config.
++
++| Config | Mean points | Lost to DQ | Lost to illegal ball | Mean balls |
++|---|---|---|---|---|
++| `main`, v4 plan | 60.5 | 4 | 0 | 0.00 |
++| hybrid plan | 61.2 | 4 | 1 | 0.09 |
++| hybrid plan, fast judge | 70.5 | 4 | 28 | 3.01 |
++| final, v4 plan, fast judge | 66.6 | 6 | 0 | 2.37 |
++| final, hybrid plan, fast judge | 69.8 | 4 | 0 | 2.90 |
++
++A fast judge reaches the balls, and without the live guard it then loses matches to the illegal ball. With the
++guard it lost none in 185.
++
++Stage pass counts, simulated, final hybrid config (passed/tried across the 185 matches): first unplug 174/174, put
++cable down 156/174, stack_2 157/157, stack_3 149/149, tower_pass 149/149, first ball 104/112. These logs don't keep
++stage times, so there is no median time per stage. The unplug rate is a sim assumption of 0.8 per try. Base Dream-1
++on the real robot manages about 1 try in 6, so read the `calibrated_base` rows in `FINAL_HARNESS.md` for anything
++close to reality.
++
++### MuJoCo with the real Dream-1 API (simulated table, real model)
++
++25 matches on the cluster, excluding one batch with a referee bug.
++
++| Task | Result | Time |
++|---|---|---|
++| Unplug | a cable came out in 14 of 25 matches | first unplug median 57 s (range 28-269 s), a successful attempt about 27 s |
++| Put cable down | 0 of 54 tries | never worked, the policy keeps holding the plug |
++| Stack | 0 of 25 tries | |
++| Golf balls | never reached | |
++
++3 DQs, all with the hub on the left.
++
++Cloud round 1 (MuJoCo with real Dream) stopped at 12:05. 10 of 28 matches were marked valid, scoring 0-42 points.
++Arm B (async 2 Hz plus notes) had no valid matches at all, so the table in `HILL_CLIMB_LOG.md` stays empty. Don't
++draw conclusions from it. Six of the invalid laptop-run errors were Dream refusing the plug-in prompt.
++
++### Real station
++
++52 policy runs and 1650 Dream calls between 18:06 on 7 Nov and 05:22 on 8 Nov. The logs don't record whether a run
++succeeded, so **we have no real success rate for any task**. Humans on teleop: unplug median 8.5 s (15 demos),
++put-down 4.8 s (9 demos).
++
++## Dream latency
++
++From `robots-inference.jsonl`, 1650 calls on the station: round trip median 1115 ms, 90th percentile 2732 ms, worst
++8655 ms. Of the median, the model itself takes about 293 ms, the network about 40 ms, and the rest is Dream's
++gateway (992 ms in total as logged). One blocking call at a time can't reach 2 Hz, hence async mode and pipelining on
++`cloud-sims`. Pipelining doubles Dream usage, so credits go twice as fast.
++
++The monitor is the slow part. Haiku 5.5 takes 6.5-13 s per call. In the 60-decision benchmark, GPT-6.1 Terra through
++OpenRouter was the best per-decision judge: 98% correct on done and 97% on the guard at 2.8 s with no reasoning,
++100% on both at 3.7 s with low reasoning. Sonnet 5.5 was also 100% but took about 7 s.
++
++We have not compared the harness against plain Dream on the station. See the data list below.
++
++## Dream errors
++
++Station, 18:06 to 05:22, 16 errors. None of them are billing errors.
++
++| Type | Count | Text |
++|---|---|---|
++| Safety refusal | 4 (19:55, 20:33, 23:01, 23:30) | `DA-4000 BAD_REQUEST (malformed): unsafe instruction` |
++| SVD | 4 (23:03, 23:34, 23:50, 03:11) | `LinAlgError: SVD did not converge` |
++| Empty action buffer | 4 (19:57, 23:37, 03:10, 03:12) | `action buffer empty for 241 consecutive ticks (12.05 s)` |
++| Session replaced | 4 (23:36, 03:11 three times) | `DA-0001 DreamSessionExpired` |
++
++Sim and cloud runs, 8 Nov:
++
++| Type | When | Text |
++|---|---|---|
++| Key refused | 12:04:48 to the end of the runs, 83 lines | `DA-1000 UNAUTHORIZED (disabled): 'nuck5-dp'` |
++| Safety refusal | during round 1, 6 lines | `DA-4000 ... Plugging cords into power strips carries electrical/equipment...` |
++| Gateway timeout | night of 8 Nov, 2 mentions | `DA-6000 GATEWAY_FAULT (connection_timed_out)` |
++
++**Did credits run out?** Yes for the 12:04 burst. Darsh saw the account ran out and has topped it up. Dream reports
++this as `DA-1000 disabled`, which reads like a revoked key, and account calls such as listing models kept working.
++About 28 sessions were open at the time. We never read Dream's billing page from a script, so the exact moment the
++balance hit zero isn't known. The earlier errors (03:10-03:12 and before) are a different problem. They are empty
++buffers, SVD errors and session swaps, and credits don't explain them.
++
++No HTTP 402 or 429 appears anywhere in the logs.
++
++## Refusals
++
++4 refusals in about 1650 calls on the station. Dream's reasons were "inserting metal or objects into a power strip",
++"a person's hand is holding the plug", "unplug cables from a live power strip" and "unplug live bare wires". The
++second is a real scene problem, keep hands out of frame. We did not try to trick the filter. Stating the truth in
++the prompt (the strip is off the wall, the cords are low-voltage USB) is fine. Plug-in prompts still get refused
++in the sim, so test the exact match prompts before the match.
++
++## Tower target and the photo question
++
++`plans/hill_climb_v4.yaml` (`tower_target`) encodes IMG_2697, bottom to top: blue cube, pink cube, blue cube (holes
++sideways), yellow square stick, pink round stick. `tower_prompts` names the next piece, for example "put the pink
++cube on top of the stack". The order is checked and logged but doesn't block a stage.
++
++IMG_2699 shows pink, blue, blue instead. Darsh settled this on 8 Nov: **colour order doesn't matter**, so either tower
++counts. The colours in `tower_target` and the piece names sent by `tower_prompts` are one valid order and no more.
++Also, Darsh's notes want the last cube's hole facing up, which `main` doesn't encode. `cloud-sims` does.
++
++## Darsh's strategy notes
++
++Handwritten PDF on branch `final-harness` as `docs/decisions.pdf`, typed in `docs/DECISIONS.md`.
++
++"Text only" means `plans/operator_notes.yaml` holds the instruction for the monitor. It goes in the Dream prompt
++only on plans with `prompt_technique: true`, which is `hybrid_v4` and not `hill_climb_v4`.
++
++| Note | `main` | `cloud-sims` |
++|---|---|---|
++| Blocks first, cylinders after | Yes, by stage order | Yes |
++| Come down on blocks from above, no overhang | No | Text only |
++| Last cube hole up, cylinder upright in the hole | No, all holes sideways | Text, plus `tower_target_last_cube` |
++| Next cylinder on top, slowly | No | Text only |
++| Push white balls off the table | **No** | `ball_push_white` stage, 1 try, skipped if the path isn't clear. Untested on the robot |
++| Coloured balls in the basket, avoid white | Yes | Yes |
++| Other arm watches the cables | No | Text only. The v4 and hybrid plans don't position a watcher arm |
++| Grip at max strength | Station setting is 1.5 N·m | Same. Going to 2.0 is a manual step in `docs/STATION_TOMORROW.md` |
++| Pull 2-3 cables, vertical, lay flat near the hub | No | Text only |
++| Plug USB-C by the black part, first port from the left | No plug stage in v4 | Text for `plug_*`, but the v4 plan has no plug stage |
++| Detect errors | Generic monitor | `watch_for` per stage |
++| Failed twice, move on (3 tries if high value) | **No**, pass-bar stages use `max_attempts: 99` | 2 tries, 3 at 20+ points, except pass-bar stages |
++
++Pass-bar stages still retry until the clock runs out on `cloud-sims`. Moving on from one means touching the next
++stage's objects, and the rubric disqualifies that. That is a deliberate exception to the note. Tell us if you want
++it the other way.
++
++## Data still to collect on the station
++
++Dataset counts are from the copies on Darsh's laptop (`nuc_data/hackathon_data`, 3 GB, not in git). The newest
++dataset there dates from 7 Nov 23:00 Central. Newer recordings on the NUC are not counted.
++
++| Data | Have | Still needed |
++|---|---|---|
++| Unplug and put-down demos | Quest 40 and 34, leader 15 and 7 | Enough for now. Add the 2-3 cable vertical pull if we want that technique |
++| Plug-in demos | 16 | More if plug-in comes back |
++| Stack demos | 2 block demos | Record more, any colour order |
++| Upright stick demos | 8 | More |
++| Golf ball demos | 1 | Many more |
++| Watcher-arm pose demos | None found | Record, if we keep the watcher idea |
++| Harness runs on the station, per-stage success | None on the laptop. Run 3 at 05:49 is mentioned in `hybrid-harness` commits | Copy logs off the NUC, then run matches and log each stage |
++| Real motor torque while pulling a cable | Estimate from `last-run.csv` only. `candump` isn't on the NUC | Run `harness/can_live.py` (receive only), see `docs/STATION_TOMORROW.md` |
++| Grip at 2.0 N·m | Not done | Set it, then watch gripper temperature (latches off at 55 C) |
++| Station camera frames for detector colours | Tuned on phone photos | Overhead and wrist frames, gripper open and closed around the white ball |
++| Monitor latency in a real match | Offline only | Log it during station runs |
++| Harness against plain Dream latency | None | Same prompt, both ways, compare `rtt_ms` |
++| `quest_collect.py --dry-run` on the NUC | Not run. Held at 02:49 while the team recorded | Run it when the arms are free |
++| Black 8-ball photos | None in the photos we have | Take them if black balls will be on the table |
++| Block measurements | No record | Measure them, `tower_pass` depends on the 4 inch bar |
++
++## To do, most urgent first
++
++| # | Task | Owner |
++|---|---|---|
++| 1 | Pick the match branch: `main` or `cloud-sims`. Then merge | |
++| 2 | Done: colour order doesn't matter (Darsh, 8 Nov) | |
++| 3 | Add a one-call Dream check before any batch that stops on `DA-1000` (asked for 14:57, not built) | |
++| 4 | Fix the 4 failing tests on `cloud-sims` | |
++| 5 | Copy station logs from the NUC, including run 3 | |
++| 6 | Run harness matches on the real table, log per-stage success | |
++| 7 | Test the exact match prompts for refusals, keep hands out of frame | |
++| 8 | Record more stack demos in any colour order, plus golf balls | |
++| 9 | Rerun round 1 with fewer sessions and credits checked first | |
++| 10 | Decide if pass-bar stages should follow "fail twice, move on" | |
++| 11 | Add a minimum gap between confirming verdicts (two false "cable out" verdicts caused a DQ with two calls in flight) | |
++| 12 | Set grip to 2.0 N·m and run `can_live.py` | |
++| 13 | `quest_collect.py --dry-run` and the 5 new Quest tests on the NUC | |
++| 14 | Re-tune detector colours on station frames | |
++| 15 | Build the USB-C port classifier. Only the plan exists (`docs/USBC_PORT_CLASSIFIER_PLAN.md`), the cable-end classifier is done | |
+diff --git a/harness/plan.py b/harness/plan.py
+index c95efe7..f6288bd 100644
+--- a/harness/plan.py
++++ b/harness/plan.py
+@@ -345,9 +345,9 @@ def parse_plan(data: Any) -> Plan:
+ def _tower_prompts(raw: Any, target: list[str]) -> dict[str, str]:
+     if raw is None:
+         return {}
+-    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) and "<piece>" in v
++    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                             for k, v in raw.items()):
+-        raise ValueError("plan.tower_prompts: must map a shape word to a prompt containing <piece>")
++        raise ValueError("plan.tower_prompts: must map a shape word to a prompt")
+     if not target:
+         raise ValueError("plan.tower_prompts: needs tower_target")
+     for piece in target:
+diff --git a/harness/report.py b/harness/report.py
+index 0c85df9..3295439 100644
+--- a/harness/report.py
++++ b/harness/report.py
+@@ -41,6 +41,14 @@ def run_dirs(root: str | Path, last: int | None = None) -> list[Path]:
+     return dirs[-last:] if last else dirs
+ 
+ 
++def checkpoint_of(run: Path) -> str:
++    """The model a run started (the runner logs it on every `start` event); "?" for a run with none."""
++    for e in _jsonl(run / "events.jsonl"):
++        if e.get("event") == "start" and e.get("checkpoint"):
++            return str(e["checkpoint"])
++    return "?"
++
++
+ def _normalise(reason: str) -> str:
+     reason = reason.split(":")[0] if reason.startswith(("verifier said no", "monitor says", "stalled", "regressed")) else reason
+     return re.sub(r"\d+(\.\d+)?", "N", reason).strip()[:80] or "(no reason)"
+@@ -111,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
+     p = argparse.ArgumentParser(prog="python -m harness.report", description="Summarise Hill Climb runs")
+     p.add_argument("runs", help="the runs/ directory")
+     p.add_argument("--last", type=int, default=None, help="only the newest N runs")
++    p.add_argument("--by-checkpoint", action="store_true",
++                   help="one table per model the runs used (an A/B of base Dream-1 against a fine-tune)")
+     args = p.parse_args(argv)
+     try:
+         dirs = run_dirs(args.runs, args.last)
+@@ -120,7 +130,13 @@ def main(argv: list[str] | None = None) -> int:
+     if not dirs:
+         print("no finished runs found", file=sys.stderr)
+         return 1
+-    print(format_report(build_report(dirs)))
++    if not args.by_checkpoint:
++        print(format_report(build_report(dirs)))
++        return 0
++    groups: dict[str, list[Path]] = defaultdict(list)
++    for d in dirs:
++        groups[checkpoint_of(d)].append(d)
++    print("\n\n".join(f"== {ck} ==\n{format_report(build_report(ds))}" for ck, ds in sorted(groups.items())))
+     return 0
+ 
+ 
+diff --git a/harness/runner.py b/harness/runner.py
+index 88e711f..3499fa3 100644
+--- a/harness/runner.py
++++ b/harness/runner.py
+@@ -89,17 +89,20 @@ def _norm(piece: str) -> str:
+     return " ".join(w for w in piece.lower().replace(",", " ").split() if w not in ("a", "the", "an"))
+ 
+ 
++_SHAPES = {"cube": ("cube", "block"), "stick": ("stick", "cylinder", "rod", "peg")}
++
++
++def _shape(text: str) -> str | None:
++    t = _norm(text)
++    return next((shape for shape, words in _SHAPES.items() if any(w in t for w in words)), None)
++
++
+ def tower_matches(seen: list[str], target: list[str]) -> bool:
+-    """The seen tower is the target's first len(seen) pieces. Per piece, the colour (first word) and the shape (last
+-    word before the comma) of the target must appear in the seen one; orientation wording varies and is not compared."""
++    """The seen tower has the target's first len(seen) shapes, bottom to top: cubes first, then sticks. Colour order
++    doesn't matter (Darsh, 8 Nov) and orientation wording varies, so neither is compared."""
+     if len(seen) > len(target):
+         return False
+-    for s, t in zip(seen, target):
+-        words = _norm(t.split(",")[0]).split()
+-        key = [words[0], words[-1]] if words else []
+-        if not all(k in _norm(s).split() or k in _norm(s) for k in key):
+-            return False
+-    return True
++    return all(_shape(s) == _shape(t) for s, t in zip(seen, target))
+ 
+ 
+ def _inference_fault(last_error: Any) -> bool:
+diff --git a/harness/verifiers.py b/harness/verifiers.py
+index 8643881..c258da4 100644
+--- a/harness/verifiers.py
++++ b/harness/verifiers.py
+@@ -407,7 +407,8 @@ class MonitorVerifier:
+         if self.plan.tower_target and stage.name.startswith(TOWER_STAGES):
+             target = "; ".join(f"{i}. {p}" for i, p in enumerate(self.plan.tower_target, 1))
+             lines.append(f"Target tower, bottom to top: {target}. Report the tower you see as `tower`: a list of its "
+-                         "pieces bottom to top, worded like the target (empty list if there is no tower).")
++                         "pieces bottom to top, worded like the target (empty list if there is no tower). Colours don't "
++                         "matter, only the shapes.")
+             schema = schema.rstrip()[:-1] + ', "tower": [str]}'
+         if stage.watch is not None:
+             lines.append(f"Watcher check (answer it as watch_ok, from the {stage.watch.camera} images): "
+diff --git a/plans/bench_cable.yaml b/plans/bench_cable.yaml
+new file mode 100644
+index 0000000..4ba8ab3
+--- /dev/null
++++ b/plans/bench_cable.yaml
+@@ -0,0 +1,56 @@
++# Benchmark, not a match plan: base Dream-1 against the fine-tune on Stage 1 only (one unplug, put it down, let go),
++# with the match plan's own prompts, success questions and recoveries, so a result here carries over to the match.
++#
++#   python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench
++#   python -m harness plans/bench_cable.yaml --live --verifier monitor+manual --runs-dir runs/bench \
++#       --var model=dream-1-ft:bb4b9e5f-relay-final
++#   python -m harness.report runs/bench --by-checkpoint
++#
++# Alternate the two models run by run (base, fine-tune, base, ...) so the table, the light and the cables age the same
++# for both. Reset between runs: all 4 cables in the hub, arms home. 5 runs each is the least that shows a difference.
++# Unlike the match plan, unplug_cable gives up after 3 attempts (a match keeps trying until the clock runs out),
++# so a run ends in about 3 minutes at worst and every run is counted.
++task: >-
++  Unplug a USB cable that starts in the hub, put it down on the table away from the hub, and let go.
++  Never plug a cable into the hub. Do not touch the blocks or the balls.
++checkpoint: "{model}"
++vars: {model: dreamlabs/dream-1-beta}
++time_budget_s: 200
++check_every_s: 3.0
++verifier: monitor
++confirm: 2
++done_message: "CABLE BENCH RUN DONE"
++claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}
++
++stages:
++  - name: unplug_cable
++    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
++    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
++    expect: "The right gripper closes fully on the plug at the end of the hub nearest it and pulls it straight out along the port until the plug is clear."
++    timeout_s: 60
++    max_attempts: 3
++    min_run_s: 4
++    settle_s: 4
++    stall_s: 20
++    recovery:
++      - {name: keep_pulling, kind: retry, when: "the gripper is on a plug or right next to the hub", max_uses: 2}
++      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
++         when: "the gripper is stuck, holds the wire instead of the plug, or has pushed the hub", settle_s: 5, max_uses: 2}
++    on_fail: abort            # nothing to put down
++
++  - name: put_cable_down
++    prompt: "put the held cable down on the table away from the hub"
++    success: "Are both grippers empty, with the unplugged cable lying on the table away from the hub?"
++    expect: "The right arm carries the unplugged cable away from the hub, lowers it to the table and opens."
++    timeout_s: 20
++    min_run_s: 3
++    confirm: 1
++    on_fail: skip
++
++  - name: release_cable
++    prompt: "open both grippers and move the arms up"
++    success: "Are both grippers open and empty, with no cable held?"
++    timeout_s: 10
++    min_run_s: 2
++    confirm: 1
++    on_fail: skip
+diff --git a/plans/hill_climb_v4.yaml b/plans/hill_climb_v4.yaml
+index 9f7d4e0..6f88868 100644
+--- a/plans/hill_climb_v4.yaml
++++ b/plans/hill_climb_v4.yaml
+@@ -29,7 +29,9 @@ task: >-
+   Stage 2: stack blocks into a free-standing tower more than 4 inches (10 cm) tall. Do not touch the blocks before a
+   cable is unplugged. Stage 3: put golf balls into the bin, never either black 8-ball, without touching the tower.
+   Do not touch the golf balls before the tower passes.
+-checkpoint: dreamlabs/dream-1-beta   # base Dream-1 (a Metal station has no default model); then dream-1-ft:<account>-relay-v1
++# The model: base Dream-1 by default (a Metal station has no default model). The fine-tune of 7-8 Nov runs with
++#   --var model=dream-1-ft:bb4b9e5f-relay-final   (only with that account's DREAM_API_KEY in dreamcli's shell)
++checkpoint: "{model}"
+ time_budget_s: 295          # 5-minute match, a little margin for the start
+ check_every_s: 3.0
+ verifier: monitor
+@@ -37,7 +39,7 @@ confirm: 2
+ done_message: "ALL STAGES DONE: CALL STOP NOW"
+ # Camera role of the arm that stacks (the right arm), for the monitor's notes only.
+ # The prompts never name an arm, so changing these does not change what the model is asked.
+-vars: {stack_cam: wrist_r}
++vars: {stack_cam: wrist_r, model: dreamlabs/dream-1-beta}
+ claude: {model: claude-haiku-5-5, max_tokens: 4000, history_frames: 6}   # 600 cut off every reply: Haiku 5.5 thinks first
+ # Black-ball guard: on every ball check the monitor also answers this. One yes stops the run at once (POST /stop:
+ # the arms hold where they are, so a held black ball stays in the gripper, out of the bin). Then call "stop".
+@@ -52,23 +54,23 @@ guard:
+   # each, a black ball in the bin loses the match, and nobody would be looking for one.
+   max_blind_s: 20
+ 
+-# The tower to build (Darsh's photo, Drive IMG_2697, 7 Nov 20:30), bottom to top. The monitor gets it as the expected
++# The tower to build, bottom to top. Colour order doesn't matter (Darsh, 8 Nov): only the shapes are compared, cubes first, then sticks. The monitor gets it as the expected
+ # result on stack_* / tower_* / higher_* stages and reports the tower it sees; events.jsonl logs `tower` and
+ # `tower_order_ok` on every check. It does NOT gate a stage: the stack prompt is one recorded text, so Dream can't be
+ # told which piece comes next, and a wrong piece must not cost the +20 for height. The order comes from demos.
+ tower_target:
+-  - "blue cube, hole facing sideways"
+-  - "pink cube, hole facing sideways"
+-  - "blue cube, hole facing sideways"
+-  - "yellow square stick, standing upright"
+-  - "pink round stick, standing upright"
++  - "cube, hole facing sideways"
++  - "cube, hole facing sideways"
++  - "cube, hole facing sideways"
++  - "stick, standing upright"
++  - "stick, standing upright"
+ # Name the next piece in the stack prompt (Darsh, 8 Nov): the monitor reports the tower bottom to top, the harness
+-# picks the next target piece and sends e.g. "put the pink cube on top of the stack". Only for base Dream-1, which
++# picks the next shape and sends the text below. Only for base Dream-1, which
+ # stacks zero-shot and followed colour prompts on the station on 7 Nov ("put the pink block on top of a blue block").
+ # DELETE this block when stacking runs on a fine-tune: it only knows the recorded text "put a block on top of the stack".
+ tower_prompts:
+-  cube: "put the <piece> on top of the stack"
+-  stick: "stand the <piece> upright on top of the stack"
++  cube: "put a block on top of the stack"   # the recorded text, byte for byte
++  stick: "stand a stick upright on top of the stack"
+ 
+ stages:
+   # ---- Stage 1 (pass bar: one cable out) ----
+diff --git a/tests/test_finetune_watch.py b/tests/test_finetune_watch.py
+new file mode 100644
+index 0000000..a8d7a91
+--- /dev/null
++++ b/tests/test_finetune_watch.py
+@@ -0,0 +1,223 @@
++"""tools/finetune_watch.py against a scripted fake Dream service (no network, no library, no charges)."""
++
++import datetime as dt
++import json
++import sys
++from pathlib import Path
++
++import pytest
++
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
++import finetune_watch as fw  # noqa: E402
++
++
++class DreamServerError(Exception):
++    def __init__(self, msg, code="", retryable=False, reason="", retry_after_s=None):
++        super().__init__(msg)
++        self.code, self.retryable, self.reason, self.retry_after_s = code, retryable, reason, retry_after_s
++
++
++class DreamProtocolError(Exception):
++    pass
++
++
++class FakeService:
++    """Each job id maps to a list of states returned one per poll (the last repeats)."""
++
++    def __init__(self, job_scripts, *, create_errors=(), upload_errors=(), dataset_states=("processing", "processed"),
++                 existing_jobs=(), warm_script=("ok",), dataset_error=None):
++        self.job_scripts = list(job_scripts)
++        self.create_errors = list(create_errors)
++        self.upload_errors = list(upload_errors)
++        self.dataset_states = list(dataset_states)
++        self.existing = list(existing_jobs)
++        self.warm_script = list(warm_script)
++        self.dataset_error = dataset_error
++        self.created, self.uploads, self.polls = [], [], {}
++
++    def validate(self, path):
++        return "3 episodes"
++
++    def upload(self, path, name):
++        if self.upload_errors:
++            raise self.upload_errors.pop(0)
++        self.uploads.append(name)
++        return "ds_1", f"me/{name}"
++
++    def dataset(self, ds_id):
++        st = self.dataset_states.pop(0) if len(self.dataset_states) > 1 else self.dataset_states[0]
++        return st, "me/relay", self.dataset_error
++
++    def create_job(self, name, suffix):
++        if self.create_errors:
++            raise self.create_errors.pop(0)
++        jid = f"ftj_{len(self.created) + 1}"
++        self.created.append((jid, suffix))
++        self.polls[jid] = list(self.job_scripts.pop(0))
++        return {"id": jid, "status": "queued", "queue_position": 2, "suffix": suffix}
++
++    def job(self, jid):
++        q = self.polls[jid]
++        st = q.pop(0) if len(q) > 1 else q[0]
++        return {"id": jid, **st}
++
++    def jobs(self):
++        return list(self.existing)
++
++    def warm(self, model):
++        r = self.warm_script.pop(0) if len(self.warm_script) > 1 else self.warm_script[0]
++        if isinstance(r, Exception):
++            raise r
++        return "answered (48 rows)"
++
++
++def running(step):
++    return {"status": "running", "fine_tuned_model": None, "progress": {"phase": "training", "step": step,
++                                                                         "total_steps": 1000, "loss": 0.1}}
++
++
++QUEUED = {"status": "queued", "fine_tuned_model": None, "queue_position": 1}
++DONE = {"status": "succeeded", "fine_tuned_model": "dream-1-ft:abc-relay"}
++FAIL_TRAIN = {"status": "failed", "fine_tuned_model": None, "error": "the training did not finish"}
++FAIL_DATA = {"status": "failed", "fine_tuned_model": None, "error": "episode 3: video has fewer frames than its table"}
++
++
++def watcher(tmp_path, svc):
++    t = [dt.datetime(2026, 11, 7, 22, 0)]
++    sleeps = []
++
++    def sleep(s):
++        sleeps.append(s)
++        t[0] += dt.timedelta(seconds=s)
++
++    w = fw.Watcher(svc, tmp_path / "w", poll_s=300, sleep=sleep, now=lambda: t[0], out=lambda m: None)
++    return w, sleeps
++
++
++def start(w, **kw):
++    args = dict(dataset="/data/ft", name="relay", suffix="relay", max_requeues=1, requeue_short=False,
++                keep_warm_until=None, warm=True)
++    args.update(kw)
++    w.start(**args)
++
++
++def test_happy_path_uploads_queues_and_warms(tmp_path):
++    svc = FakeService([[QUEUED, running(100), running(900), {"status": "succeeded", "fine_tuned_model": None}, DONE]])
++    w, _ = watcher(tmp_path, svc)
++    start(w)
++    assert svc.uploads == ["relay"] and svc.created == [("ftj_1", "relay")]
++    assert (tmp_path / "w" / "MODEL.txt").read_text().strip() == "dream-1-ft:abc-relay"   # waits for the model id
++    assert "warm" in (tmp_path / "w" / "STATUS.txt").read_text()
++    assert json.loads((tmp_path / "w" / "state.json").read_text())["warmed"]
++
++
++def test_training_failure_is_requeued_once_under_a_new_suffix(tmp_path):
++    svc = FakeService([[QUEUED, running(400), FAIL_TRAIN], [running(10), DONE]])
++    w, _ = watcher(tmp_path, svc)
++    start(w)
++    assert svc.created == [("ftj_1", "relay"), ("ftj_2", "relay-r2")]
++    assert svc.uploads == ["relay"]                                  # same processed dataset, no second upload
++    assert w.state["model"] == "dream-1-ft:abc-relay" and w.state["requeues"] == 1
++
++
++def test_requeue_budget_is_respected(tmp_path):
++    svc = FakeService([[FAIL_TRAIN], [FAIL_TRAIN]])
++    w, _ = watcher(tmp_path, svc)
++    with pytest.raises(fw.Stop, match="budget"):
++        start(w)
++    assert len(svc.created) == 2
++    assert "STOPPED" in (tmp_path / "w" / "STATUS.txt").read_text()
++
++
++def test_dataset_fault_stops_without_requeue(tmp_path):
++    svc = FakeService([[FAIL_DATA]])
++    w, _ = watcher(tmp_path, svc)
++    with pytest.raises(fw.Stop, match="dataset"):
++        start(w)
++    assert len(svc.created) == 1
++
++
++def test_payment_required_stops_before_anything_is_charged(tmp_path):
++    svc = FakeService([], create_errors=[DreamServerError("credits do not cover $200", code="payment_required")])
++    w, _ = watcher(tmp_path, svc)
++    with pytest.raises(fw.Stop, match="payment_required"):
++        start(w)
++    assert svc.created == []
++
++
++def test_suffix_in_use_renames_and_network_errors_retry(tmp_path):
++    svc = FakeService([[DONE]], create_errors=[DreamProtocolError("connection reset"),
++                                               DreamServerError("suffix in use by one of your models", code="conflict"),
++                                               DreamServerError("bad gateway", code="http_502", retryable=True)])
++    w, sleeps = watcher(tmp_path, svc)
++    start(w)
++    assert svc.created == [("ftj_1", "relay-r2")] and len(sleeps) >= 2
++
++
++def test_dataset_name_in_use_is_renamed(tmp_path):
++    svc = FakeService([[DONE]], upload_errors=[DreamServerError("a dataset named relay already exists", code="conflict")])
++    w, _ = watcher(tmp_path, svc)
++    start(w)
++    assert svc.uploads == ["relay-r2"]
++
++
++def test_failed_processing_stops(tmp_path):
++    svc = FakeService([], dataset_states=["processing", "failed"], dataset_error="video key missing")
++    w, _ = watcher(tmp_path, svc)
++    with pytest.raises(fw.Stop, match="failed processing"):
++        start(w)
++    assert svc.created == []
++
++
++def test_resume_finds_a_job_queued_before_a_crash_instead_of_queueing_again(tmp_path):
++    svc = FakeService([[DONE]])
++    w, _ = watcher(tmp_path, svc)
++    w.state = {"dataset_path": "/data/ft", "name": "relay", "base_name": "relay", "base_suffix": "relay",
++               "suffix": "relay", "suffix_n": 1, "max_requeues": 1, "requeues": 0, "requeue_short": False,
++               "keep_warm_until": None, "warm": False, "jobs": [], "dataset_id": "ds_1", "dataset_name": "me/relay"}
++    svc.existing = [{"id": "ftj_9", "suffix": "relay", "status": "running"}]
++    svc.polls["ftj_9"] = [running(500), DONE]
++    w.run()
++    assert svc.created == [] and w.state["job_id"] == "ftj_9" and w.state["model"]
++
++
++def test_stopped_short_keeps_the_model(tmp_path):
++    short = {"status": "succeeded", "fine_tuned_model": "dream-1-ft:abc-relay", "notice": "loss became NaN at 700"}
++    svc = FakeService([[short]])
++    w, _ = watcher(tmp_path, svc)
++    start(w, warm=False)
++    assert len(svc.created) == 1 and "stopped short" in w.state["status"]
++
++
++def test_warm_up_waits_through_pool_warming(tmp_path):
++    svc = FakeService([[DONE]], warm_script=[DreamServerError("starting", code="DA-2000", retryable=True,
++                                                              reason="pool_warming", retry_after_s=120)] * 3 + ["ok"])
++    w, sleeps = watcher(tmp_path, svc)
++    start(w)
++    assert sleeps.count(120) == 3 and w.state["warmed"]
++
++
++def test_start_refuses_a_second_run_in_the_same_folder(tmp_path):
++    svc = FakeService([[DONE]])
++    w, _ = watcher(tmp_path, svc)
++    start(w, warm=False)
++    w2, _ = watcher(tmp_path, FakeService([[DONE]]))
++    with pytest.raises(fw.Stop, match="already has a run"):
++        start(w2)
++
++
++def test_cli_refuses_without_accepting_charges(capsys):
++    assert fw.main(["start", "/data/ft", "--name", "a", "--suffix", "b"]) == 2
++    assert "charges" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize("exc, kind", [
++    (DreamProtocolError("x"), "retry"),
++    (DreamServerError("x", code="http_503", retryable=True), "retry"),
++    (DreamServerError("not covered", code="payment_required"), "stop"),
++    (DreamServerError("knob steps out of range", code="invalid_request"), "stop"),
++    (DreamServerError("account at its limit of active jobs", code="conflict"), "busy"),
++    (DreamServerError("suffix in use", code="conflict"), "suffix"),
++])
++def test_classify(exc, kind):
++    assert fw.classify(exc) == kind
+diff --git a/tests/test_tower_target.py b/tests/test_tower_target.py
+index 426976d..39179ab 100644
+--- a/tests/test_tower_target.py
++++ b/tests/test_tower_target.py
+@@ -1,4 +1,4 @@
+-"""tower_target: the v4 plan's target tower (Drive IMG_2697) reaches the monitor and the log, never gates a stage."""
++"""tower_target: the v4 plan's target shapes reach the monitor and the log, never gates a stage."""
+ 
+ from pathlib import Path
+ 
+@@ -11,11 +11,11 @@ from harness.verifiers import MonitorVerifier, parse_monitor_reply
+ V4 = Path(__file__).resolve().parents[1] / "plans" / "hill_climb_v4.yaml"
+ 
+ 
+-def test_v4_target_is_the_photo_tower():
+-    t = load_plan(V4).tower_target
+-    assert [p.split(",")[0] for p in t] == ["blue cube", "pink cube", "blue cube", "yellow square stick",
+-                                           "pink round stick"]
+-    assert "upright" in t[3] and "upright" in t[4] and all("sideways" in p for p in t[:3])
++def test_v4_target_is_shapes_only():
++    target = load_plan(V4).tower_target
++    assert [p.split(",")[0] for p in target] == ["cube", "cube", "cube", "stick", "stick"]
++    assert not any(c in p for p in target for c in ("blue", "pink", "yellow"))
++    assert "upright" in target[3] and "upright" in target[4]
+ 
+ 
+ def test_target_goes_to_stacking_stages_only():
+@@ -31,10 +31,11 @@ def test_target_goes_to_stacking_stages_only():
+ @pytest.mark.parametrize("seen, ok", [
+     ([], True),
+     (["blue cube"], True),
+-    (["Blue cube (hole to the side)", "pink cube", "blue cube", "yellow stick standing up"], True),
+-    (["blue cube", "blue cube"], False),           # wrong second piece
+-    (["pink cube"], False),
+-    (["blue cube", "pink cube", "blue cube", "pink stick", "yellow stick"], False),   # sticks swapped
++    (["pink cube"], True),                         # any colour
++    (["Blue cube (hole to the side)", "pink block", "blue cube", "yellow stick standing up"], True),
++    (["pink cube", "blue cube", "blue cube", "pink cylinder", "yellow stick"], True),   # the IMG_2699 tower
++    (["blue cube", "yellow stick"], False),        # a stick before the third cube
++    (["yellow stick"], False),
+     (["blue cube"] * 6, False),                    # taller than the target
+ ])
+ def test_tower_matches(seen, ok):
+@@ -80,10 +81,10 @@ def _prompt_for(tower, tmp_path):
+ 
+ 
+ @pytest.mark.parametrize("tower, prompt", [
+-    (["blue cube"], "put the pink cube on top of the stack"),
+-    ([], "put the pink cube on top of the stack"),
+-    (["blue cube", "pink cube", "blue cube"], "stand the yellow square stick upright on top of the stack"),
+-    (["blue cube", "pink cube", "blue cube", "yellow square stick"], "stand the pink round stick upright on top of the stack"),
++    (["blue cube"], "put a block on top of the stack"),            # the recorded text
++    ([], "put a block on top of the stack"),
++    (["pink cube", "blue cube", "blue cube"], "stand a stick upright on top of the stack"),
++    (["blue cube", "pink cube", "blue cube", "yellow square stick"], "stand a stick upright on top of the stack"),
+     (["blue cube"] * 5, "put a block on top of the stack"),       # target complete: the generic prompt
+     (None, "put a block on top of the stack"),                    # no tower reported
+ ])
+diff --git a/tests/test_v2.py b/tests/test_v2.py
+index 43e9941..614f20a 100644
+--- a/tests/test_v2.py
++++ b/tests/test_v2.py
+@@ -709,6 +709,14 @@ def test_report_tables_and_false_success(tmp_path, capsys):
+     assert "runs: 1" in out and "false-success leads" in out
+     assert report.main([str(root)]) == 0
+     assert "a/fix" in capsys.readouterr().out
++    # --by-checkpoint: one table per model, read from each run's `start` event
++    for name, ck in (("20260101T000000Z", "dreamlabs/dream-1-beta"), ("20260102T000000Z", "dream-1-ft:x-relay")):
++        with (root / name / "events.jsonl").open("a") as f:
++            f.write("\n" + json.dumps({"t": 0.0, "event": "start", "checkpoint": ck}) + "\n")
++    assert report.checkpoint_of(root / "20260102T000000Z") == "dream-1-ft:x-relay"
++    assert report.main([str(root), "--by-checkpoint"]) == 0
++    out = capsys.readouterr().out
++    assert "== dream-1-ft:x-relay ==" in out and "== dreamlabs/dream-1-beta ==" in out and out.count("runs: 1") == 2
+ 
+ 
+ def test_report_empty_dir(tmp_path, capsys):
+diff --git a/tools/check_dataset.py b/tools/check_dataset.py
+new file mode 100644
+index 0000000..2dab4fa
+--- /dev/null
++++ b/tools/check_dataset.py
+@@ -0,0 +1,166 @@
++"""Deep checks of LeRobot v2.1 datasets before a fine-tune, beyond Dream's own validate_dataset.
++
++    python tools/check_dataset.py DATASET_OR_PARENT [...] [--tasks plans/hill_climb_v4.yaml] [--videos]
++
++Per dataset folder (a parent of several is searched), per episode:
++- meta: info totals == episodes.jsonl; every task in tasks.jsonl; one episodes_stats line per episode;
++- table: rows == length; frame_index 0..n-1; timestamp == frame_index / fps; episode_index and task_index right;
++  `index` continuous over the dataset; no NaN or inf;
++- values (the Metal kit's 14-wide joint layout): joints within +-pi; grippers 0..100 mm; commanded vs measured
++  joints within 1 rad (teleop lag); 1.6 s <= length <= 50 s;
++- arms: exactly one arm works (its gripper closes); the other is parked (leader takes: constant) or nearly still;
++- task ends: an unplug ends with the working gripper commanded closed (holding the plug); every other task ends with
++  it open (released);
++- duplicates: two episodes with the same length and the same first and last rows;
++- with --videos (needs ffmpeg/ffprobe): every camera has exactly `length` frames, and a frozen camera (the leader's
++  wrist, by motion) is reported;
++- with --tasks PLAN: every task text is listed as prompted by the plan or not.
++Exit 1 if any check fails (warnings do not fail). Read only.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import subprocess
++import sys
++from collections import Counter, defaultdict
++from pathlib import Path
++
++import numpy as np
++import pyarrow.parquet as pq
++
++UNPLUG = "unplug the USB cable at the end of the hub nearest the right arm"
++SIDES = {"left": (slice(0, 6), 6), "right": (slice(7, 13), 13)}
++MIN_S, MAX_S = 1.6, 50.0
++
++
++def datasets(paths: list[Path]) -> list[Path]:
++    out: list[Path] = []
++    for p in paths:
++        p = p.expanduser()
++        if (p / "meta" / "info.json").is_file():
++            out.append(p)
++        else:
++            out += sorted(m.parent.parent for m in p.glob("*/meta/info.json"))
++    return out
++
++
++def frames(path: Path) -> int:
++    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
++                        "stream=nb_read_frames", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
++    return int(r.stdout.strip() or -1)
++
++
++def motion(path: Path) -> float:
++    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf", "select='not(mod(n\\,15))',scale=64:36",
++                          "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
++                         capture_output=True).stdout
++    f = np.frombuffer(raw, np.uint8).reshape(-1, 36, 64, 3).astype(np.float32)
++    return float(np.abs(f - f[0]).mean()) if len(f) > 1 else 0.0
++
++
++def check(ds: Path, videos: bool) -> tuple[list[str], list[str], Counter, list[tuple]]:
++    errors, warns, tasks_n, fingerprints = [], [], Counter(), []
++    info = json.loads((ds / "meta" / "info.json").read_text())
++    fps = float(info["fps"])
++    eps = [json.loads(x) for x in (ds / "meta" / "episodes.jsonl").read_text().splitlines() if x.strip()]
++    tasks = {t["task_index"]: t["task"] for t in map(json.loads, (ds / "meta" / "tasks.jsonl").read_text().splitlines()) if t}
++    stats = [json.loads(x) for x in (ds / "meta" / "episodes_stats.jsonl").read_text().splitlines() if x.strip()]
++    name = ds.name
++    if info["total_episodes"] != len(eps): errors.append(f"{name}: info total_episodes {info['total_episodes']} != {len(eps)}")
++    if info["total_frames"] != sum(e["length"] for e in eps): errors.append(f"{name}: info total_frames mismatch")
++    if len(stats) != len(eps): errors.append(f"{name}: {len(stats)} stats lines for {len(eps)} episodes")
++    keys = [k for k, f in info["features"].items() if f.get("dtype") == "video"]
++    width = info["features"]["observation.state"]["shape"][0]
++    next_index = 0
++    for e in eps:
++        i, n, task = e["episode_index"], e["length"], e["tasks"][0]
++        tag = f"{name} ep{i}"
++        tasks_n[task] += 1
++        if task not in tasks.values(): errors.append(f"{tag}: task not in tasks.jsonl")
++        t = pq.read_table(ds / info["data_path"].format(episode_chunk=i // info["chunks_size"], episode_index=i))
++        if t.num_rows != n: errors.append(f"{tag}: {t.num_rows} rows, episodes.jsonl says {n}")
++        fi = t["frame_index"].to_numpy(); ts = t["timestamp"].to_numpy(); ix = t["index"].to_numpy()
++        if not np.array_equal(fi, np.arange(n)): errors.append(f"{tag}: frame_index not 0..n-1")
++        if np.abs(ts - fi / fps).max() > 1e-3: errors.append(f"{tag}: timestamps off frame_index/fps")
++        if ix[0] != next_index or not np.array_equal(ix, np.arange(ix[0], ix[0] + n)):
++            errors.append(f"{tag}: index not continuous (starts {ix[0]}, expected {next_index})")
++        next_index = ix[0] + n
++        if set(t["episode_index"].to_numpy()) != {i}: errors.append(f"{tag}: episode_index column wrong")
++        ti = set(t["task_index"].to_numpy())
++        if len(ti) != 1 or tasks.get(ti.pop()) != task: errors.append(f"{tag}: task_index does not name its task")
++        s = np.array(t["observation.state"].to_pylist(), dtype=np.float64)
++        a = np.array(t["action"].to_pylist(), dtype=np.float64)
++        if not (np.isfinite(s).all() and np.isfinite(a).all()): errors.append(f"{tag}: NaN or inf"); continue
++        sec = n / fps
++        if not MIN_S <= sec <= MAX_S: (errors if sec < MIN_S else warns).append(f"{tag}: {sec:.1f} s long")
++        fingerprints.append((n, tuple(np.round(s[0], 5)), tuple(np.round(s[-1], 5)), tag))
++        if width < 14:
++            continue
++        for side, (j, g) in SIDES.items():
++            if np.abs(s[:, j]).max() > np.pi + 0.1: errors.append(f"{tag}: {side} joint beyond +-pi")
++            if s[:, g].min() < -1 or s[:, g].max() > 101 or a[:, g].min() < -1 or a[:, g].max() > 101:
++                errors.append(f"{tag}: {side} gripper outside 0..100")
++            lag = np.abs(a[:, j] - s[:, j]).max()
++            if lag > 1.0: warns.append(f"{tag}: {side} commanded vs measured up to {lag:.2f} rad")
++        rng = {side: float(np.ptp(s[:, j], axis=0).max()) for side, (j, _) in SIDES.items()}
++        grips = {side: bool((a[:, g] < 50).any()) for side, (_, g) in SIDES.items()}
++        # the working arm: the one whose gripper closes; if both do (a parked leader's grip can be recorded
++        # closed), the one that moves more
++        working = [sd for sd in SIDES if grips[sd]] or list(SIDES)
++        work = max(working, key=lambda sd: rng[sd]); other = "left" if work == "right" else "right"
++        if rng[other] > 0.05: warns.append(f"{tag}: the idle {other} arm moves {rng[other]:.2f} rad")
++        g_end = a[-1, SIDES[work][1]]
++        if task == UNPLUG and g_end >= 50: errors.append(f"{tag}: unplug ends with the {work} gripper open")
++        if task != UNPLUG and g_end < 50: errors.append(f"{tag}: '{task[:30]}' ends with the {work} gripper still closed")
++        if videos:
++            for k in keys:
++                v = ds / info["video_path"].format(episode_chunk=i // info["chunks_size"], video_key=k, episode_index=i)
++                nf = frames(v)
++                if nf != n: errors.append(f"{tag}: {k} has {nf} frames, table {n}")
++            leader_cam = f"observation.images.{other}_wrist"
++            if rng[other] < 1e-6 and leader_cam in keys:
++                m = motion(ds / info["video_path"].format(episode_chunk=0, video_key=leader_cam, episode_index=i))
++                # a frozen camera scores ~0; a real parked view 3-12 (people, the other arm); an unfrozen leader ~60
++                if m > 20.0: errors.append(f"{tag}: parked {other} arm's wrist camera moves ({m:.1f}): not frozen?")
++    return errors, warns, tasks_n, fingerprints
++
++
++def main(argv: list[str] | None = None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
++    ap.add_argument("paths", nargs="+", type=Path)
++    ap.add_argument("--videos", action="store_true", help="also count video frames and check frozen cameras (ffmpeg)")
++    ap.add_argument("--tasks", help="a plan YAML: report which task texts it prompts")
++    args = ap.parse_args(argv)
++    dss = datasets(args.paths)
++    if not dss:
++        print("no datasets found", file=sys.stderr); return 2
++    errors, warns, tasks, prints = [], [], Counter(), []
++    for ds in dss:
++        e, w, t, f = check(ds, args.videos)
++        errors += e; warns += w; tasks.update(t); prints += f
++        print(f"{ds.name:38s} {sum(t.values()):4d} episodes  {len(e)} errors  {len(w)} warnings")
++    seen = defaultdict(list)
++    for n, first, last, tag in prints:
++        seen[(n, first, last)].append(tag)
++    for tags in seen.values():
++        if len(tags) > 1: errors.append(f"duplicate episodes: {', '.join(tags)}")
++    prompted = set()
++    if args.tasks:
++        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++        from harness.plan import load_plan
++        from harness.tasks import plan_prompts
++        prompted = set(plan_prompts(load_plan(args.tasks)))
++    print(f"\n{sum(tasks.values())} episodes in {len(dss)} datasets:")
++    for t, k in tasks.most_common():
++        mark = "" if not args.tasks else ("  (prompted by the plan)" if t in prompted else "  (not prompted yet)")
++        print(f"  {k:4d}  {t}{mark}")
++    for w in warns: print("WARN ", w)
++    for e in errors: print("ERROR", e)
++    print(f"\n{len(errors)} errors, {len(warns)} warnings")
++    return 1 if errors else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tools/finetune_watch.py b/tools/finetune_watch.py
+new file mode 100644
+index 0000000..34c0c6e
+--- /dev/null
++++ b/tools/finetune_watch.py
+@@ -0,0 +1,455 @@
++"""Run a Dream fine-tune overnight and watch it: upload, process, queue, train, re-queue on failure, warm the model.
++
++Run it ON THE STATION, inside tmux, in the Dream library's environment, with the hackathon kit at ~/physical-ai-hacks
++(its embodiment, its settings: the same job `tools/finetune.py --arm metal` would queue):
++
++    tmux new -A -s finetune
++    ~/dream-env/bin/python ~/hill-climb-harness/tools/finetune_watch.py start ~/hackathon_data/ft-final \\
++        --name relay-final --suffix relay-final --max-requeues 1 --i-accept-charges
++    # after a crash or a reboot, pick up where it was (reads the state file):
++    ~/dream-env/bin/python ~/hill-climb-harness/tools/finetune_watch.py resume
++    # how is it going (any terminal, any time):
++    cat ~/finetune_watch/STATUS.txt ; tail -f ~/finetune_watch/watch.log
++
++What it does, writing every step to ~/finetune_watch/{state.json, watch.log, STATUS.txt}:
++1. checks the dataset locally (Dream's validate_dataset, as `finetune.py --check`), registers or reuses the kit's
++   embodiment, uploads it, and waits until it is `processed`;
++2. queues the job (use_eef for Metal/Maker, the service's defaults: 1000 steps, lr 1e-5, constant schedule, half Dream
++   data) and polls it every --poll-s seconds, logging status, queue position, phase, step and loss;
++3. when the model is published, records its id in ~/finetune_watch/MODEL.txt and (unless --no-warm) asks it for
++   one action with a dummy observation until it answers, so its first start (up to an hour) happens overnight.
++   With --keep-warm-until HH:MM it asks again every 20 minutes until then, so it does not go cold before the match.
++
++What it does on trouble (Dream's error codes, docs: reference/module-fine-tuning, reference/dream-server-error):
++- network down, timeouts, HTTP 5xx (`retryable`), protocol errors: waits and tries again, forever, with backoff;
++- `conflict` "suffix in use": queues under <suffix>-r<N> instead; `conflict` "limit of active jobs": waits;
++- `payment_required`, `invalid_request`, `validation`, auth errors, a dataset that fails processing: STOPS and says
++  why in STATUS.txt (these need a person: credits, a fix to the data, a key);
++- a job that ends `failed` because the training did not finish: queues it again on the same processed dataset, under
++  <suffix>-r<N>, at most --max-requeues times (each is a new charge); a job that failed because of the dataset: stops;
++- `cancelled`: stops. `succeeded` with a `notice` (stopped short, the newest checkpoint was published): keeps that
++  model and does not re-queue (it is charged in proportion; --requeue-short re-queues anyway).
++A job is never cancelled by this script (Dream refuses cancels anyway), and it never touches the arms.
++Without --i-accept-charges `start` stops before anything is charged.
++"""
++
++from __future__ import annotations
++
++import argparse
++import base64
++import datetime as dt
++import importlib.util
++import json
++import os
++import sys
++import time
++from pathlib import Path
++from typing import Any, Callable
++
++HOME = Path.home()
++DIR = HOME / "finetune_watch"
++KIT = HOME / "physical-ai-hacks"
++TERMINAL_JOB = ("failed", "cancelled")
++WARM_PROMPT = "unplug the USB cable at the end of the hub nearest the right arm"
++
++
++# -- errors ---------------------------------------------------------------------------------------------------------
++class Stop(Exception):
++    """Needs a person: the reason goes to STATUS.txt and the script ends."""
++
++
++def classify(exc: BaseException) -> str:
++    """retry | suffix | busy | stop, from the Dream library's exception (by duck typing, so tests need no library)."""
++    name = type(exc).__name__
++    if name in ("DreamTimeout", "DreamProtocolError", "ConnectionError", "TimeoutError", "OSError"):
++        return "retry"
++    if name in ("DreamAuthError", "DreamConfigError"):
++        return "stop"
++    code = str(getattr(exc, "code", "") or "")
++    msg = str(exc).lower()
++    if getattr(exc, "retryable", False):
++        return "retry"
++    if code == "payment_required" or "payment" in msg or "credit" in msg:
++        return "stop"
++    if code == "conflict":
++        if "limit" in msg or "active" in msg or "queued or running" in msg:
++            return "busy"          # the account's limit of jobs at once: wait
++        if "processed" in msg:
++            return "busy"          # the dataset is not processed yet: wait
++        if any(w in msg for w in ("suffix", "in use", "already", "exists", "taken", "name")):
++            return "suffix"        # a suffix or dataset name used before: rename
++        return "stop"
++    if code in ("invalid_request", "validation", "not_found", "forbidden"):
++        return "stop"
++    if name == "DreamServerError":
++        return "stop"
++    return "retry"
++
++
++def dataset_fault(error: str | None) -> bool:
++    """Dream's `error` on a failed job: 'what to fix in your dataset when the cause was in it, else that the training
++    did not finish'."""
++    e = (error or "").lower()
++    if any(w in e for w in ("did not finish", "training failed", "internal", "infrastructure", "preempt", "gpu",
++                            "timed out", "timeout", "out of memory", "oom", "node")):
++        return False
++    return any(w in e for w in ("dataset", "episode", "video", "frame", "camera", "embodiment", "parquet", "fix"))
++
++
++# -- the service, behind a small adapter (tests swap in a fake) --------------------------------------------------------
++class DreamService:
++    def __init__(self, arm: str) -> None:
++        import dream  # noqa: PLC0415 (only on the station)
++
++        self.dream = dream
++        spec = importlib.util.spec_from_file_location("kit_finetune", KIT / "tools" / "finetune.py")
++        kit = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(kit)              # the kit's own embodiment files, names and use_eef choice
++        file_name, self.default_embodiment, self.use_eef = kit.ARMS[arm]
++        self.config = json.loads((kit.EMBODIMENTS / file_name).read_text())
++        self.kit = kit
++        self.client = dream.DreamClient()
++
++    def validate(self, path: str) -> str:
++        report = self.dream.datasets.validate_dataset(Path(path), self.config)
++        if not report.ok:
++            raise Stop(f"the dataset needs fixing before it uploads: {report.error}")
++        return f"{report.episodes} episodes, {report.frames} frames at {report.fps} fps"
++
++    def upload(self, path: str, name: str) -> tuple[str, str]:
++        try:
++            embodiment = self.kit.embodiment_for(self.client, self.default_embodiment, self.config)
++        except SystemExit as exc:           # the kit exits when the name is registered with another config
++            raise Stop(str(exc)) from None
++        ds = self.client.upload_dataset(path, name, embodiment)
++        return ds.id, ds.name
++
++    def dataset(self, dataset_id: str) -> tuple[str, str, str | None]:
++        ds = self.client.get_dataset_status(dataset_id)
++        return ds.status, ds.name, getattr(ds, "error", None)
++
++    def create_job(self, dataset_name: str, suffix: str) -> dict:
++        return self.client.finetune(dataset_name, suffix, use_eef=self.use_eef)
++
++    def job(self, job_id: str) -> dict:
++        return self.client.get_finetuning_status(job_id)
++
++    def jobs(self) -> list[dict]:
++        from dream import fine_tuning  # noqa: PLC0415
++
++        return fine_tuning.list()
++
++    def warm(self, model: str) -> str:
++        """One get_action() on the model with a dummy observation; raises pool_warming while it starts."""
++        import numpy as np  # noqa: PLC0415
++
++        client = self.dream.DreamClient()
++        try:
++            client.policy({"checkpoint": model})
++            black = base64.b64encode(_black_jpeg()).decode("ascii")
++            frames = {f"video.{role}": black for role in self.config["video"]}
++            obs = {f"state.{p}": [0.0] * (b - a) for p, (a, b) in self.config["state"].items()}
++            for side in ("left", "right"):          # a valid hand pose: identity rotation, a point in front
++                if f"state.{side}_eef_rot6" in obs:
++                    obs[f"state.{side}_eef_rot6"] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
++                    obs[f"state.{side}_eef_xyz"] = [0.25, 0.0, 0.15]
++                if f"state.{side}_grip" in obs:
++                    obs[f"state.{side}_grip"] = [1.0]
++            obs["prompt"] = WARM_PROMPT
++            for _ in range(3):
++                client.set_observation(frames, obs)
++            out = client.get_action()
++            rows = len(next(iter(out["per_key"].values()))) if out.get("per_key") else 0
++            return f"answered ({rows} rows)"
++        finally:
++            try:
++                client.close()
++            except Exception:  # noqa: BLE001
++                pass
++
++
++def _black_jpeg() -> bytes:
++    """A 320x176 black JPEG, without OpenCV or PIL (a fixed minimal baseline JPEG would do; build it with PIL when
++    present, else a tiny bundled one)."""
++    try:
++        import io  # noqa: PLC0415
++
++        from PIL import Image  # noqa: PLC0415
++
++        buf = io.BytesIO()
++        Image.new("RGB", (320, 176)).save(buf, "JPEG", quality=85)
++        return buf.getvalue()
++    except Exception:  # noqa: BLE001
++        import cv2  # noqa: PLC0415
++        import numpy as np  # noqa: PLC0415
++
++        ok, jpg = cv2.imencode(".jpg", np.zeros((176, 320, 3), np.uint8))
++        return jpg.tobytes()
++
++
++# -- the watcher ----------------------------------------------------------------------------------------------------
++class Watcher:
++    def __init__(self, svc: Any, state_dir: Path = DIR, *, poll_s: float = 300, sleep: Callable[[float], None] = time.sleep,
++                 now: Callable[[], dt.datetime] = dt.datetime.now, out=print) -> None:
++        self.svc, self.dir, self.poll_s, self.sleep, self.now, self.out = svc, state_dir, poll_s, sleep, now, out
++        self.dir.mkdir(parents=True, exist_ok=True)
++        self.state_path = self.dir / "state.json"
++        self.state: dict[str, Any] = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
++
++    # bookkeeping
++    def save(self) -> None:
++        tmp = self.state_path.with_suffix(".tmp")
++        tmp.write_text(json.dumps(self.state, indent=2))
++        tmp.replace(self.state_path)
++
++    def log(self, msg: str) -> None:
++        line = f"{self.now():%Y-%m-%d %H:%M:%S} {msg}"
++        self.out(line)
++        with open(self.dir / "watch.log", "a") as f:
++            f.write(line + "\n")
++
++    def status(self, msg: str) -> None:
++        (self.dir / "STATUS.txt").write_text(f"{self.now():%Y-%m-%d %H:%M:%S} {msg}\n")
++        self.state["status"] = msg
++        self.save()
++        self.log(f"STATUS: {msg}")
++
++    def call(self, what: str, fn: Callable[[], Any], *, on_suffix: Callable[[], Any] | None = None) -> Any:
++        """fn() with Dream's error handling: retry (backoff, forever), suffix (rename and retry), busy (wait), stop."""
++        delay = 30.0
++        while True:
++            try:
++                return fn()
++            except Stop:
++                raise
++            except Exception as exc:  # noqa: BLE001
++                kind = classify(exc)
++                self.log(f"{what}: {type(exc).__name__} {getattr(exc, 'code', '')}: {exc} -> {kind}")
++                if kind == "stop":
++                    raise Stop(f"{what} refused: {type(exc).__name__} {getattr(exc, 'code', '')}: {exc}") from exc
++                if kind == "suffix":
++                    if on_suffix is None:
++                        raise Stop(f"{what} refused, name in use: {exc}") from exc
++                    on_suffix()
++                    continue
++                wait = float(getattr(exc, "retry_after_s", None) or delay)
++                self.sleep(wait if kind == "retry" else max(wait, 600))
++                delay = min(delay * 2, 900)
++
++    def next_suffix(self) -> str:
++        n = self.state.get("suffix_n", 1) + 1
++        self.state["suffix_n"] = n
++        self.state["suffix"] = f"{self.state['base_suffix']}-r{n}"
++        self.save()
++        self.log(f"suffix now {self.state['suffix']}")
++        return self.state["suffix"]
++
++    # phases
++    def start(self, dataset: str, name: str, suffix: str, max_requeues: int, requeue_short: bool,
++              keep_warm_until: str | None, warm: bool) -> None:
++        if self.state.get("job_id") or self.state.get("dataset_id"):
++            raise Stop(f"{self.state_path} already has a run (dataset {self.state.get('dataset_id')}, job "
++                       f"{self.state.get('job_id')}): use `resume`, or move the folder away to start over")
++        self.state = {"dataset_path": dataset, "name": name, "base_name": name, "base_suffix": suffix, "suffix": suffix, "suffix_n": 1,
++                      "max_requeues": max_requeues, "requeues": 0, "requeue_short": requeue_short,
++                      "keep_warm_until": keep_warm_until, "warm": warm, "jobs": [], "started": f"{self.now():%Y-%m-%d %H:%M}"}
++        self.save()
++        self.run()
++
++    def run(self) -> None:
++        s = self.state
++        try:
++            if not s.get("dataset_id"):
++                self.status("checking the dataset locally")
++                self.log("validate: " + self.svc.validate(s["dataset_path"]))
++                self.status("uploading the dataset (minutes)")
++                def rename() -> None:              # a dataset name already used on the account
++                    s["name_n"] = s.get("name_n", 1) + 1
++                    s["name"] = f"{s['base_name']}-r{s['name_n']}"
++                    self.log(f"dataset name in use: uploading as {s['name']}")
++                ds_id, ds_name = self.call("upload", lambda: self.svc.upload(s["dataset_path"], s["name"]),
++                                           on_suffix=rename)
++                s["dataset_id"], s["dataset_name"] = ds_id, ds_name
++                self.save()
++                self.log(f"uploaded as {ds_id} ({ds_name})")
++            self.wait_dataset()
++            while True:
++                if not s.get("job_id"):
++                    self.queue()
++                outcome = self.wait_job()
++                if outcome == "done":
++                    break
++                # outcome == "requeue"
++                s["requeues"] += 1
++                s["job_id"] = None
++                self.next_suffix()
++                self.save()
++            self.after_model()
++        except Stop as stop:
++            self.status(f"STOPPED, needs a person: {stop}")
++            raise
++
++    def wait_dataset(self) -> None:
++        s = self.state
++        while True:
++            status, name, error = self.call("dataset status", lambda: self.svc.dataset(s["dataset_id"]))
++            s["dataset_name"] = name
++            if status == "processed":
++                self.log(f"dataset {s['dataset_id']} processed")
++                self.save()
++                return
++            if status == "failed":
++                raise Stop(f"dataset {s['dataset_id']} failed processing: {error}")
++            self.status(f"dataset {s['dataset_id']}: {status}")
++            self.sleep(60)
++
++    def queue(self) -> None:
++        s = self.state
++        # a job may have been queued before a crash: find it by its suffix before queueing another (another charge)
++        for j in self.call("list jobs", self.svc.jobs) or []:
++            if j.get("suffix") == s["suffix"] and j.get("status") not in TERMINAL_JOB:
++                s["job_id"] = j["id"]
++                self.save()
++                self.log(f"found job {j['id']} already queued under {s['suffix']}: following it")
++                return
++        self.status(f"queueing the job under suffix {s['suffix']} (this is the charge)")
++        job = self.call("queue job", lambda: self.svc.create_job(s["dataset_name"], s["suffix"]),
++                        on_suffix=self.next_suffix)
++        s["job_id"] = job["id"]
++        s["jobs"].append({"id": job["id"], "suffix": s["suffix"], "queued": f"{self.now():%H:%M}"})
++        self.save()
++        self.log(f"queued {job['id']} position {job.get('queue_position')} hyperparameters {job.get('hyperparameters')}")
++
++    def wait_job(self) -> str:
++        s = self.state
++        last = None
++        while True:
++            job = self.call("job status", lambda: self.svc.job(s["job_id"]))
++            st, model = job.get("status"), job.get("fine_tuned_model")
++            p = job.get("progress") or {}
++            line = (f"job {job['id']} {st} queue {job.get('queue_position')} phase {p.get('phase')} "
++                    f"step {p.get('step')}/{p.get('total_steps')} loss {p.get('loss')}")
++            if line != last:
++                self.log(line)
++                last = line
++            if model:
++                s["model"] = model
++                s["notice"] = job.get("notice")
++                (self.dir / "MODEL.txt").write_text(model + "\n")
++                if job.get("notice"):
++                    self.log(f"NOTICE (stopped short; newest checkpoint published): {job['notice']}")
++                    if s.get("requeue_short") and s["requeues"] < s["max_requeues"]:
++                        self.status(f"model {model} stopped short; re-queueing as asked (--requeue-short)")
++                        return "requeue"
++                self.status(f"MODEL READY: {model}" + (f" (stopped short: {job['notice']})" if job.get("notice") else ""))
++                self.save()
++                return "done"
++            if st == "cancelled":
++                raise Stop(f"job {job['id']} was cancelled")
++            if st == "failed":
++                err = job.get("error")
++                self.log(f"job {job['id']} FAILED: {err}")
++                if dataset_fault(err):
++                    raise Stop(f"job {job['id']} failed because of the dataset: {err}")
++                if s["requeues"] >= s["max_requeues"]:
++                    raise Stop(f"job {job['id']} failed ({err}) and the re-queue budget "
++                               f"({s['max_requeues']}) is used up")
++                self.status(f"job {job['id']} failed ({err}); re-queueing ({s['requeues'] + 1}/{s['max_requeues']})")
++                return "requeue"
++            phase = p.get("phase") or (f"queue position {job.get('queue_position')}" if st == "queued" else "")
++            self.status(f"training: {st} {phase} step {p.get('step')}/{p.get('total_steps')} loss {p.get('loss')}"
++                        if st == "running" else f"job {job['id']}: {st} {phase}")
++            self.sleep(self.poll_s)
++
++    def after_model(self) -> None:
++        s = self.state
++        if not s.get("warm", True):
++            return
++        model = s["model"]
++        self.status(f"MODEL READY: {model}; warming it up (its first start can take an hour)")
++        self.warm_once(model)
++        until = s.get("keep_warm_until")
++        if until:
++            hh, mm = (int(x) for x in until.split(":"))
++            while True:
++                now = self.now()
++                stop_at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
++                if stop_at <= now - dt.timedelta(hours=12):
++                    stop_at += dt.timedelta(days=1)
++                if now >= stop_at:
++                    break
++                self.sleep(1200)
++                self.warm_once(model, quiet=True)
++        self.status(f"MODEL READY and warm: {model}")
++
++    def warm_once(self, model: str, quiet: bool = False) -> None:
++        while True:
++            try:
++                r = self.svc.warm(model)
++                if not quiet:
++                    self.log(f"warm-up: the model {r}")
++                self.state["warmed"] = f"{self.now():%H:%M}"
++                self.save()
++                return
++            except Exception as exc:  # noqa: BLE001
++                reason = getattr(exc, "reason", "") or ""
++                if reason == "pool_warming" or classify(exc) == "retry":
++                    self.status(f"MODEL READY: {model}; starting up ({reason or type(exc).__name__})")
++                    self.sleep(float(getattr(exc, "retry_after_s", None) or 60))
++                    continue
++                self.log(f"warm-up refused ({type(exc).__name__} {getattr(exc, 'code', '')} {reason}: {exc}); "
++                         f"the model is ready anyway, its first real call will start it")
++                return
++
++
++def main(argv: list[str] | None = None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
++    sub = ap.add_subparsers(dest="cmd", required=True)
++    st = sub.add_parser("start", help="upload, queue and watch (charges credits)")
++    st.add_argument("dataset")
++    st.add_argument("--name", required=True, help="dataset name on the service (lowercase, digits, hyphens)")
++    st.add_argument("--suffix", required=True, help="model id suffix (lowercase, digits, hyphens)")
++    st.add_argument("--arm", default="metal", choices=("metal", "maker", "yam"))
++    st.add_argument("--max-requeues", type=int, default=1, help="re-queues allowed after a failed training (each costs)")
++    st.add_argument("--requeue-short", action="store_true", help="re-queue a job that stopped short too")
++    st.add_argument("--keep-warm-until", metavar="HH:MM", help="keep the model warm until this local time")
++    st.add_argument("--no-warm", action="store_true")
++    st.add_argument("--poll-s", type=float, default=300)
++    st.add_argument("--i-accept-charges", action="store_true", help="required: queueing a job charges the account")
++    rs = sub.add_parser("resume", help="continue from ~/finetune_watch/state.json")
++    rs.add_argument("--arm", default="metal", choices=("metal", "maker", "yam"))
++    rs.add_argument("--poll-s", type=float, default=300)
++    rs.add_argument("--max-requeues", type=int, help="change the re-queue budget")
++    sub.add_parser("status", help="print the state")
++    args = ap.parse_args(argv)
++    if args.cmd == "status":
++        p = DIR / "state.json"
++        print(p.read_text() if p.exists() else "no run yet")
++        return 0
++    if args.cmd == "start" and not args.i_accept_charges:
++        print("refusing: queueing a fine-tune charges the account (~$200 for 1000 steps, more per re-queue). "
++              "Add --i-accept-charges once the team has agreed.", file=sys.stderr)
++        return 2
++    try:
++        w = Watcher(DreamService(args.arm), poll_s=args.poll_s)
++        if args.cmd == "start":
++            w.start(os.path.expanduser(args.dataset), args.name, args.suffix, args.max_requeues, args.requeue_short,
++                    args.keep_warm_until, not args.no_warm)
++        else:
++            if not w.state:
++                print("no run to resume", file=sys.stderr)
++                return 2
++            if args.max_requeues is not None:
++                w.state["max_requeues"] = args.max_requeues
++            w.run()
++    except Stop as stop:
++        print(f"STOPPED: {stop}", file=sys.stderr)
++        return 1
++    except KeyboardInterrupt:
++        print("interrupted: the job (if queued) keeps training on the service; `resume` picks it up", file=sys.stderr)
++        return 130
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())

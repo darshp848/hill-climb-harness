@@ -1,0 +1,48 @@
+{
+  "hedged_guard_loss": {
+    "finished_copies": [
+      0,
+      1
+    ],
+    "winning_guard": false,
+    "guard_alert": false,
+    "guard_answers": 1
+  },
+  "restart_generation": {
+    "before": 0,
+    "after": 0,
+    "old_result_still_available": true
+  },
+  "underground_ball_in_bin": 1,
+  "single_block_on_nonblock_support_height_m": 0.22999999999999998,
+  "push_white_oracle_exception": "ValueError: invalid literal for int() with base 10: 'push'",
+  "hybrid_ft_defaults": {
+    "checkpoint": "dream-1-ft:bb4b9e5f-relay-final",
+    "rewrite_prompts": true,
+    "prompt_technique": true,
+    "extra_push_stage": true
+  },
+  "subscription_system_dropped": {
+    "sentinel_in_command": false,
+    "sentinel_in_stdin": false
+  },
+  "match_accepts_time_and_removed_gates": {
+    "problems": [],
+    "remaining_stages": [
+      "put_cable_down",
+      "release_cable",
+      "put_more_down",
+      "arms_clear",
+      "higher_1",
+      "higher_2",
+      "ball_1",
+      "ball_2",
+      "ball_3",
+      "ball_4",
+      "ball_5",
+      "ball_6",
+      "ball_7",
+      "ball_8"
+    ]
+  }
+}

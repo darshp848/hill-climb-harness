@@ -1,0 +1,649 @@
+diff --git a/HARNESS_GUIDE.md b/HARNESS_GUIDE.md
+index 60e0fec..ddc0f3c 100644
+--- a/HARNESS_GUIDE.md
++++ b/HARNESS_GUIDE.md
+@@ -205,10 +205,8 @@ Still unclear in the rubric (ask the organizers):
+ 
+ The overhead camera is poor at depth, so it can't tell whether a plug is lined up with the port or pushed in. In `hill_climb_full.yaml`, the plug-in has three stages:
+ 
+-1. `watcher_into_place` asks Dream-1 to park the other arm beside the hub, with its wrist camera looking at the ports from the side. This stage is optional (`on_fail: skip`).
+-2. `plug_loose_cable` has one arm plug the cable in while the watcher holds still. The monitor gets:
+-   - the frame history of the watcher's wrist camera, not only of the overhead camera (`history_cameras`),
+-   - a note per camera saying what it shows (`camera_notes`), so it judges depth from the side view.
++1. `watcher_into_place` asks Dream-1 to park the other arm beside the hub. The monitor uses new overhead and watcher-wrist frames to check that the wrist can see a free port from the side.
++2. `plug_loose_cable` starts only after the watcher pose passes. The monitor checks that the plug is seated and the watcher still sees the port. It gets the history of both views and the latest working-wrist frame when available.
+ 3. `release_before_stack` opens both grippers and lifts the arms clear before the stack.
+ 
+ You choose the arms with `--var work_arm=left --var watch_arm=right --var work_cam=wrist_l --var watch_cam=wrist_r`. The defaults are: right arm works, left arm watches.
+@@ -220,10 +218,23 @@ The new stage fields work in any plan:
+ | `cameras` | The camera roles this stage's checks see. This overrides the plan's `cameras_for_check`. |
+ | `history_cameras` | Extra roles whose frame history the monitor keeps. |
+ | `camera_notes` | Maps a role to a sentence telling the monitor what that view shows. |
++| `required_cameras` | Every verification check needs these views from a distinct camera trip for the current prompt. Use a visual verifier. |
++| `requires_stage` | Skip this stage if the named earlier stage did not pass. |
+ 
+ Plans can also set defaults with `vars:`. `--var` overrides them.
+ 
+-**Limit:** the harness can't move an arm itself. Dream-1 has to do the watcher pose from the prompt, and base Dream-1 may ignore "stay still" or "park beside the hub". To make it reliable, record teleop demos of the watcher pose for the fine-tune. Skipping it costs nothing: if the watcher never gets into place, the stage times out after 15 s and the plug-in still runs with the overhead and gripper views.
++Dream-1 controls the watcher pose from the prompt. If the watcher never gets into position, the plan skips the optional plug-in and proceeds to clearing the workspace for stacking.
++
++### Inspect the watcher through DimOS
++
++On Linux or WSL, install the optional dependencies into a Python 3.12 environment and run the viewer from this checkout.
++
++```bash
++uv pip install 'dimos[web]==0.0.15' 'langchain-core>=1.2.22,<2'
++python -m dimos_skills
++```
++
++Connect an MCP client to `http://127.0.0.1:9990/mcp` and call `inspect_watcher` with `arm` set to `left` or `right`. It returns the current station status and labelled JPEGs for the overhead and selected wrist when the latest camera trip matches the active prompt. Use `--station` and `--view` if the simulator uses different ports. This skill reads the station and debug view over HTTP.
+ 
+ ## 7. Test in simulation (before the robot)
+ 
+diff --git a/dimos_skills.py b/dimos_skills.py
+new file mode 100644
+index 0000000..06e54ba
+--- /dev/null
++++ b/dimos_skills.py
+@@ -0,0 +1,85 @@
++"""Optional DimOS MCP viewer for the Hill Climb harness."""
++
++import argparse
++import base64
++import json
++from dataclasses import dataclass
++from typing import Any
++
++from dimos.agents.annotation import skill
++from dimos.agents.mcp.mcp_server import McpServer
++from dimos.core.coordination.blueprints import autoconnect
++from dimos.core.coordination.module_coordinator import ModuleCoordinator
++from dimos.core.module import Module, ModuleConfig
++
++from harness.frames import FrameSource, camera_matches
++from harness.station_client import StationClient
++
++
++@dataclass
++class WatcherSnapshot:
++    status: dict[str, Any]
++    images: dict[str, bytes]
++
++    def agent_encode(self) -> list[dict[str, Any]]:
++        """Encode the status and labelled JPEGs as MCP content blocks."""
++        content: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(self.status)}]
++        for label, jpeg in self.images.items():
++            content.append({"type": "text", "text": label})
++            content.append({"type": "image", "mimeType": "image/jpeg",
++                            "data": base64.b64encode(jpeg).decode("ascii")})
++        return content
++
++
++class WatcherConfig(ModuleConfig):
++    station_url: str = "http://127.0.0.1:8091"
++    view_url: str = "http://127.0.0.1:8093"
++
++
++class HillClimbWatcher(Module):
++    config: WatcherConfig
++
++    @skill
++    def inspect_watcher(self, arm: str = "left") -> WatcherSnapshot:
++        """Show the overhead and selected wrist camera from the latest trip for the active prompt.
++
++        Use both images to judge whether the wrist camera sees the cable port from the side.
++        The arm argument is "left" or "right".
++        """
++        if arm not in ("left", "right"):
++            raise ValueError('arm must be "left" or "right"')
++
++        trip = FrameSource(self.config.view_url).latest_trip()
++        station = StationClient(self.config.station_url, timeout_s=5.0).status()
++        status = {k: station.get(k) for k in ("state", "prompt", "run", "chunks", "cameras")}
++        status["watch_arm"] = arm
++        if trip is None or station.get("state") != "running" or trip.prompt != station.get("prompt"):
++            status["reason"] = "No camera trip for the active prompt yet."
++            return WatcherSnapshot(status, {})
++
++        status["trip"] = trip.n
++        images = {}
++        for wanted in ("overhead", arm):
++            for role, jpeg in trip.frames.items():
++                if camera_matches(role, wanted):
++                    images["overhead" if wanted == "overhead" else f"{arm} wrist"] = jpeg
++                    break
++        status["views"] = list(images)
++        return WatcherSnapshot(status, images)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--station", default="http://127.0.0.1:8091", help="Dream station API URL")
++    parser.add_argument("--view", default="http://127.0.0.1:8093", help="Dream debug view URL")
++    parser.add_argument("--port", type=int, default=9990, help="loopback MCP port")
++    args = parser.parse_args()
++    blueprint = autoconnect(
++        HillClimbWatcher.blueprint(station_url=args.station, view_url=args.view),
++        McpServer.blueprint(host="127.0.0.1", port=args.port),
++    ).global_config(viewer="none", serve_coordinator_rpc=False)
++    ModuleCoordinator.build(blueprint).loop()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/harness/frames.py b/harness/frames.py
+index e5f638a..f4caabf 100644
+--- a/harness/frames.py
++++ b/harness/frames.py
+@@ -6,16 +6,38 @@ import base64
+ import json
+ import urllib.error
+ import urllib.request
++from dataclasses import dataclass
+ from typing import Any
+ 
+ 
++_ROLE_NAMES = {
++    "scene": "overhead", "top": "overhead", "overhead": "overhead",
++    "left": "wrist_l", "wrist_l": "wrist_l",
++    "right": "wrist_r", "wrist_r": "wrist_r",
++}
++
++
++def camera_matches(role: str, wanted: str) -> bool:
++    """Match YAM station and simulator names, or a custom camera role substring."""
++    actual = role.removeprefix("video.").removeprefix("image_window.")
++    expected = wanted.removeprefix("video.").removeprefix("image_window.")
++    canonical = _ROLE_NAMES.get(expected)
++    return wanted in role or (canonical is not None and _ROLE_NAMES.get(actual) == canonical)
++
++
++@dataclass(frozen=True)
++class CameraTrip:
++    n: int
++    prompt: str | None
++    frames: dict[str, bytes]
++
++
+ class FrameSource:
+     def __init__(self, base_url: str = "http://127.0.0.1:8093", *, timeout_s: float = 5.0):
+         self.base_url = base_url.rstrip("/")
+         self.timeout_s = timeout_s
+         self.last_error: str | None = None
+-        self._cache_n: int | None = None
+-        self._cache: dict[str, bytes] = {}
++        self._cache: CameraTrip | None = None
+ 
+     def _get_json(self, route: str) -> Any:
+         with urllib.request.urlopen(self.base_url + route, timeout=self.timeout_s) as resp:
+@@ -34,17 +56,21 @@ class FrameSource:
+ 
+     def latest(self) -> dict[str, bytes]:
+         """role -> JPEG bytes: the newest frame of each camera in the newest round trip. {} if none."""
++        trip = self.latest_trip(fallback=True)
++        return dict(trip.frames) if trip is not None else {}
++
++    def latest_trip(self, *, fallback: bool = False) -> CameraTrip | None:
++        """Read frames and prompt from the same trip. Evidence checks use only the newest trip."""
+         try:
+             trips = self._get_json("/trips")
+             if not isinstance(trips, list) or not trips:
+                 self.last_error = None
+-                return {}
+-            # Newest trip first; fall back to a couple of older ones if the newest has no frames.
+-            for entry in reversed(trips[-3:]):
++                return None
++            for entry in reversed(trips[-3:] if fallback else trips[-1:]):
+                 n = int(entry["n"])
+-                if n == self._cache_n and self._cache:
++                if self._cache is not None and n == self._cache.n:
+                     self.last_error = None
+-                    return dict(self._cache)
++                    return self._cache
+                 try:
+                     trip = self._get_json(f"/trip/{n}")
+                 except urllib.error.HTTPError as exc:
+@@ -53,14 +79,15 @@ class FrameSource:
+                     raise
+                 out = _decode_frames(trip.get("frames") or {})
+                 if out:
+-                    self._cache_n, self._cache = n, out
++                    obs = trip.get("observation") or {}
++                    prompt = obs.get("prompt") if isinstance(obs, dict) else None
++                    self._cache = CameraTrip(n, prompt if isinstance(prompt, str) else None, out)
+                     self.last_error = None
+-                    return dict(out)
++                    return self._cache
+             self.last_error = None
+-            return {}
+-        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
++        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+             self.last_error = f"{type(exc).__name__}: {exc}"
+-            return {}
++        return None
+ 
+ 
+ def _decode_frames(frames: dict[str, Any]) -> dict[str, bytes]:
+@@ -70,7 +97,9 @@ def _decode_frames(frames: dict[str, Any]) -> dict[str, bytes]:
+             continue
+         role = key.removeprefix("video.")
+         try:
+-            out[role] = base64.b64decode(images[-1])
++            jpeg = base64.b64decode(images[-1], validate=True)
+         except ValueError:
+             continue
++        if jpeg.startswith(b"\xff\xd8"):
++            out[role] = jpeg
+     return out
+diff --git a/harness/plan.py b/harness/plan.py
+index 22c5f54..1c90cf3 100644
+--- a/harness/plan.py
++++ b/harness/plan.py
+@@ -7,6 +7,8 @@ import re
+ from pathlib import Path
+ from typing import Any
+ 
++from .frames import camera_matches
++
+ import yaml
+ 
+ VERIFIERS = ("manual", "claude", "time", "claude+manual", "monitor", "monitor+manual")
+@@ -17,7 +19,7 @@ MAX_PROMPT_CHARS = 512
+ _PLAN_KEYS = {"task", "checkpoint", "time_budget_s", "check_every_s", "verifier", "claude", "cameras_for_check", "stages", "confirm", "done_message", "vars"}
+ _STAGE_KEYS = {"name", "prompt", "success", "timeout_s", "max_attempts", "min_run_s", "verifier", "recovery", "on_fail",
+                "stall_s", "settle_s", "skip_if_done", "expect",
+-               "cameras", "camera_notes", "history_cameras"}
++               "cameras", "camera_notes", "history_cameras", "required_cameras", "requires_stage"}
+ _RECOVERY_KEYS = {"name", "prompt", "when", "kind", "settle_s", "max_uses"}
+ 
+ 
+@@ -52,9 +54,11 @@ class Stage:
+     cameras: list[str] = field(default_factory=list)          # roles this stage's checks see; empty = plan's
+     camera_notes: dict[str, str] = field(default_factory=dict)  # role substring -> what that view shows
+     history_cameras: list[str] = field(default_factory=list)  # extra roles whose frame history the monitor keeps
++    required_cameras: list[str] = field(default_factory=list)  # distinct current trips must include these views
++    requires_stage: str | None = None  # skip this stage if the named earlier stage failed
+ 
+     def note_for(self, role: str) -> str:
+-        return next((n for k, n in self.camera_notes.items() if k in role), "")
++        return next((n for k, n in self.camera_notes.items() if camera_matches(role, k)), "")
+ 
+     def menu(self) -> list[Recovery]:
+         """The recovery list with v1 string items wrapped as legacy Recovery entries."""
+@@ -185,6 +189,9 @@ def parse_plan(data: Any) -> Plan:
+         label = f"stage {name!r}"
+         if name in seen:
+             raise ValueError(f"{label}.name: duplicate stage name")
++        prerequisite = raw.get("requires_stage")
++        if prerequisite is not None and (not isinstance(prerequisite, str) or prerequisite not in seen):
++            raise ValueError(f"{label}.requires_stage: must name an earlier stage")
+         seen.add(name)
+         unknown = set(raw) - _STAGE_KEYS
+         if unknown:
+@@ -204,6 +211,10 @@ def parse_plan(data: Any) -> Plan:
+             expect = _text(expect, f"{label}.expect")
+         cams = _roles(raw.get("cameras"), f"{label}.cameras")
+         hist = _roles(raw.get("history_cameras"), f"{label}.history_cameras")
++        required = _roles(raw.get("required_cameras"), f"{label}.required_cameras")
++        skip_if_done = _bool(raw.get("skip_if_done", False), f"{label}.skip_if_done")
++        if required and skip_if_done:
++            raise ValueError(f"{label}: required_cameras cannot be checked before the stage starts")
+         notes = raw.get("camera_notes") or {}
+         if not isinstance(notes, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.strip()
+                                                   for k, v in notes.items()):
+@@ -221,11 +232,13 @@ def parse_plan(data: Any) -> Plan:
+                 on_fail=_enum(raw.get("on_fail", "retry_in_place"), ON_FAIL, f"{label}.on_fail"),
+                 stall_s=None if stall is None else float(_num(stall, f"{label}.stall_s")),
+                 settle_s=None if settle is None else float(_num(settle, f"{label}.settle_s")),
+-                skip_if_done=_bool(raw.get("skip_if_done", False), f"{label}.skip_if_done"),
++                skip_if_done=skip_if_done,
+                 expect=expect,
+                 cameras=cams,
+                 camera_notes={k: v.strip() for k, v in notes.items()},
+                 history_cameras=hist,
++                required_cameras=required,
++                requires_stage=prerequisite,
+             )
+         )
+ 
+diff --git a/harness/runner.py b/harness/runner.py
+index 3bd3a1a..3b96dfb 100644
+--- a/harness/runner.py
++++ b/harness/runner.py
+@@ -9,7 +9,7 @@ from collections.abc import Callable
+ from dataclasses import asdict, dataclass, field
+ from typing import Any
+ 
+-from .frames import FrameSource
++from .frames import FrameSource, camera_matches
+ from .log import RunLog
+ from .plan import Plan, Recovery, Stage
+ from .station_client import StationClient, StationError
+@@ -94,6 +94,11 @@ class Runner:
+         try:
+             self._preflight()
+             for i, stage in enumerate(self.plan.stages):
++                if stage.requires_stage and not any(r.name == stage.requires_stage and r.ok for r in results):
++                    reason = f"prerequisite {stage.requires_stage!r} was not verified"
++                    self.log.event("stage_skipped", stage=stage.name, reason=reason)
++                    results.append(StageResult(stage.name, False, 0, 0.0, reason))
++                    continue
+                 results.append(self._run_stage(stage, first=(i == 0)))
+             failed = [r.name for r in results if not r.ok]
+             ok, reason = (not failed), ("completed" if not failed else f"completed with failed stages: {', '.join(failed)}")
+@@ -123,6 +128,8 @@ class Runner:
+ 
+     # -- pieces --------------------------------------------------------------------------------
+     def _preflight(self) -> None:
++        if any(s.required_cameras and s.verifier == "time" for s in self.plan.stages):
++            raise _Refuse("stages with required_cameras need a visual verifier")
+         dry = self.station.dry_run
+         st = self.station.status()
+         problems: list[str] = []
+@@ -191,9 +198,11 @@ class Runner:
+         self.station.start(prompt, self.plan.checkpoint)
+         return self._wait({"running"}, START_TIMEOUT_S, "running")
+ 
+-    def _issue(self, prompt: str, why: str, *, force_start: bool = False) -> None:
++    def _issue(self, prompt: str, why: str, *, force_start: bool = False,
++               require_new_trip: bool = False) -> int | None:
+         """Gets `prompt` to the robot: set_prompt on a running station, else a fresh start. Logs a prompt_change
+         event with the chunk count and tells verifiers (a monitor drops answers computed on the old prompt)."""
++        previous_trip = self.frames.latest_n() if require_new_trip else None
+         if force_start or self.station.status().get("state") != "running":
+             reply, how = self._start_run(prompt), "start"
+         else:
+@@ -208,12 +217,15 @@ class Runner:
+             if fn is not None and id(v) not in seen:
+                 seen.add(id(v))
+                 fn(prompt)
++        return previous_trip
+ 
+-    def _frames_for_check(self, stage: Stage | None = None) -> dict[str, bytes]:
+-        frames = self.frames.latest()
++    def _frames_for_check(self, stage: Stage | None = None, *,
++                          frames: dict[str, bytes] | None = None) -> dict[str, bytes]:
++        if frames is None:
++            frames = self.frames.latest()
+         wanted = (stage.cameras if stage is not None and stage.cameras else None) or self.plan.cameras_for_check
+         if wanted:
+-            frames = {r: j for r, j in frames.items() if any(w in r for w in wanted)}
++            frames = {r: j for r, j in frames.items() if any(camera_matches(r, w) for w in wanted)}
+         return frames
+ 
+     def _ask(self, verifier: Verifier, stage: Stage, frames: dict[str, bytes], elapsed: float, *,
+@@ -240,14 +252,16 @@ class Runner:
+         self._last_progress = p
+ 
+     def _log_verdict(self, stage: Stage, attempt: int, elapsed: float, verdict: Verdict, saved: list[str],
+-                     st: dict[str, Any]) -> None:
++                     st: dict[str, Any], trip_n: int | None = None) -> None:
+         extra = {k: getattr(verdict, k) for k in ("progress", "status", "recovery", "scene_ok", "holding")
+                  if getattr(verdict, k, None) is not None}
++        if trip_n is not None:
++            extra["trip"] = trip_n
+         self.log.event("verdict", stage=stage.name, attempt=attempt, elapsed_s=round(elapsed, 2),
+                        done=verdict.done, confidence=verdict.confidence, reason=verdict.reason,
+                        frames=saved, chunks=st.get("chunks"), **extra)
+ 
+-    def _watch(self, stage: Stage, verifier: Verifier, attempt: int) -> _Attempt:
++    def _watch(self, stage: Stage, verifier: Verifier, attempt: int, last_trip: int | None) -> _Attempt:
+         t0 = self._clock()
+         confirm = self.plan.confirm
+         gate = max(stage.min_run_s, stage.effective_settle())   # no verifier and no stall clock before this
+@@ -262,10 +276,44 @@ class Runner:
+             if st.get("state") == "idle":
+                 return _Attempt(False, "station went idle during the stage", max_p, hint)
+             if elapsed >= gate:
+-                frames = self._frames_for_check(stage)
++                if stage.required_cameras:
++                    trip = self.frames.latest_trip()
++                    repeated = trip is not None and last_trip is not None and trip.n <= last_trip
++                    frames = self._frames_for_check(stage, frames=trip.frames if trip is not None else {})
++                    problem = None
++                    if trip is None:
++                        problem = "no camera trip available"
++                    elif trip.prompt != stage.prompt:
++                        problem = "camera trip is for a different prompt"
++                    else:
++                        ages = st.get("cameras") or {}
++                        missing = [
++                            role for role in stage.required_cameras
++                            if not any(camera_matches(r, role) for r in frames)
++                            or any(camera_matches(r, role) and (age is None or age > MAX_CAMERA_AGE_S)
++                                   for r, age in ages.items())
++                        ]
++                        if missing:
++                            problem = f"required camera views missing or stale: {', '.join(missing)}"
++                    if trip is not None and not repeated:
++                        last_trip = trip.n
++                    if problem or repeated:
++                        if problem:
++                            consec_done = consec_fail = consec_stalled = 0
++                            notify = getattr(verifier, "notify_prompt_change", None)
++                            if notify is not None:
++                                notify(stage.prompt)
++                        reason = problem or "waiting for a new camera trip"
++                        self.log.event("camera_evidence_wait", stage=stage.name, attempt=attempt,
++                                       trip=trip.n if trip is not None else None, reason=reason)
++                        if elapsed >= stage.timeout_s:
++                            return _Attempt(False, f"timeout after {stage.timeout_s:g} s: {reason}", max_p, hint)
++                        continue
++                else:
++                    frames = self._frames_for_check(stage)
+                 verdict = self._ask(verifier, stage, frames, elapsed)
+                 saved = [p.name for p in self.log.save_frames(f"{stage.name}_a{attempt}", frames)]
+-                self._log_verdict(stage, attempt, elapsed, verdict, saved, st)
++                self._log_verdict(stage, attempt, elapsed, verdict, saved, st, last_trip)
+                 monitor = isinstance(verdict, MonitorVerdict) and verdict.status is not None
+                 failing, why = verdict.done is False, f"verifier said no: {verdict.reason}"
+                 if monitor:
+@@ -353,10 +401,10 @@ class Runner:
+             return hint
+         return usable[0] if usable else None
+ 
+-    def _attempt(self, stage: Stage, verifier: Verifier, attempt: int, prompt: str) -> _Attempt:
++    def _attempt(self, stage: Stage, verifier: Verifier, attempt: int, prompt: str, last_trip: int | None) -> _Attempt:
+         t_start = time.time()
+         try:
+-            out = self._watch(stage, verifier, attempt)
++            out = self._watch(stage, verifier, attempt, last_trip)
+         except BaseException as exc:
+             self.log.segment(stage=stage.name, attempt=attempt, kind="stage", prompt=prompt, t_start=t_start,
+                              t_end=time.time(), outcome="aborted", reason=f"{type(exc).__name__}: {exc}",
+@@ -414,13 +462,14 @@ class Runner:
+         if stage.skip_if_done and self._entry_check(stage, verifier):
+             self.log.event("stage_already_done", stage=stage.name)
+             return StageResult(stage.name, True, 0, self._clock() - t0, "already done at entry")
+-        self._issue(stage.prompt, "stage", force_start=first)
++        require_new_trip = bool(stage.required_cameras)
++        last_trip = self._issue(stage.prompt, "stage", force_start=first, require_new_trip=require_new_trip)
+         attempts = 0
+         uses: dict[int, int] = {}
+         last_rec: int | None = None
+         while True:
+             attempts += 1
+-            out = self._attempt(stage, verifier, attempts, stage.prompt)
++            out = self._attempt(stage, verifier, attempts, stage.prompt, last_trip)
+             if out.ok:
+                 return StageResult(stage.name, True, attempts, self._clock() - t0, out.reason)
+             reason, hint = out.reason, out.recovery_hint
+@@ -449,7 +498,7 @@ class Runner:
+                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after stop")
+                 self.station.home()
+                 self._wait({"idle"}, IDLE_TIMEOUT_S, "idle after home")
+-                self._issue(stage.prompt, "retry", force_start=True)
++                last_trip = self._issue(stage.prompt, "retry", force_start=True, require_new_trip=require_new_trip)
+             else:
+-                self._issue(stage.prompt, "retry")
++                last_trip = self._issue(stage.prompt, "retry", require_new_trip=require_new_trip)
+                 self.log.event("retry", stage=stage.name, attempt=attempts + 1, mode="retry_in_place")
+diff --git a/harness/verifiers.py b/harness/verifiers.py
+index 878403b..254720c 100644
+--- a/harness/verifiers.py
++++ b/harness/verifiers.py
+@@ -13,6 +13,7 @@ from collections.abc import Callable
+ from dataclasses import dataclass
+ from typing import IO, Any, Protocol
+ 
++from .frames import camera_matches
+ from .plan import Plan, Stage
+ 
+ CLAUDE_URL = "https://api.anthropic.com/v1/messages"
+@@ -274,9 +275,11 @@ class MonitorVerifier:
+     # -- frames and payload ---------------------------------------------------------------------
+     @staticmethod
+     def _split(frames: dict[str, bytes]) -> tuple[tuple[str, bytes] | None, dict[str, bytes]]:
+-        wrists = {r: j for r, j in sorted(frames.items()) if "wrist" in r}
+-        others = [(r, j) for r, j in sorted(frames.items()) if "wrist" not in r]
+-        overhead = next(((r, j) for r, j in others if any(k in r for k in ("overhead", "scene", "top"))), None)
++        wrists = {r: j for r, j in sorted(frames.items())
++                  if any(camera_matches(r, k) for k in ("wrist", "wrist_l", "wrist_r"))}
++        others = [(r, j) for r, j in sorted(frames.items()) if r not in wrists]
++        overhead = next(((r, j) for r, j in others
++                         if any(camera_matches(r, k) for k in ("overhead", "scene", "top"))), None)
+         return (overhead or (others[0] if others else None)), wrists
+ 
+     def _stage_text(self, stage: Stage, elapsed_s: float) -> str:
+@@ -314,7 +317,7 @@ class MonitorVerifier:
+         # Roles with a kept history: the overhead view, plus any the stage lists in history_cameras
+         # (e.g. the wrist camera of an arm that is only watching, for a second viewpoint on depth).
+         tracked = ([overhead] if overhead is not None else []) + [
+-            (r, j) for r, j in wrists.items() if any(h in r for h in stage.history_cameras)]
++            (r, j) for r, j in wrists.items() if any(camera_matches(r, h) for h in stage.history_cameras)]
+         tracked_roles = {r for r, _ in tracked}
+ 
+         def label(t: float, role: str, tag: str = "") -> str:
+diff --git a/plans/hill_climb_full.yaml b/plans/hill_climb_full.yaml
+index 34ce28b..9eaee95 100644
+--- a/plans/hill_climb_full.yaml
++++ b/plans/hill_climb_full.yaml
+@@ -61,20 +61,26 @@ stages:
+   # Optional +20 per cable: plug a LOOSE cable (one that started on the table) into a free hub port.
+   # Stage 1's pass bar is already met, so these are allowed; on_fail skip keeps them from eating the clock.
+   - name: watcher_into_place
+-    prompt: "move the {watch_arm} arm beside the hub so its camera looks at the hub ports from the side, without touching anything"
+-    success: "Does the {watch_cam} camera show the hub's free ports from the side, with the {watch_arm} gripper touching nothing?"
++    prompt: "park the {watch_arm} arm beside the hub, with its wrist camera looking across the table at the hub ports; keep both grippers clear"
++    success: "Do the newest {watch_cam} and overhead views confirm the watcher is beside the hub, its gripper is clear, and its wrist camera sees a free port side-on? A top-down view does not count."
+     expect: "The {watch_arm} arm rises and parks a short distance from the hub, its wrist camera pointed at the ports from the side."
++    cameras: [overhead, "{watch_cam}"]
++    required_cameras: [overhead, "{watch_cam}"]
++    history_cameras: ["{watch_cam}"]
+     camera_notes:
+       "{watch_cam}": "wrist camera of the {watch_arm} arm, which should end up looking at the hub ports from the side"
+     timeout_s: 15
+     max_attempts: 1
+     min_run_s: 3
+-    on_fail: skip             # no watcher is fine; the plug-in stage still has the top and gripper views
++    on_fail: skip             # skip the optional plug-in if the watcher cannot be verified
+ 
+   - name: plug_loose_cable
++    requires_stage: watcher_into_place
+     prompt: "with the {work_arm} arm, plug the loose USB cable on the table into a free port on the hub while the {watch_arm} arm stays still"
+-    success: "Is a cable that was lying loose on the table now plugged fully into a free hub port, with the plug seated?"
++    success: "Use the newest {watch_cam} side view and overhead view together. Is the plug of a formerly loose cable fully seated in a free port, with the watcher still aimed at the port? If the side view lost the port or cannot show the plug depth, withhold success."
+     expect: "The {work_arm} gripper picks the loose cable up by its plug, lines the plug up with a free port and pushes it in until it is seated, while the {watch_arm} arm holds still."
++    cameras: [overhead, "{watch_cam}", "{work_cam}"]
++    required_cameras: [overhead, "{watch_cam}"]
+     history_cameras: ["{watch_cam}"]
+     camera_notes:
+       "scene": "top view: shows which port and the left-right alignment; poor at depth and insertion"
+diff --git a/tests/test_watcher.py b/tests/test_watcher.py
+index 82cc03f..e4dd201 100644
+--- a/tests/test_watcher.py
++++ b/tests/test_watcher.py
+@@ -4,8 +4,13 @@ from pathlib import Path
+ 
+ import pytest
+ 
++from conftest import stage
++from harness.frames import CameraTrip, FrameSource
++from harness.log import RunLog
+ from harness.plan import load_plan, parse_plan
+-from harness.verifiers import MonitorVerifier
++from harness.runner import Runner
++from harness.station_client import StationClient
++from harness.verifiers import MonitorVerifier, Verdict
+ from test_v2 import JPEG, Transport, reply_text
+ 
+ 
+@@ -43,6 +48,17 @@ def test_monitor_keeps_history_for_watcher_camera_and_labels_notes():
+     assert "Camera notes" in content[-1]["text"] and "side view from the watching arm" in content[-1]["text"]
+ 
+ 
++def test_monitor_passes_dream_station_wrist_and_top_images():
++    plan, st = _st(history_cameras=["wrist_l"], camera_notes={"wrist_l": "watcher wrist"})
++    transport = Transport(reply_text())
++    monitor = MonitorVerifier(plan, transport=transport)
++    monitor.check_now(st, {"image_window.top": JPEG, "image_window.left": JPEG}, 2.0)
++    content = transport.payloads[-1]["messages"][0]["content"]
++    assert [b["type"] for b in content] == ["text", "image", "text", "image", "text"]
++    assert "overhead" in content[0]["text"]
++    assert "image_window.left [watcher wrist]" in content[2]["text"]
++
++
+ def test_stage_cameras_filter_frames(tmp_path):
+     from harness.runner import Runner
+ 
+@@ -71,3 +87,60 @@ def test_full_plan_watcher_stages():
+     assert names.index("unplug_cable") < names.index("plug_loose_cable") < names.index("stack_two")
+     plug = plan.stages[names.index("plug_loose_cable")]
+     assert plug.history_cameras == ["wrist_l"] and "right arm" in plug.prompt and plug.on_fail == "skip"
++    assert plug.requires_stage == "watcher_into_place"
++    assert plug.required_cameras == ["overhead", "wrist_l"]
++
++
++@pytest.mark.parametrize("mode", ["complete", "missing_wrist", "stale_wrist", "old_prompt", "repeated"])
++def test_plug_waits_for_watcher_evidence(fake, write_plan, tmp_path, mode):
++    path = write_plan([
++        stage("watch", timeout_s=0.7, on_fail="skip", required_cameras=["overhead", "wrist_l"]),
++        stage("plug", requires_stage="watch"),
++        stage("stack"),
++    ], confirm=2)
++    plan = load_plan(path)
++    seen = []
++
++    class Evidence(FrameSource):
++        def latest_trip(self, *, fallback=False):
++            trip = super().latest_trip(fallback=fallback)
++            if fallback or trip is None or trip.prompt != "do watch":
++                return trip
++            views = {"image_window.top": trip.frames["scene"]}
++            if mode != "missing_wrist":
++                views["image_window.left"] = trip.frames["wrist_l"]
++            return CameraTrip(1 if mode == "repeated" else trip.n,
++                              "old task" if mode == "old_prompt" else trip.prompt, views)
++
++    class Judge:
++        def check(self, stage, frames, elapsed_s):
++            seen.append((stage.name, set(frames)))
++            return Verdict(True, 1.0, "verified")
++
++    class CameraStatus(StationClient):
++        def status(self):
++            status = super().status()
++            if mode == "stale_wrist" and status.get("prompt") == "do watch":
++                status["cameras"]["left"] = 10
++            return status
++
++    runner = Runner(plan, CameraStatus(fake.api_url), Evidence(fake.view_url),
++                    {"manual": Judge()}, RunLog(tmp_path / "logs"))
++    result = runner.run()
++    assert result.stages[-1].name == "stack" and result.stages[-1].ok
++    watch, plug = result.stages[:2]
++    if mode == "complete":
++        assert watch.ok and plug.ok
++        assert seen[:2] == [("watch", {"image_window.top", "image_window.left"})] * 2
++    else:
++        assert not watch.ok and plug.attempts == 0
++        assert sum(name == "watch" for name, _ in seen) == (1 if mode == "repeated" else 0)
++        assert all(name != "plug" for name, _ in seen)
++        assert not any(body.get("prompt") == "do plug" for _, _, body in fake.posts())
++
++
++def test_time_verifier_cannot_pass_camera_gate(fake, write_plan, tmp_path):
++    plan = load_plan(write_plan([stage("watch", required_cameras=["wrist_l"])], verifier="time"))
++    runner = Runner(plan, StationClient(fake.api_url), FrameSource(fake.view_url), {}, RunLog(tmp_path / "logs"))
++    assert "need a visual verifier" in runner.run().reason
++    assert not fake.posts()

@@ -1,0 +1,523 @@
+harness/tests\conftest.py:32:def write_plan(tmp_path):
+harness/tests\conftest.py:33:    """write_plan(stages, **top) -> path of a YAML plan with fast defaults."""
+harness/tests\conftest.py:40:        path.write_text(yaml.safe_dump(data))
+harness-cloud-sims/tests\conftest.py:32:def write_plan(tmp_path):
+harness-cloud-sims/tests\conftest.py:33:    """write_plan(stages, **top) -> path of a YAML plan with fast defaults."""
+harness-cloud-sims/tests\conftest.py:40:        path.write_text(yaml.safe_dump(data))
+harness-cloud-sims/tests\test_async_pacing.py:1:"""Dream's async pacing in the sim (sim_station._async_control): 2 Hz calls, arms never hold for inference."""
+harness-cloud-sims/tests\test_async_pacing.py:22:    sim = SimStation(policy="scripted", scene="hill_climb", realtime=True, api_port=0, view_port=0,
+harness-cloud-sims/tests\test_async_pacing.py:48:    sim = SimStation(policy="scripted", scene="hill_climb", realtime=True, api_port=0, view_port=0)
+harness/tests\test_dataset_tools.py:35:    (root / "meta").mkdir(parents=True)
+harness/tests\test_dataset_tools.py:36:    (root / "meta" / "info.json").write_text(json.dumps(info))
+harness/tests\test_dataset_tools.py:37:    (root / "meta" / "tasks.jsonl").write_text(json.dumps({"task_index": 0, "task": "do it (to be split)"}) + "\n")
+harness/tests\test_dataset_tools.py:49:        path.parent.mkdir(parents=True, exist_ok=True)
+harness/tests\test_dataset_tools.py:50:        pq.write_table(table, path)
+harness/tests\test_dataset_tools.py:53:            v.parent.mkdir(parents=True, exist_ok=True)
+harness/tests\test_dataset_tools.py:54:            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={W}x{H}:rate={FPS}",
+harness/tests\test_dataset_tools.py:59:    (root / "meta" / "episodes.jsonl").write_text("".join(json.dumps(e) + "\n" for e in eps))
+harness/tests\test_dataset_tools.py:60:    (root / "meta" / "episodes_stats.jsonl").write_text("".join(json.dumps(s) + "\n" for s in stats))
+harness/tests\test_dataset_tools.py:108:    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=c=red:size={W}x{H}", "-frames:v", "1",
+harness-cloud-sims/tests\test_cloud.py:42:    assert job["allocationPolicy"]["instances"][0]["policy"]["provisioningModel"] == "SPOT"
+harness-cloud-sims/tests\test_cloud.py:70:    monkeypatch.setattr(entrypoint.subprocess, "Popen", lambda *a, **k: pytest.fail("match started"))
+harness-cloud-sims/tests\test_cloud.py:100:    match.mkdir(parents=True)
+harness-cloud-sims/tests\test_cloud.py:101:    (match / "match.json").write_text("{}")
+harness-cloud-sims/tests\test_cloud.py:171:    example = {"scenario": "hill_climb", "seed": 1, "label": "hybrid_v4", "policy": "dream", "judge": "oracle",
+harness-cloud-sims/tests\test_cloud.py:180:        folder.mkdir()
+harness-cloud-sims/tests\test_cloud.py:181:        (folder / "match.json").write_text(json.dumps(example))
+harness-cloud-sims/tests\test_cloud.py:182:        (folder / "complete.json").write_text(json.dumps({"run_id": "pilot", "attempt": attempt}))
+harness/tests\test_claude_cli.py:20:with open(os.environ["FAKE_CLAUDE_LOG"], "w") as fh:
+harness/tests\test_claude_cli.py:37:    exe.write_text(FAKE.format(python=sys.executable))
+harness-cloud-sims/tests\test_decide_shadow.py:11:def run(fake, write_plan, tmp_path, stages, items, **top):
+harness-cloud-sims/tests\test_decide_shadow.py:12:    path = write_plan(stages, verifier="monitor", **top)
+harness-cloud-sims/tests\test_decide_shadow.py:18:def test_shadow_passes_on_the_same_look_as_the_runner(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_decide_shadow.py:22:    result, dec, log = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10)], items, confirm=2)
+harness-cloud-sims/tests\test_decide_shadow.py:28:def test_stage_confirm_1_is_followed(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_decide_shadow.py:29:    result, dec, _ = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10, confirm=1)],
+harness-cloud-sims/tests\test_decide_shadow.py:34:def test_shadow_fails_on_the_same_look_as_the_runner(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_decide_shadow.py:36:    result, dec, _ = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10, stall_s=100, on_fail="skip")],
+harness-cloud-sims/tests\test_decide_shadow.py:43:def test_plan_weights_change_only_the_log(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_decide_shadow.py:45:    result, dec, _ = run(fake, write_plan, tmp_path, [stage("a", timeout_s=10)], items, confirm=2,
+harness-cloud-sims/tests\test_decide_shadow.py:52:def test_unknown_weight_is_a_plan_error(write_plan):
+harness-cloud-sims/tests\test_decide_shadow.py:53:    path = write_plan([stage("a")], decide={"done": {"w_monitr": 2}})
+harness-cloud-sims/tests\test_dataset_tools.py:35:    (root / "meta").mkdir(parents=True)
+harness-cloud-sims/tests\test_dataset_tools.py:36:    (root / "meta" / "info.json").write_text(json.dumps(info))
+harness-cloud-sims/tests\test_dataset_tools.py:37:    (root / "meta" / "tasks.jsonl").write_text(json.dumps({"task_index": 0, "task": "do it (to be split)"}) + "\n")
+harness-cloud-sims/tests\test_dataset_tools.py:49:        path.parent.mkdir(parents=True, exist_ok=True)
+harness-cloud-sims/tests\test_dataset_tools.py:50:        pq.write_table(table, path)
+harness-cloud-sims/tests\test_dataset_tools.py:53:            v.parent.mkdir(parents=True, exist_ok=True)
+harness-cloud-sims/tests\test_dataset_tools.py:54:            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={W}x{H}:rate={FPS}",
+harness-cloud-sims/tests\test_dataset_tools.py:59:    (root / "meta" / "episodes.jsonl").write_text("".join(json.dumps(e) + "\n" for e in eps))
+harness-cloud-sims/tests\test_dataset_tools.py:60:    (root / "meta" / "episodes_stats.jsonl").write_text("".join(json.dumps(s) + "\n" for s in stats))
+harness-cloud-sims/tests\test_dataset_tools.py:108:    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=c=red:size={W}x{H}", "-frames:v", "1",
+harness-cloud-sims/tests\test_claude_cli.py:20:with open(os.environ["FAKE_CLAUDE_LOG"], "w") as fh:
+harness-cloud-sims/tests\test_claude_cli.py:37:    exe.write_text(FAKE.format(python=sys.executable))
+harness-cloud-sims/tests\test_claude_cli.py:41:        wrapper.write_text(f'@"{sys.executable}" "{exe}" %*' + chr(10))
+harness/tests\test_finetune_watch.py:1:"""tools/finetune_watch.py against a scripted fake Dream service (no network, no library, no charges)."""
+harness/tests\test_finetune_watch.py:14:class DreamServerError(Exception):
+harness/tests\test_finetune_watch.py:20:class DreamProtocolError(Exception):
+harness/tests\test_finetune_watch.py:141:    svc = FakeService([], create_errors=[DreamServerError("credits do not cover $200", code="payment_required")])
+harness/tests\test_finetune_watch.py:149:    svc = FakeService([[DONE]], create_errors=[DreamProtocolError("connection reset"),
+harness/tests\test_finetune_watch.py:150:                                               DreamServerError("suffix in use by one of your models", code="conflict"),
+harness/tests\test_finetune_watch.py:151:                                               DreamServerError("bad gateway", code="http_502", retryable=True)])
+harness/tests\test_finetune_watch.py:158:    svc = FakeService([[DONE]], upload_errors=[DreamServerError("a dataset named relay already exists", code="conflict")])
+harness/tests\test_finetune_watch.py:193:    svc = FakeService([[DONE]], warm_script=[DreamServerError("starting", code="DA-2000", retryable=True,
+harness/tests\test_finetune_watch.py:215:    (DreamProtocolError("x"), "retry"),
+harness/tests\test_finetune_watch.py:216:    (DreamServerError("x", code="http_503", retryable=True), "retry"),
+harness/tests\test_finetune_watch.py:217:    (DreamServerError("not covered", code="payment_required"), "stop"),
+harness/tests\test_finetune_watch.py:218:    (DreamServerError("knob steps out of range", code="invalid_request"), "stop"),
+harness/tests\test_finetune_watch.py:219:    (DreamServerError("account at its limit of active jobs", code="conflict"), "busy"),
+harness/tests\test_finetune_watch.py:220:    (DreamServerError("suffix in use", code="conflict"), "suffix"),
+harness/tests\test_can_torque.py:24:    p.write_text("\n".join(lines))
+harness/tests\test_can_torque.py:32:    p.write_text("nothing here\n")
+harness-cloud-sims/tests\test_can_torque.py:24:    p.write_text("\n".join(lines))
+harness-cloud-sims/tests\test_can_torque.py:32:    p.write_text("nothing here\n")
+harness/tests\test_force.py:36:    with open(path, "w", newline="") as fh:
+harness/tests\test_force.py:75:    p.write_text("a,b\n1,2\n")
+harness/tests\test_dimos_skills.py:36:    script.write_text(SCRIPT)
+harness/tests\test_dimos_skills.py:37:    out = subprocess.run([sys.executable, str(script)], env={**os.environ, "HC": str(ROOT)}, cwd=tmp_path,
+harness-cloud-sims/tests\test_dimos_skills.py:36:    script.write_text(SCRIPT)
+harness-cloud-sims/tests\test_dimos_skills.py:37:    out = subprocess.run([sys.executable, str(script)], env={**os.environ, "HC": str(ROOT)}, cwd=tmp_path,
+harness/tests\test_guard.py:58:def _plan_file(write_plan, **guard):
+harness/tests\test_guard.py:59:    return write_plan([stage("stack", timeout_s=1.0, on_fail="skip"), stage("ball_1", timeout_s=3.0, on_fail="skip"),
+harness/tests\test_guard.py:64:def test_guard_yes_stops_the_run(fake, write_plan, tmp_path):
+harness/tests\test_guard.py:66:    runner = build(fake, _plan_file(write_plan), tmp_path, sv)
+harness/tests\test_guard.py:75:def test_guard_needs_confirm_in_a_row(fake, write_plan, tmp_path):
+harness/tests\test_guard.py:78:    runner = build(fake, _plan_file(write_plan, confirm=2), tmp_path, sv)
+harness/tests\test_guard.py:84:def test_guard_ignored_on_unguarded_stages(fake, write_plan, tmp_path):
+harness/tests\test_guard.py:86:    result = build(fake, _plan_file(write_plan), tmp_path, sv).run()
+harness/tests\test_guard.py:90:def test_cli_warns_when_the_guard_cannot_be_answered(write_plan, tmp_path, capsys, monkeypatch):
+harness/tests\test_guard.py:91:    path = _plan_file(write_plan)
+harness/tests\test_hill_climb_scene.py:12:    pytest.skip("Dream's yam_mujoco example is not installed", allow_module_level=True)
+harness-cloud-sims/tests\test_fast_additions.py:40:def test_plan_reads_new_keys(write_plan, tmp_path):
+harness-cloud-sims/tests\test_fast_additions.py:41:    path = write_plan([stage("a")])
+harness-cloud-sims/tests\test_fast_additions.py:43:    path.write_text(raw + "\nconfirm_gap_s: 3\nprompt_level: 4\nfast: {rate_hz: 25, mode: live}\n", encoding="utf-8")
+harness-cloud-sims/tests\test_fast_additions.py:48:def test_hedged_monitor_takes_the_first_good_reply(write_plan):
+harness-cloud-sims/tests\test_fast_additions.py:49:    path = write_plan([stage("a")])
+harness-cloud-sims/tests\test_fast_additions.py:50:    path.write_text(path.read_text(encoding="utf-8") + "\nclaude: {hedge: 3}\n", encoding="utf-8")
+harness-cloud-sims/tests\test_final_harness.py:43:def _runner(write_plan, tmp_path, guard=None) -> tuple[Runner, _Station]:
+harness-cloud-sims/tests\test_final_harness.py:44:    plan = load_plan(write_plan([stage("a")]))
+harness-cloud-sims/tests\test_final_harness.py:57:def test_reset_is_skipped_while_the_live_guard_is_armed(write_plan, tmp_path):
+harness-cloud-sims/tests\test_final_harness.py:58:    r, st = _runner(write_plan, tmp_path, _Guard(armed=True))
+harness-cloud-sims/tests\test_final_harness.py:64:def test_reset_goes_through_the_motion_checks(write_plan, tmp_path):
+harness-cloud-sims/tests\test_final_harness.py:65:    r, st = _runner(write_plan, tmp_path, _Guard(armed=False))
+harness-cloud-sims/tests\test_final_harness.py:72:def test_reset_is_sent_when_the_guard_is_disarmed(write_plan, tmp_path):
+harness-cloud-sims/tests\test_final_harness.py:73:    r, st = _runner(write_plan, tmp_path, _Guard(armed=False))
+harness-cloud-sims/tests\test_final_harness.py:93:def test_match_refuses_budget_and_human_verifiers(write_plan):
+harness-cloud-sims/tests\test_final_harness.py:94:    plan = load_plan(write_plan([stage("a")]))          # conftest plans default to the manual verifier
+harness-cloud-sims/tests\test_final_harness.py:101:def test_match_turns_the_operator_off(write_plan, monkeypatch):
+harness-cloud-sims/tests\test_force.py:36:    with open(path, "w", newline="") as fh:
+harness-cloud-sims/tests\test_force.py:75:    p.write_text("a,b\n1,2\n")
+harness-cloud-sims/tests\test_guard.py:58:def _plan_file(write_plan, **guard):
+harness-cloud-sims/tests\test_guard.py:59:    return write_plan([stage("stack", timeout_s=1.0, on_fail="skip"), stage("ball_1", timeout_s=3.0, on_fail="skip"),
+harness-cloud-sims/tests\test_guard.py:64:def test_guard_yes_stops_the_run(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_guard.py:66:    runner = build(fake, _plan_file(write_plan), tmp_path, sv)
+harness-cloud-sims/tests\test_guard.py:75:def test_guard_needs_confirm_in_a_row(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_guard.py:78:    runner = build(fake, _plan_file(write_plan, confirm=2), tmp_path, sv)
+harness-cloud-sims/tests\test_guard.py:84:def test_guard_ignored_on_unguarded_stages(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_guard.py:86:    result = build(fake, _plan_file(write_plan), tmp_path, sv).run()
+harness-cloud-sims/tests\test_guard.py:90:def test_cli_warns_when_the_guard_cannot_be_answered(write_plan, tmp_path, capsys, monkeypatch):
+harness-cloud-sims/tests\test_guard.py:91:    path = _plan_file(write_plan)
+harness/tests\test_match_plans.py:59:    plan.write_text(
+harness/tests\test_match_plans.py:73:    d.mkdir(parents=True)
+harness/tests\test_match_plans.py:74:    (d / "info.json").write_text(json.dumps({"fps": fps}))
+harness/tests\test_match_plans.py:75:    (d / "episodes.jsonl").write_text("\n".join(
+harness/tests\test_match_plans.py:78:    (d / "tasks.jsonl").write_text("\n".join(json.dumps({"task_index": i, "task": t}) for i, t in enumerate(texts)))
+harness/tests\test_match_plans.py:84:    plan.write_text(
+harness/tests\test_match_plans.py:99:    plan.write_text('task: t\nstages:\n  - {name: a, prompt: "unplug the cable", success: "ok?"}\n')
+harness-cloud-sims/tests\test_hedge_cancel.py:1:"""Hedged Dream calls: losers are cut, slow calls are replaced within caps, and a cancelled reply is never used.
+harness-cloud-sims/tests\test_hedge_cancel.py:3:Offline: fake sessions, and a local fake gateway behind the SDK's real Transport. No Dream call is made."""
+harness/tests\test_runner.py:55:def test_happy_three_stages(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:57:    path = write_plan([stage(n) for n in names])
+harness/tests\test_runner.py:68:def test_retry_in_place_with_recovery(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:69:    path = write_plan([stage("a", timeout_s=4, recovery=["open the grippers"], on_fail="retry_in_place")])
+harness/tests\test_runner.py:78:def test_retry_in_place_without_recovery_resends_prompt(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:79:    path = write_plan([stage("a", on_fail="retry_in_place")])
+harness/tests\test_runner.py:86:def test_home_and_retry(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:87:    path = write_plan([stage("a", on_fail="home_and_retry")])
+harness/tests\test_runner.py:95:def test_skip(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:96:    path = write_plan([stage("a", on_fail="skip", max_attempts=1), stage("b")])
+harness/tests\test_runner.py:103:def test_skip_does_not_retry(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:104:    path = write_plan([stage("a", on_fail="skip", max_attempts=3), stage("b")])
+harness/tests\test_runner.py:110:def test_abort(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:111:    path = write_plan([stage("a", on_fail="abort"), stage("b")])
+harness/tests\test_runner.py:118:def test_out_of_attempts_fails_run(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:119:    path = write_plan([stage("a", max_attempts=1, on_fail="retry_in_place"), stage("b")])
+harness/tests\test_runner.py:124:def test_timeout_fails_attempt(write_plan, tmp_path):
+harness/tests\test_runner.py:127:        path = write_plan([stage("a", timeout_s=0.4, max_attempts=1)])
+harness/tests\test_runner.py:135:def test_arm_dies_aborts(write_plan, tmp_path):
+harness/tests\test_runner.py:138:        path = write_plan([stage("a", timeout_s=20), stage("b")])
+harness/tests\test_runner.py:147:def test_start_error_reports_last_error(write_plan, tmp_path):
+harness/tests\test_runner.py:150:        path = write_plan([stage("a")])
+harness/tests\test_runner.py:159:def test_slow_start_is_waited_out(write_plan, tmp_path):
+harness/tests\test_runner.py:162:        path = write_plan([stage("a")])
+harness/tests\test_runner.py:169:def test_preflight_refuses_running_station(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:173:    result = build(fake, write_plan([stage("a")]), tmp_path, FakeVerifier({"a": [True]})).run()
+harness/tests\test_runner.py:178:def test_preflight_refuses_stale_camera(write_plan, tmp_path):
+harness/tests\test_runner.py:181:        result = build(fake, write_plan([stage("a")]), tmp_path, FakeVerifier({"a": [True]})).run()
+harness/tests\test_runner.py:187:def test_time_budget(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:188:    path = write_plan([stage("a", timeout_s=60)], time_budget_s=0.8)
+harness/tests\test_runner.py:195:def test_request_stop(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:196:    path = write_plan([stage("a", timeout_s=60), stage("b")])
+harness/tests\test_runner.py:210:def test_verifier_gets_frames(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:211:    path = write_plan([stage("a")])
+harness/tests\test_runner.py:234:def test_inference_fault_restarts_the_run_with_the_same_prompt(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:236:    path = write_plan([stage(n, min_run_s=0.05) for n in ("a", "b", "c")], confirm=1)
+harness/tests\test_runner.py:237:    msg = "DreamAPI refused the inference request: DA-6000 GATEWAY_FAULT (connection_timed_out)"
+harness/tests\test_runner.py:247:def test_hardware_fault_still_ends_the_run(fake, write_plan, tmp_path):
+harness/tests\test_runner.py:248:    path = write_plan([stage(n, min_run_s=0.05) for n in ("a", "b", "c")], confirm=1)
+harness/tests\test_sim_station.py:1:"""sim_station.py in scripted mode (no key, no network). Skipped without mujoco / Dream's yam_mujoco example / GL."""
+harness/tests\test_sim_station.py:27:def _example_dir():
+harness/tests\test_sim_station.py:36:    pytest.skip("Dream's yam_mujoco example is not installed (pip install dreamlabs) and no --example-dir")
+harness/tests\test_sim_station.py:41:    example = _example_dir()
+harness/tests\test_sim_station.py:43:        station = sim_station.SimStation(policy="scripted", api_port=0, view_port=0, realtime=False,
+harness/tests\test_sim_station.py:44:                                         example_dir=example).start()
+harness/tests\test_sim_station.py:71:def test_scripted_policy_chunk_shape_and_limits():
+harness/tests\test_sim_station.py:73:    policy = sim_station.ScriptedPolicy(anchor, latency_s=0)
+harness/tests\test_sim_station.py:74:    first, second = policy.get_action(), policy.get_action()
+harness/tests\test_sim_station.py:179:    with urllib.request.urlopen(sim.view_url + "/live", timeout=10) as resp:
+harness/tests\test_sim_station.py:181:    with urllib.request.urlopen(sim.view_url + "/live/state", timeout=10) as resp:
+harness/tests\test_sim_station.py:185:    with urllib.request.urlopen(sim.view_url + "/live/cam/top.jpg", timeout=10) as resp:
+harness/tests\test_sim_station.py:188:        urllib.request.urlopen(sim.view_url + "/live/cam/nope.jpg", timeout=10)
+harness/tests\test_station_client_frames_plan.py:77:def test_load_plan_ok(write_plan):
+harness/tests\test_station_client_frames_plan.py:78:    plan = load_plan(write_plan([stage("a", recovery=["open grippers"]), stage("b", on_fail="skip")]))
+harness/tests\test_station_client_frames_plan.py:96:def test_load_plan_rejects(write_plan, override, field):
+harness/tests\test_station_client_frames_plan.py:97:    path = write_plan([stage("good"), stage("bad_stage", **override)])
+harness/tests\test_station_client_frames_plan.py:103:def test_load_plan_bad_top_level(write_plan):
+harness/tests\test_station_client_frames_plan.py:105:        load_plan(write_plan([stage("a")], time_budget_s=0))
+harness/tests\test_station_client_frames_plan.py:107:        load_plan(write_plan([]))
+harness-cloud-sims/tests\test_hill_climb_scene.py:12:    pytest.skip("Dream's yam_mujoco example is not installed", allow_module_level=True)
+harness/tests\test_station_tools.py:11:def _tools(fake, write_plan, **kw):
+harness/tests\test_station_tools.py:12:    plan = write_plan([stage("a", recovery=[{"name": "lift", "kind": "reset", "prompt": "lift the arms"}]),
+harness/tests\test_station_tools.py:17:def test_tools_drive_the_station_through_its_api_only(write_plan, tmp_path):
+harness/tests\test_station_tools.py:20:        t = _tools(fake, write_plan)
+harness/tests\test_station_tools.py:35:def test_check_stage_uses_the_verifier(write_plan, tmp_path):
+harness/tests\test_station_tools.py:38:        t = _tools(fake, write_plan)
+harness/tests\test_station_tools.py:50:def test_free_prompts_and_unknown_names(write_plan):
+harness/tests\test_station_tools.py:53:        t = _tools(fake, write_plan, allow_free_prompts=True)
+harness/tests\test_station_tools.py:62:def test_start_refused_when_an_arm_is_dead(write_plan):
+harness/tests\test_station_tools.py:66:        t = _tools(fake, write_plan)
+harness/tests\test_stress.py:2:policy that won't let go of the cable, Claude API outages and bad camera frames. No station, no key, ~5 s each."""
+harness/tests\test_stress.py:22:    ({"type": "DreamBadRequest", "error_code": "DA-4000", "message": "DreamAPI refused the inference request: "
+harness/tests\test_stress.py:26:    ("DreamAPI refused the inference request: DA-6000 GATEWAY_FAULT (connection_timed_out)", "transient"),
+harness/tests\test_stress.py:27:    ({"type": "DreamSessionExpired", "error_code": "DA-0001", "message": "session replaced"}, "transient"),
+harness-cloud-sims/tests\test_hybrid.py:1:"""The hybrid pieces: monitor-written prompts, /reset first and after Dream's IK error, gripper sensors over the
+harness-cloud-sims/tests\test_hybrid.py:22:    assert plan.reset_first and plan.rewrite_prompts and plan.system_prompt and plan.time_budget_s == 295
+harness-cloud-sims/tests\test_hybrid.py:30:def test_next_prompt_parsed_and_asked_for(write_plan):
+harness-cloud-sims/tests\test_hybrid.py:33:    plan = load_plan(write_plan([stage("a", verifier="monitor")], rewrite_prompts=True, system_prompt="lessons"))
+harness-cloud-sims/tests\test_hybrid.py:41:def test_monitor_rewrites_the_prompt_with_prefix_cooldown_and_cap(fake, write_plan, tmp_path, monkeypatch):
+harness-cloud-sims/tests\test_hybrid.py:44:    path = write_plan([stage("a", prompt=f"{pre} pull the plug", timeout_s=3.0, max_attempts=1, on_fail="skip")],
+harness-cloud-sims/tests\test_hybrid.py:45:                      rewrite_prompts=True, prompt_prefix=pre)
+harness-cloud-sims/tests\test_hybrid.py:59:def test_reset_first_then_auto_reset_after_svd(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_hybrid.py:61:    path = write_plan([stage("a", timeout_s=6.0)], reset_first=True)
+harness-cloud-sims/tests\test_hybrid.py:80:def test_gripper_note_reads_this_stations_sensors(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_hybrid.py:81:    r = build(fake, write_plan([stage("a")]), tmp_path, Script([mv(None)]))
+harness-cloud-sims/tests\test_hybrid.py:88:def test_done_seen_during_recovery_passes_after_a_second_look(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_hybrid.py:90:    path = write_plan([stage("a", timeout_s=0.3, max_attempts=3, recovery=rec)])
+harness-cloud-sims/tests\test_hybrid.py:100:def test_tower_prompt_names_the_piece_below(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_hybrid.py:101:    path = write_plan([stage("stack_2")], tower_target=["blue cube", "pink cube", "yellow stick"],
+harness-cloud-sims/tests\test_hybrid.py:117:def test_operator_skips_ends_and_notes(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_hybrid.py:118:    path = write_plan([stage("a", timeout_s=5.0), stage("b"), stage("c", timeout_s=0.5)])
+harness-cloud-sims/tests\test_hybrid.py:151:    run.mkdir()
+harness-cloud-sims/tests\test_hybrid.py:156:    (run / "events.jsonl").write_text("\n".join(json.dumps(e) for e in evs))
+harness-cloud-sims/tests\test_hybrid.py:170:def test_stitched_history_and_two_calls_in_flight(write_plan):
+harness-cloud-sims/tests\test_hybrid.py:172:    plan = load_plan(write_plan([stage("a", verifier="monitor")], claude={"stitch": True, "parallel": 2,
+harness-cloud-sims/tests\test_hybrid.py:198:def test_put_down_skipped_when_its_unplug_failed(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_hybrid.py:199:    path = write_plan([stage("up", timeout_s=0.3, max_attempts=1, on_fail="skip"),
+harness/tests\test_watcher.py:63:    p.write_text('task: t\nvars: {arm: left}\nstages:\n  - {name: a, prompt: "use the {arm} arm", success: "ok?"}\n')
+harness/tests\test_watcher.py:97:def test_runner_puts_the_watcher_back_then_resumes_the_stage(write_plan, tmp_path):
+harness/tests\test_watcher.py:106:        plan = write_plan([dict(name="plug", prompt="plug it in", success="in?", timeout_s=10, min_run_s=0.05,
+harness/tests\test_v2.py:345:def test_confirm_two_needs_consecutive_done(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:346:    path = write_plan([stage("a")], confirm=2)
+harness/tests\test_v2.py:353:def test_done_far_apart_still_needs_confirm(fake, write_plan, tmp_path, monkeypatch):
+harness/tests\test_v2.py:357:    path = write_plan([stage("a")], confirm=2)
+harness/tests\test_v2.py:362:def test_confirm_ignores_in_flight_ticks(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:364:    path = write_plan([stage("a")], confirm=2)
+harness/tests\test_v2.py:369:def test_confirm_one_is_v1(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:371:    assert build(fake, write_plan([stage("a")]), tmp_path, sv).run().ok and len(sv.calls) == 1
+harness/tests\test_v2.py:374:def test_manual_y_is_immediate_even_with_confirm_2(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:376:    assert build(fake, write_plan([stage("a")], confirm=3), tmp_path, sv).run().ok and len(sv.calls) == 1
+harness/tests\test_v2.py:379:def test_manual_n_is_immediate_even_with_confirm_2(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:380:    path = write_plan([stage("a", on_fail="skip")], confirm=3)
+harness/tests\test_v2.py:386:def test_done_without_frames_never_passes(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:387:    path = write_plan([stage("a", timeout_s=0.6, on_fail="skip")], cameras_for_check=["no_such_camera"])
+harness/tests\test_v2.py:394:def test_immediate_done_without_frames_is_fine(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:395:    path = write_plan([stage("a")], cameras_for_check=["no_such_camera"])
+harness/tests\test_v2.py:400:def test_failing_needs_confirm_and_half_the_timeout(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:401:    path = write_plan([stage("a", timeout_s=1.0, on_fail="skip")], confirm=2)
+harness/tests\test_v2.py:413:def test_failing_streak_broken_by_ok(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:414:    path = write_plan([stage("a", timeout_s=1.2, on_fail="skip")], confirm=2)
+harness/tests\test_v2.py:421:def test_stall_by_progress_clock(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:422:    path = write_plan([stage("a", timeout_s=10, stall_s=0.4, on_fail="skip")])
+harness/tests\test_v2.py:429:def test_rising_progress_does_not_stall(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:430:    path = write_plan([stage("a", timeout_s=10, stall_s=0.3)])
+harness/tests\test_v2.py:435:def test_stall_by_monitor_status_needs_confirm_in_a_row(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:436:    path = write_plan([stage("a", timeout_s=10, stall_s=100, on_fail="skip")], confirm=2)
+harness/tests\test_v2.py:442:def test_stalled_status_ignored_when_stall_s_off(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:443:    path = write_plan([stage("a", timeout_s=0.6, on_fail="skip")])
+harness/tests\test_v2.py:448:def test_regression_logged_and_counts_as_failing(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:449:    path = write_plan([stage("a", timeout_s=1.0, on_fail="skip")])
+harness/tests\test_v2.py:457:def test_small_drop_is_not_regression(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:458:    path = write_plan([stage("a", timeout_s=5)])
+harness/tests\test_v2.py:465:def test_settle_blocks_verifier_after_prompt_change(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:466:    path = write_plan([stage("a", settle_s=0.5, timeout_s=4)])
+harness/tests\test_v2.py:472:def test_settle_defaults_to_min_run(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:473:    path = write_plan([stage("a", min_run_s=0.3)])
+harness/tests\test_v2.py:479:def test_prompt_change_events_carry_chunks(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:482:    assert build(fake, write_plan([stage("a"), stage("b")]), tmp_path, fv, log).run().ok
+harness/tests\test_v2.py:488:def test_progress_moved_event_after_prompt_change(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:492:    assert build(fake, write_plan([stage("a", timeout_s=5)]), tmp_path, sv, log).run().ok
+harness/tests\test_v2.py:519:def test_monitor_recovery_hint_is_used(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:520:    path = write_plan([stage("a", timeout_s=0.8, max_attempts=3, recovery=RECS)])
+harness/tests\test_v2.py:533:def test_recovery_order_retry_reset_and_scene_not_ok_burns_attempt(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:534:    path = write_plan([stage("a", timeout_s=0.8, max_attempts=4, recovery=RECS)])
+harness/tests\test_v2.py:550:def test_reset_scene_not_ok_to_the_end_fails_stage(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:552:    path = write_plan([stage("a", timeout_s=0.6, max_attempts=2, recovery=recs)])
+harness/tests\test_v2.py:560:def test_menu_exhausted_falls_back_to_on_fail(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:562:    path = write_plan([stage("a", max_attempts=3, recovery=recs, on_fail="home_and_retry")])
+harness/tests\test_v2.py:570:def test_max_uses_two_but_never_same_item_twice_in_a_row(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:572:    path = write_plan([stage("a", max_attempts=4, recovery=recs, on_fail="home_and_retry")])
+harness/tests\test_v2.py:581:def test_legacy_string_recovery_still_in_order(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:582:    path = write_plan([stage("a", timeout_s=0.8, max_attempts=3, recovery=["r1", "r2"])])
+harness/tests\test_v2.py:588:def test_legacy_string_recovery_ignored_under_home_and_retry(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:589:    path = write_plan([stage("a", recovery=["r1"], on_fail="home_and_retry")])
+harness/tests\test_v2.py:596:def test_skip_if_done(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:597:    path = write_plan([stage("a"), stage("b", skip_if_done=True), stage("c")])
+harness/tests\test_v2.py:606:def test_skip_if_done_needs_confidence(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:607:    path = write_plan([stage("a"), stage("b", skip_if_done=True)])
+harness/tests\test_v2.py:613:def test_skip_if_done_manual_y_counts(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:614:    path = write_plan([stage("a"), stage("b", skip_if_done=True)])
+harness/tests\test_v2.py:620:def test_skip_if_done_uses_check_now_when_available(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:621:    path = write_plan([stage("a"), stage("b", skip_if_done=True)])
+harness/tests\test_v2.py:634:def test_end_to_end_monitor_with_scripted_transport(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:635:    path = write_plan([stage("a", timeout_s=5, expect="done looks like X")], verifier="monitor", confirm=2)
+harness/tests\test_v2.py:648:def test_segments_and_manifest(fake, write_plan, tmp_path):
+harness/tests\test_v2.py:649:    path = write_plan([stage("a", recovery=["fix"], timeout_s=1.0)])
+harness/tests\test_v2.py:664:def test_segment_written_when_run_aborts(write_plan, tmp_path):
+harness/tests\test_v2.py:669:        result = build(fake, write_plan([stage("a", timeout_s=20)]), tmp_path, FakeVerifier({}), log).run()
+harness/tests\test_v2.py:678:    d.mkdir(parents=True)
+harness/tests\test_v2.py:679:    (d / "summary.json").write_text(json.dumps({"ok": ok, "stages": stages}))
+harness/tests\test_v2.py:680:    (d / "segments.jsonl").write_text("\n".join(json.dumps(s) for s in segs))
+harness/tests\test_v2.py:681:    (d / "events.jsonl").write_text("\n".join(json.dumps(e) for e in evs))
+harness/tests\test_v2.py:726:def test_report_on_real_run(fake, write_plan, tmp_path, capsys):
+harness/tests\test_v2.py:727:    path = write_plan([stage("a", recovery=["fix"], timeout_s=1.0)])
+harness/tests\test_v2.py:734:def test_cli_monitor_without_key_exits_2(write_plan, tmp_path, monkeypatch, capsys):
+harness/tests\test_v2.py:736:    path = write_plan([stage("a")])
+harness/tests\test_v2.py:743:def test_cli_writes_manifest_and_never_the_key(write_plan, tmp_path, monkeypatch, capsys):
+harness/tests\test_v2.py:745:    path = write_plan([stage("a", timeout_s=1.0)], verifier="time")
+harness-cloud-sims/tests\test_joint_telemetry.py:1:"""Live joint telemetry: can_live decodes Dream's CAN frames; joint_telemetry turns torques into signals."""
+harness-cloud-sims/tests\test_joint_telemetry.py:102:        sim = sim_station.SimStation(policy="scripted", scene="hill_climb", realtime=True, api_port=0,
+harness-cloud-sims/tests\test_joint_telemetry.py:105:        pytest.skip("Dream's yam_mujoco example is not installed here")
+harness-cloud-sims/tests\test_match_plans.py:59:    plan.write_text(
+harness-cloud-sims/tests\test_match_plans.py:73:    d.mkdir(parents=True)
+harness-cloud-sims/tests\test_match_plans.py:74:    (d / "info.json").write_text(json.dumps({"fps": fps}))
+harness-cloud-sims/tests\test_match_plans.py:75:    (d / "episodes.jsonl").write_text("\n".join(
+harness-cloud-sims/tests\test_match_plans.py:78:    (d / "tasks.jsonl").write_text("\n".join(json.dumps({"task_index": i, "task": t}) for i, t in enumerate(texts)))
+harness-cloud-sims/tests\test_match_plans.py:84:    plan.write_text(
+harness-cloud-sims/tests\test_match_plans.py:99:    plan.write_text('task: t\nstages:\n  - {name: a, prompt: "unplug the cable", success: "ok?"}\n')
+harness-cloud-sims/tests\test_operator_notes.py:1:"""Darsh's operator decisions (plans/operator_notes.yaml) reach the plan, the monitor and the Dream prompt."""
+harness-cloud-sims/tests\test_runner.py:55:def test_happy_three_stages(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:57:    path = write_plan([stage(n) for n in names])
+harness-cloud-sims/tests\test_runner.py:68:def test_retry_in_place_with_recovery(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:69:    path = write_plan([stage("a", timeout_s=4, recovery=["open the grippers"], on_fail="retry_in_place")])
+harness-cloud-sims/tests\test_runner.py:78:def test_retry_in_place_without_recovery_resends_prompt(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:79:    path = write_plan([stage("a", on_fail="retry_in_place")])
+harness-cloud-sims/tests\test_runner.py:86:def test_home_and_retry(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:87:    path = write_plan([stage("a", on_fail="home_and_retry")], time_budget_s=300)   # /home needs 30 s left
+harness-cloud-sims/tests\test_runner.py:95:def test_skip(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:96:    path = write_plan([stage("a", on_fail="skip", max_attempts=1), stage("b")])
+harness-cloud-sims/tests\test_runner.py:103:def test_skip_does_not_retry(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:104:    path = write_plan([stage("a", on_fail="skip", max_attempts=3), stage("b")])
+harness-cloud-sims/tests\test_runner.py:110:def test_abort(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:111:    path = write_plan([stage("a", on_fail="abort"), stage("b")])
+harness-cloud-sims/tests\test_runner.py:118:def test_out_of_attempts_fails_run(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:119:    path = write_plan([stage("a", max_attempts=1, on_fail="retry_in_place"), stage("b")])
+harness-cloud-sims/tests\test_runner.py:124:def test_timeout_fails_attempt(write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:127:        path = write_plan([stage("a", timeout_s=0.4, max_attempts=1)])
+harness-cloud-sims/tests\test_runner.py:135:def test_arm_dies_aborts(write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:138:        path = write_plan([stage("a", timeout_s=20), stage("b")])
+harness-cloud-sims/tests\test_runner.py:147:def test_start_error_reports_last_error(write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:150:        path = write_plan([stage("a")])
+harness-cloud-sims/tests\test_runner.py:159:def test_slow_start_is_waited_out(write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:162:        path = write_plan([stage("a")])
+harness-cloud-sims/tests\test_runner.py:169:def test_preflight_refuses_running_station(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:173:    result = build(fake, write_plan([stage("a")]), tmp_path, FakeVerifier({"a": [True]})).run()
+harness-cloud-sims/tests\test_runner.py:178:def test_preflight_refuses_stale_camera(write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:181:        result = build(fake, write_plan([stage("a")]), tmp_path, FakeVerifier({"a": [True]})).run()
+harness-cloud-sims/tests\test_runner.py:187:def test_time_budget(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:188:    path = write_plan([stage("a", timeout_s=60)], time_budget_s=0.8)
+harness-cloud-sims/tests\test_runner.py:195:def test_request_stop(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:196:    path = write_plan([stage("a", timeout_s=60), stage("b")])
+harness-cloud-sims/tests\test_runner.py:210:def test_verifier_gets_frames(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:211:    path = write_plan([stage("a")])
+harness-cloud-sims/tests\test_runner.py:234:def test_inference_fault_restarts_the_run_with_the_same_prompt(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:236:    path = write_plan([stage(n, min_run_s=0.05) for n in ("a", "b", "c")], confirm=1)
+harness-cloud-sims/tests\test_runner.py:237:    msg = "DreamAPI refused the inference request: DA-6000 GATEWAY_FAULT (connection_timed_out)"
+harness-cloud-sims/tests\test_runner.py:247:def test_hardware_fault_still_ends_the_run(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:248:    path = write_plan([stage(n, min_run_s=0.05) for n in ("a", "b", "c")], confirm=1)
+harness-cloud-sims/tests\test_runner.py:255:def test_home_and_retry_holds_without_time_for_home(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_runner.py:256:    path = write_plan([stage("a", on_fail="home_and_retry")], time_budget_s=20)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:71:def _pose_runner(fake, write_plan, tmp_path, *, right, home_before=("unplug_cable",), refs=None, verdicts=None,
+harness-cloud-sims/tests\test_start_pose_live_guard.py:73:    path = write_plan([stage("unplug_cable", prompt="do unplug", max_attempts=max_attempts, timeout_s=0.6)],
+harness-cloud-sims/tests\test_start_pose_live_guard.py:81:def test_far_start_homes_before_the_first_prompt(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:82:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:91:def test_near_start_does_not_home(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:92:    runner = _pose_runner(fake, write_plan, tmp_path, right=HOME)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:98:def test_other_stages_only_log(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:99:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED, home_before=())
+harness-cloud-sims/tests\test_start_pose_live_guard.py:104:def test_no_home_when_home_is_not_a_recorded_start(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:106:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED, refs=refs)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:112:def test_max_homes_per_stage(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:113:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED, verdicts=[mv(False, "failing")], max_attempts=3)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:120:def test_retry_after_far_start_homes_then_starts_fresh(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:123:    runner = _pose_runner(fake, write_plan, tmp_path, right=HOME, verdicts=None)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:139:def test_no_reference_file_means_no_checks(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:140:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:150:    (ds / "meta").mkdir(parents=True)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:151:    (ds / "data" / "chunk-000").mkdir(parents=True)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:154:    (ds / "meta" / "info.json").write_text(json.dumps({"features": {"observation.state": {"names": names}}}))
+harness-cloud-sims/tests\test_start_pose_live_guard.py:155:    (ds / "meta" / "tasks.jsonl").write_text('{"task_index": 0, "task": "a"}\n{"task_index": 1, "task": "b"}\n')
+harness-cloud-sims/tests\test_start_pose_live_guard.py:157:    pq.write_table(pa.table({"observation.state": rows, "task_index": [0, 0, 1]}),
+harness-cloud-sims/tests\test_start_pose_live_guard.py:270:def test_no_motion_command_after_a_trip(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:272:    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+harness-cloud-sims/tests\test_start_pose_live_guard.py:286:def test_no_home_without_time_reserve(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:287:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:294:def test_operator_stop_during_the_stop_wait_means_no_home(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:296:    runner = _pose_runner(fake, write_plan, tmp_path, right=RAISED)
+harness-cloud-sims/tests\test_start_pose_live_guard.py:307:def test_a_trip_ends_a_wait_for_running_at_once(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:310:    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+harness-cloud-sims/tests\test_start_pose_live_guard.py:318:def test_live_guard_trip_ends_the_match_mid_stage(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:320:    path = write_plan([stage("stack", timeout_s=0.3, on_fail="skip"), stage("ball_1", timeout_s=5.0, on_fail="skip"),
+harness-cloud-sims/tests\test_start_pose_live_guard.py:345:def test_trip_during_a_motion_command_stops_again(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:347:    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+harness-cloud-sims/tests\test_start_pose_live_guard.py:371:def test_per_poll_guard_counts_new_frames_only(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:373:    path = write_plan([stage("ball_1", timeout_s=1.5, on_fail="skip")], verifier="monitor",
+harness-cloud-sims/tests\test_start_pose_live_guard.py:384:def test_no_home_while_the_live_guard_is_armed(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:386:    runner = build(fake, write_plan([stage("ball_1")]), tmp_path, Script([mv(True)]))
+harness-cloud-sims/tests\test_start_pose_live_guard.py:399:def test_per_poll_guard_ignores_a_frozen_wrist_when_the_scene_changes(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_start_pose_live_guard.py:401:    path = write_plan([stage("ball_1", timeout_s=1.5, on_fail="skip")], verifier="monitor",
+harness-cloud-sims/tests\test_sim_station.py:1:"""sim_station.py in scripted mode (no key, no network). Skipped without mujoco / Dream's yam_mujoco example / GL."""
+harness-cloud-sims/tests\test_sim_station.py:27:def _example_dir():
+harness-cloud-sims/tests\test_sim_station.py:36:    pytest.skip("Dream's yam_mujoco example is not installed (pip install dreamlabs) and no --example-dir")
+harness-cloud-sims/tests\test_sim_station.py:41:    """Every state-machine test runs on Dream's example loop and on the async pacing loop (execution_horizon 10)."""
+harness-cloud-sims/tests\test_sim_station.py:42:    example = _example_dir()
+harness-cloud-sims/tests\test_sim_station.py:44:        station = sim_station.SimStation(policy="scripted", api_port=0, view_port=0, realtime=False,
+harness-cloud-sims/tests\test_sim_station.py:45:                                         example_dir=example, execution_horizon=request.param).start()
+harness-cloud-sims/tests\test_sim_station.py:72:def test_scripted_policy_chunk_shape_and_limits():
+harness-cloud-sims/tests\test_sim_station.py:74:    policy = sim_station.ScriptedPolicy(anchor, latency_s=0)
+harness-cloud-sims/tests\test_sim_station.py:75:    first, second = policy.get_action(), policy.get_action()
+harness-cloud-sims/tests\test_sim_station.py:114:            with urllib.request.urlopen(sim.api_url + f"/frame/{cam}.jpg?w={width}") as response:
+harness-cloud-sims/tests\test_sim_station.py:203:    with urllib.request.urlopen(sim.view_url + "/live", timeout=10) as resp:
+harness-cloud-sims/tests\test_sim_station.py:205:    with urllib.request.urlopen(sim.view_url + "/live/state", timeout=10) as resp:
+harness-cloud-sims/tests\test_sim_station.py:209:    with urllib.request.urlopen(sim.view_url + "/live/cam/top.jpg", timeout=10) as resp:
+harness-cloud-sims/tests\test_sim_station.py:212:        urllib.request.urlopen(sim.view_url + "/live/cam/nope.jpg", timeout=10)
+harness-cloud-sims/tests\test_sim_station.py:215:def test_hedged_policy_returns_the_first_reply_and_feeds_every_session():
+harness-cloud-sims/tests\test_sim_station.py:266:        policy = real_open(model, poses)
+harness-cloud-sims/tests\test_sim_station.py:267:        real_get = policy.get_action
+harness-cloud-sims/tests\test_sim_station.py:274:        policy.get_action = get_action
+harness-cloud-sims/tests\test_sim_station.py:275:        return policy
+harness-cloud-sims/tests\test_sim_station.py:296:        policy = real_open(model, poses)
+harness-cloud-sims/tests\test_sim_station.py:297:        real_get = policy.get_action
+harness-cloud-sims/tests\test_sim_station.py:304:        policy.get_action = get_action
+harness-cloud-sims/tests\test_sim_station.py:305:        return policy
+harness-cloud-sims/tests\test_station_client_frames_plan.py:77:def test_load_plan_ok(write_plan):
+harness-cloud-sims/tests\test_station_client_frames_plan.py:78:    plan = load_plan(write_plan([stage("a", recovery=["open grippers"]), stage("b", on_fail="skip")]))
+harness-cloud-sims/tests\test_station_client_frames_plan.py:96:def test_load_plan_rejects(write_plan, override, field):
+harness-cloud-sims/tests\test_station_client_frames_plan.py:97:    path = write_plan([stage("good"), stage("bad_stage", **override)])
+harness-cloud-sims/tests\test_station_client_frames_plan.py:103:def test_load_plan_bad_top_level(write_plan):
+harness-cloud-sims/tests\test_station_client_frames_plan.py:105:        load_plan(write_plan([stage("a")], time_budget_s=0))
+harness-cloud-sims/tests\test_station_client_frames_plan.py:107:        load_plan(write_plan([]))
+harness-cloud-sims/tests\test_stress.py:2:policy that won't let go of the cable, Claude API outages and bad camera frames. No station, no key, ~5 s each."""
+harness-cloud-sims/tests\test_stress.py:22:    ({"type": "DreamBadRequest", "error_code": "DA-4000", "message": "DreamAPI refused the inference request: "
+harness-cloud-sims/tests\test_stress.py:26:    ("DreamAPI refused the inference request: DA-6000 GATEWAY_FAULT (connection_timed_out)", "transient"),
+harness-cloud-sims/tests\test_stress.py:27:    ({"type": "DreamSessionExpired", "error_code": "DA-0001", "message": "session replaced"}, "transient"),
+harness-cloud-sims/tests\test_station_tools.py:11:def _tools(fake, write_plan, **kw):
+harness-cloud-sims/tests\test_station_tools.py:12:    plan = write_plan([stage("a", recovery=[{"name": "lift", "kind": "reset", "prompt": "lift the arms"}]),
+harness-cloud-sims/tests\test_station_tools.py:17:def test_tools_drive_the_station_through_its_api_only(write_plan, tmp_path):
+harness-cloud-sims/tests\test_station_tools.py:20:        t = _tools(fake, write_plan)
+harness-cloud-sims/tests\test_station_tools.py:35:def test_check_stage_uses_the_verifier(write_plan, tmp_path):
+harness-cloud-sims/tests\test_station_tools.py:38:        t = _tools(fake, write_plan)
+harness-cloud-sims/tests\test_station_tools.py:50:def test_free_prompts_and_unknown_names(write_plan):
+harness-cloud-sims/tests\test_station_tools.py:53:        t = _tools(fake, write_plan, allow_free_prompts=True)
+harness-cloud-sims/tests\test_station_tools.py:62:def test_start_refused_when_an_arm_is_dead(write_plan):
+harness-cloud-sims/tests\test_station_tools.py:66:        t = _tools(fake, write_plan)
+harness-cloud-sims/tests\test_v2.py:347:def test_confirm_two_needs_consecutive_done(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:348:    path = write_plan([stage("a")], confirm=2)
+harness-cloud-sims/tests\test_v2.py:355:def test_done_far_apart_still_needs_confirm(fake, write_plan, tmp_path, monkeypatch):
+harness-cloud-sims/tests\test_v2.py:359:    path = write_plan([stage("a")], confirm=2)
+harness-cloud-sims/tests\test_v2.py:364:def test_confirm_ignores_in_flight_ticks(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:366:    path = write_plan([stage("a")], confirm=2)
+harness-cloud-sims/tests\test_v2.py:371:def test_confirm_one_is_v1(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:373:    assert build(fake, write_plan([stage("a")]), tmp_path, sv).run().ok and len(sv.calls) == 1
+harness-cloud-sims/tests\test_v2.py:376:def test_manual_y_is_immediate_even_with_confirm_2(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:378:    assert build(fake, write_plan([stage("a")], confirm=3), tmp_path, sv).run().ok and len(sv.calls) == 1
+harness-cloud-sims/tests\test_v2.py:381:def test_manual_n_is_immediate_even_with_confirm_2(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:382:    path = write_plan([stage("a", on_fail="skip")], confirm=3)
+harness-cloud-sims/tests\test_v2.py:388:def test_done_without_frames_never_passes(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:389:    path = write_plan([stage("a", timeout_s=0.6, on_fail="skip")], cameras_for_check=["no_such_camera"])
+harness-cloud-sims/tests\test_v2.py:396:def test_immediate_done_without_frames_is_fine(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:397:    path = write_plan([stage("a")], cameras_for_check=["no_such_camera"])
+harness-cloud-sims/tests\test_v2.py:402:def test_failing_needs_confirm_and_half_the_timeout(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:403:    path = write_plan([stage("a", timeout_s=1.0, on_fail="skip")], confirm=2)
+harness-cloud-sims/tests\test_v2.py:415:def test_failing_streak_broken_by_ok(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:416:    path = write_plan([stage("a", timeout_s=1.2, on_fail="skip")], confirm=2)
+harness-cloud-sims/tests\test_v2.py:423:def test_stall_by_progress_clock(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:424:    path = write_plan([stage("a", timeout_s=10, stall_s=0.4, on_fail="skip")])
+harness-cloud-sims/tests\test_v2.py:431:def test_rising_progress_does_not_stall(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:432:    path = write_plan([stage("a", timeout_s=10, stall_s=0.3)])
+harness-cloud-sims/tests\test_v2.py:437:def test_stall_by_monitor_status_needs_confirm_in_a_row(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:438:    path = write_plan([stage("a", timeout_s=10, stall_s=100, on_fail="skip")], confirm=2)
+harness-cloud-sims/tests\test_v2.py:444:def test_stalled_status_ignored_when_stall_s_off(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:445:    path = write_plan([stage("a", timeout_s=0.6, on_fail="skip")])
+harness-cloud-sims/tests\test_v2.py:450:def test_regression_logged_and_counts_as_failing(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:451:    path = write_plan([stage("a", timeout_s=1.0, on_fail="skip")])
+harness-cloud-sims/tests\test_v2.py:459:def test_small_drop_is_not_regression(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:460:    path = write_plan([stage("a", timeout_s=5)])
+harness-cloud-sims/tests\test_v2.py:467:def test_settle_blocks_verifier_after_prompt_change(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:468:    path = write_plan([stage("a", settle_s=0.5, timeout_s=4)])
+harness-cloud-sims/tests\test_v2.py:474:def test_settle_defaults_to_min_run(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:475:    path = write_plan([stage("a", min_run_s=0.3)])
+harness-cloud-sims/tests\test_v2.py:481:def test_prompt_change_events_carry_chunks(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:484:    assert build(fake, write_plan([stage("a"), stage("b")]), tmp_path, fv, log).run().ok
+harness-cloud-sims/tests\test_v2.py:490:def test_progress_moved_event_after_prompt_change(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:494:    assert build(fake, write_plan([stage("a", timeout_s=5)]), tmp_path, sv, log).run().ok
+harness-cloud-sims/tests\test_v2.py:521:def test_monitor_recovery_hint_is_used(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:522:    path = write_plan([stage("a", timeout_s=0.8, max_attempts=3, recovery=RECS)])
+harness-cloud-sims/tests\test_v2.py:535:def test_recovery_order_retry_reset_and_scene_not_ok_burns_attempt(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:536:    path = write_plan([stage("a", timeout_s=0.8, max_attempts=4, recovery=RECS)])
+harness-cloud-sims/tests\test_v2.py:552:def test_reset_scene_not_ok_to_the_end_fails_stage(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:554:    path = write_plan([stage("a", timeout_s=0.6, max_attempts=2, recovery=recs)])
+harness-cloud-sims/tests\test_v2.py:562:def test_menu_exhausted_falls_back_to_on_fail(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:564:    path = write_plan([stage("a", max_attempts=3, recovery=recs, on_fail="home_and_retry")], time_budget_s=300)
+harness-cloud-sims/tests\test_v2.py:572:def test_max_uses_two_but_never_same_item_twice_in_a_row(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:574:    path = write_plan([stage("a", max_attempts=4, recovery=recs, on_fail="home_and_retry")], time_budget_s=300)
+harness-cloud-sims/tests\test_v2.py:583:def test_legacy_string_recovery_still_in_order(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:584:    path = write_plan([stage("a", timeout_s=0.8, max_attempts=3, recovery=["r1", "r2"])])
+harness-cloud-sims/tests\test_v2.py:590:def test_legacy_string_recovery_ignored_under_home_and_retry(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:591:    path = write_plan([stage("a", recovery=["r1"], on_fail="home_and_retry")], time_budget_s=300)
+harness-cloud-sims/tests\test_v2.py:598:def test_skip_if_done(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:599:    path = write_plan([stage("a"), stage("b", skip_if_done=True), stage("c")])
+harness-cloud-sims/tests\test_v2.py:608:def test_skip_if_done_needs_confidence(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:609:    path = write_plan([stage("a"), stage("b", skip_if_done=True)])
+harness-cloud-sims/tests\test_v2.py:615:def test_skip_if_done_manual_y_counts(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:616:    path = write_plan([stage("a"), stage("b", skip_if_done=True)])
+harness-cloud-sims/tests\test_v2.py:622:def test_skip_if_done_uses_check_now_when_available(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:623:    path = write_plan([stage("a"), stage("b", skip_if_done=True)])
+harness-cloud-sims/tests\test_v2.py:636:def test_end_to_end_monitor_with_scripted_transport(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:637:    path = write_plan([stage("a", timeout_s=5, expect="done looks like X")], verifier="monitor", confirm=2)
+harness-cloud-sims/tests\test_v2.py:650:def test_segments_and_manifest(fake, write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:651:    path = write_plan([stage("a", recovery=["fix"], timeout_s=1.0)])
+harness-cloud-sims/tests\test_v2.py:666:def test_segment_written_when_run_aborts(write_plan, tmp_path):
+harness-cloud-sims/tests\test_v2.py:671:        result = build(fake, write_plan([stage("a", timeout_s=20)]), tmp_path, FakeVerifier({}), log).run()
+harness-cloud-sims/tests\test_v2.py:680:    d.mkdir(parents=True)
+harness-cloud-sims/tests\test_v2.py:681:    (d / "summary.json").write_text(json.dumps({"ok": ok, "stages": stages}))
+harness-cloud-sims/tests\test_v2.py:682:    (d / "segments.jsonl").write_text("\n".join(json.dumps(s) for s in segs))
+harness-cloud-sims/tests\test_v2.py:683:    (d / "events.jsonl").write_text("\n".join(json.dumps(e) for e in evs))
+harness-cloud-sims/tests\test_v2.py:720:def test_report_on_real_run(fake, write_plan, tmp_path, capsys):
+harness-cloud-sims/tests\test_v2.py:721:    path = write_plan([stage("a", recovery=["fix"], timeout_s=1.0)])
+harness-cloud-sims/tests\test_v2.py:728:def test_cli_monitor_without_key_exits_2(write_plan, tmp_path, monkeypatch, capsys):
+harness-cloud-sims/tests\test_v2.py:730:    path = write_plan([stage("a")])
+harness-cloud-sims/tests\test_v2.py:737:def test_cli_writes_manifest_and_never_the_key(write_plan, tmp_path, monkeypatch, capsys):
+harness-cloud-sims/tests\test_v2.py:739:    path = write_plan([stage("a", timeout_s=1.0)], verifier="time")
+harness-cloud-sims/tests\test_watcher.py:63:    p.write_text('task: t\nvars: {arm: left}\nstages:\n  - {name: a, prompt: "use the {arm} arm", success: "ok?"}\n')
+harness-cloud-sims/tests\test_watcher.py:97:def test_runner_puts_the_watcher_back_then_resumes_the_stage(write_plan, tmp_path):
+harness-cloud-sims/tests\test_watcher.py:106:        plan = write_plan([dict(name="plug", prompt="plug it in", success="in?", timeout_s=10, min_run_s=0.05,

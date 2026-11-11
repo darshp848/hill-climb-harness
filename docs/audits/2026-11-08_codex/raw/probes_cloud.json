@@ -1,0 +1,91 @@
+{
+  "confirm_3_true_false_true": {
+    "ok": true,
+    "checks": 3,
+    "seconds": 3.0
+  },
+  "entry_confirm_2": {
+    "ok": true,
+    "checks": 1,
+    "starts": 0,
+    "seconds": 0.0
+  },
+  "late_entry_prompt": {
+    "budget": 60.0,
+    "prompt_sent_at": [],
+    "exception": "_Fail",
+    "clock": 61.0
+  },
+  "disk_error": {
+    "exception": "OSError",
+    "stops": 0,
+    "station_running": true
+  },
+  "stop_log_error": {
+    "exception": "OSError",
+    "stops": 0,
+    "station_running": true
+  },
+  "refusal_retry": {
+    "starts": 4,
+    "reason": "stage 'a' failed after 3 attempts: Dream refused the prompt (4x): DA-4000 unsafe instruction"
+  },
+  "baseline_after_motion": {
+    "first_capture_elapsed": 6,
+    "second_request_labels": [
+      "t=+6s overhead (stage start)",
+      "t=+9s overhead (newest)"
+    ]
+  },
+  "match_defaults": {
+    "checkpoint": "dream-1-ft:bb4b9e5f-relay-final",
+    "confirm": 2,
+    "confirm_gap_s": 0.0,
+    "claude": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 4000,
+      "history_frames": 4,
+      "stitch": true,
+      "parallel": 2
+    },
+    "tower_prompts": {
+      "cube": "put a block on top of the stack",
+      "stick": "stand a stick upright on top of the stack"
+    }
+  },
+  "neutral_white_ball_guard": [
+    false,
+    "local detector: none held"
+  ],
+  "missing_right_wrist": {
+    "elapsed": 30.0,
+    "last_answer_t": 30.0,
+    "tripped": null,
+    "roles_seen": [
+      "wrist_l"
+    ]
+  },
+  "home_reference_zero_distance": {
+    "unplug the USB cable at the end of the hub nearest the right arm": {
+      "status": "ok",
+      "distance": {
+        "left": 0.1068,
+        "right": 0.0925
+      }
+    },
+    "put the held cable down on the table away from the hub": {
+      "status": "far",
+      "distance": {
+        "left": 0.2107,
+        "right": 1.798
+      }
+    },
+    "plug and unplug USB cables (to be split)": {
+      "status": "ok",
+      "distance": {
+        "left": 0.0904,
+        "right": 0.0856
+      }
+    }
+  }
+}

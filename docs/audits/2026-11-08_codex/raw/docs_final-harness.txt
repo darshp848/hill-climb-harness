@@ -1,0 +1,774 @@
+
+===== origin/final-harness:DESIGN.md =====
+# Hill Climb harness: design (the contract every file follows)
+
+## What it is
+
+A supervisor that runs Dream-1 through a long-horizon task as a sequence of stages. For each stage it gives
+the model a prompt, watches the cameras, decides whether the stage worked, and recovers when it did not.
+
+It never touches a motor. It drives Dream's own station agent (`dreamcli robot up`) through that agent's
+HTTP API, so every speed cap, clamp, gripper force cap and home move in Dream's control loop stays in force.
+
+## The two endpoints it uses (both on the station, both 127.0.0.1)
+
+Station agent, started by the person with `dreamcli robot up [joint] --view-port 8093` (default API port 8091).
+Routes (from `robots/station_api.py`, dreamlabs 1.0.37):
+
+| Route | Body | Reply |
+| --- | --- | --- |
+| `GET /status` | | 200, status dict |
+| `POST /start` | `{"prompt": str?, "checkpoint": str?}` | 200 status; 409 `{"error"}` when a run exists |
+| `POST /stop` | `{}` | 200 status once the arms hold; 409 during a home move |
+| `POST /home` | `{}` | 200 once the arms are home; 409 while a run exists |
+| `POST /reset` | `{}` | 200 status (reopens a dead arm driver) |
+| `POST /prompt` | `{"prompt": str}` | 200 status; 400 without a non-empty prompt. Changes the running task live |
+
+Errors: 400 bad body, 404 route, 409 refused transition, 504 timeout (60 s), 500 other; body `{"error": msg}`.
+
+Status dict keys used: `state` (one of `idle`, `starting`, `running`, `stopping`, `homing`, `resetting`,
+`error`), `prompt`, `checkpoint`, `run` (int, run number), `chunks`, `stalls`, `clamps`, `arms`
+(`{name: bool alive}`), `cameras` (`{name: age_s or None}`), `last_error` (str or None), `run_elapsed_s`.
+
+Debug view (`--view-port 8093`), from `dream/debug_view.py`:
+
+- `GET /trips` -> JSON list, oldest first, of `{"n": int, "sent_s": float, "error": str|None, "rtt_ms": ...}`.
+- `GET /trip/<n>` -> JSON `{"n", "sent_s", "frames": {"video.<role>": [base64 JPEG, ... oldest first]},
+  "observation", "action", "timing", "error", "trained"}`; 404 when no longer kept.
+
+The harness reads the newest trip's newest frame per camera as "what the robot sees now".
+Camera role keys look like `video.scene`, `video.wrist_l`, `video.wrist_r` (exact names vary by station:
+match by substring, config `cameras_for_check` lists which roles a verifier gets, default all).
+
+## Package layout (`harness/`, Python 3.12+, stdlib + PyYAML only; no numpy, no SDKs)
+
+```
+harness/
+  __init__.py
+  station_client.py   StationClient
+  frames.py           FrameSource
+  plan.py             Plan, Stage, load_plan()
+  verifiers.py        Verifier protocol + ManualVerifier, ClaudeVerifier, TimeVerifier, make_verifier()
+  runner.py           Runner, RunResult
+  log.py              RunLog (JSONL + saved JPEGs)
+  cli.py              main()  (python -m harness ...)
+plans/example_hill_climb.yaml
+fake_station.py       (offline stand-in for both endpoints; see below)
+tests/                pytest, against fake_station
+README.md
+```
+
+### station_client.py
+
+```python
+class StationError(Exception): ...          # carries .status_code and .message
+class StationClient:
+    def __init__(self, base_url="http://127.0.0.1:8091", *, timeout_s=70.0, dry_run=False, log=None): ...
+    def status(self) -> dict                  # GET /status (allowed in dry run)
+    def start(self, prompt: str, checkpoint: str | None = None) -> dict
+    def set_prompt(self, prompt: str) -> dict
+    def stop(self) -> dict
+    def home(self) -> dict
+    def reset(self) -> dict
+    def wait_for_state(self, states: set[str], timeout_s: float, poll_s=0.5) -> dict  # raises TimeoutError
+```
+
+`dry_run=True`: every POST is NOT sent; it logs `"DRY RUN: would POST /start {...}"` and returns the last
+real status (or a synthetic `{"state": "running", ...}` when the station is unreachable). GETs are sent.
+Uses `urllib.request` only. Non-2xx -> `StationError`.
+
+### frames.py
+
+```python
+class FrameSource:
+    def __init__(self, base_url="http://127.0.0.1:8093", *, timeout_s=5.0): ...
+    def latest(self) -> dict[str, bytes]      # role -> JPEG bytes, newest trip's newest frame per key; {} if none
+    def latest_n(self) -> int | None
+```
+Strips a `video.` prefix from role names. Never raises on network trouble: returns `{}` and remembers the error.
+
+### plan.py (YAML schema)
+
+```yaml
+task: "clear the table into the bin"         # overall, for logs
+checkpoint: null                              # dream-1-ft:... or null for base Dream-1
+time_budget_s: 900                            # whole run
+check_every_s: 3.0                            # how often a verifier is asked while a stage runs
+verifier: manual                              # default for stages: manual | claude | time
+claude: {model: claude-haiku-5-5, max_tokens: 200}
+stages:
+  - name: pick_red
+    prompt: "pick up the red cube"
+    success: "Is the red cube held in a gripper, off the table?"   # the yes/no question a verifier answers
+    timeout_s: 60
+    max_attempts: 3
+    min_run_s: 4                                # don't ask a verifier before this
+    verifier: manual                            # optional override
+    recovery:                                   # tried in order on attempt 2, 3, ... (else the stage prompt again)
+      - "open both grippers and move the arms up"
+    on_fail: home_and_retry                     # retry_in_place | home_and_retry | skip | abort
+```
+
+`load_plan(path) -> Plan` validates: non-empty prompts (<=512 chars, single line), positive times,
+`max_attempts>=1`, known enums; raises `ValueError` naming the stage and field.
+
+### verifiers.py
+
+```python
+@dataclass
+class Verdict: done: bool | None; confidence: float; reason: str   # None = can't tell yet
+class Verifier(Protocol):
+    def check(self, stage: Stage, frames: dict[str, bytes], elapsed_s: float) -> Verdict: ...
+```
+
+- `ManualVerifier(input_stream=sys.stdin)`: a background thread reads lines; `y`=done, `n`=failed now,
+  anything else ignored; `check()` returns the latest unread key press as a verdict, else `Verdict(None,...)`.
+  Prints the stage question once per stage.
+- `ClaudeVerifier(model, api_key from ANTHROPIC_API_KEY, max_tokens)`: POST to
+  `https://api.anthropic.com/v1/messages` with headers `x-api-key`, `anthropic-version: 2023-06-01`,
+  `content-type: application/json`; content = each camera JPEG as an `image` block (base64, media_type
+  image/jpeg) labelled by role, then the text: the stage question + "Answer with JSON only:
+  {\"done\": true|false, \"confidence\": 0..1, \"reason\": \"...\"}". Parses the first JSON object in the reply.
+  Any error -> `Verdict(None, 0, "verifier error: ...")`. Requires done with confidence >= 0.7 to count.
+  Never sends the key anywhere else; never logs it.
+- `TimeVerifier`: done once `elapsed_s >= stage.timeout_s * 0.9` (for stages with no check), confidence 0.5.
+- `make_verifier(name, plan) -> Verifier`.
+
+### runner.py: the state machine
+
+```python
+@dataclass
+class StageResult: name: str; ok: bool; attempts: int; seconds: float; reason: str
+@dataclass
+class RunResult: ok: bool; stages: list[StageResult]; seconds: float; reason: str
+class Runner:
+    def __init__(self, plan, station: StationClient, frames: FrameSource, verifiers: dict[str, Verifier],
+                 log: RunLog, *, clock=time.monotonic, sleep=time.sleep): ...
+    def run(self) -> RunResult
+    def request_stop(self) -> None            # thread-safe; makes run() stop the station and return
+```
+
+Behaviour:
+1. Preflight: `status()`. Refuse (RunResult ok=False) if state not in {idle, error}... except state
+   `running` is refused too (someone else's run). Refuse if any `arms` value is False or any camera age is
+   None or > 2 s. In dry run, report these as warnings and continue.
+2. First stage: `start(prompt, plan.checkpoint)`, then `wait_for_state({"running"}, 120)` (a new model can be
+   slow; on `error` state stop and fail with `last_error`).
+3. Each later stage, if the run is still `running`: `set_prompt(next prompt)` (no stop between stages).
+   If the run ended (state idle) start it again with the new prompt.
+4. While a stage runs: every `check_every_s`, poll status; if `state == "error"` or an arm is dead -> `stop()`
+   and fail the whole run (`abort`). After `min_run_s`, grab `frames.latest()` and ask the stage's verifier.
+   `done True` -> stage ok, next stage. `done False` (manual `n`) -> attempt failed.
+   `elapsed >= timeout_s` -> attempt failed.
+5. Attempt failed: if attempts < max_attempts: by `on_fail`:
+   - `retry_in_place`: `set_prompt(recovery[i] if any else prompt)`; for a recovery prompt, run it for
+     `min(timeout_s/2, 20)` s, then `set_prompt(prompt)` again and restart the stage clock.
+   - `home_and_retry`: `stop()`, wait idle, `home()`, wait idle, `start(prompt)`.
+   - `skip`: mark failed, go to next stage. `abort`: stop and fail the run.
+   Out of attempts: `skip` behaviour if on_fail is `skip`, else fail the run.
+6. Whole-run `time_budget_s` exceeded -> stop, fail. `request_stop()` or KeyboardInterrupt -> `stop()` then
+   return. After the last stage: `stop()` (the arms hold; the person homes them).
+7. Every decision goes to the log.
+
+### log.py
+
+`RunLog(dir)`: creates `runs/<UTC timestamp>/`, writes `events.jsonl` (`{"t", "event", ...}` per line),
+`save_frames(tag, frames)` writes `<seq>_<tag>_<role>.jpg`, and `summary.json` at the end.
+
+### cli.py (`python -m harness`)
+
+```
+python -m harness plans/x.yaml --dry-run          # reads status/frames, sends nothing that moves an arm
+python -m harness plans/x.yaml --live              # real; asks the person to type "yes" first
+python -m harness plans/x.yaml --mock              # starts fake_station in-process, no station needed
+  --station http://127.0.0.1:8091 --view http://127.0.0.1:8093 --runs-dir runs
+```
+Exactly one of `--dry-run`, `--live`, `--mock` is required. `--live` prints the safety lines (hand on the
+e-stop, people clear) and requires typing `yes`. Ctrl+C at any time -> `POST /stop` then exit.
+`s` + Enter in the terminal while running also stops (shares the stdin reader with ManualVerifier).
+
+## fake_station.py (offline stand-in)
+
+`FakeStation(api_port=0, view_port=0, *, scenario="happy")`: two `ThreadingHTTPServer`s on 127.0.0.1
+implementing exactly the routes above, with the real state machine (idle -> starting -> running; stop ->
+stopping -> idle; home -> homing -> idle; 409s for refused transitions), a growing `chunks` count, trip list
+with synthetic JPEG frames (a tiny valid JPEG constant; roles `video.scene`, `video.wrist_l`, `video.wrist_r`)
+whose observation carries the current prompt. `.api_url`, `.view_url`, `.start()`, `.close()`, `.calls`
+(list of `(method, route, body)`). Scenarios: `happy`; `arm_dies` (an arm goes False 3 s into the run);
+`start_error` (start -> error state with last_error); `slow_start` (5 s in starting); `camera_stale`.
+Also `fake_station.FakeVerifier(script: dict[stage_name, list[Verdict|None]])` returning scripted verdicts.
+Runnable alone: `python fake_station.py` serves on 8091/8093.
+
+===== origin/final-harness:DESIGN_v2.md =====
+# Harness v2: changes backed by the Hill Climb reading list
+
+Everything in DESIGN.md still holds unless changed here. Backward compatible: v1 plans still load and run
+the same way (all new fields optional with defaults that reproduce v1).
+
+Sources: the event prep guide; Sentinel (runtime monitoring), FLARE
+(retry vs reset recovery), Hi Robot (hierarchical high level), SARM (stage-aware progress), Robometer
+(progress dynamics), RTC and DreamZero (latency / prompt-change delay), IWR and RECAP (data loop).
+
+## 1. A monitor, not a yes/no checker (Sentinel, SARM, Robometer, Hi Robot)
+
+New verifier `monitor` (`verifiers.MonitorVerifier`), Claude-backed. Per call it sends:
+- a frame **history**, not one image: the stage's first overhead frame + the last `history_frames` (default 6)
+  overhead frames kept from earlier checks (oldest first), + the newest wrist frames. Images labelled
+  ("t=+12s overhead", ...). Single-image QA mostly cries failure (Sentinel: TNR <= 7%).
+- text: the overall task, the full stage list with the current one marked, the stage's `success` question,
+  `expect` (optional, what correct behaviour looks like), elapsed seconds in the stage and its `timeout_s`,
+  the last prompt sent to the robot, the stage's recovery menu (name + `when`), and this instruction:
+  "First write 2-4 short questions about the robot and objects that decide this, and answer them from the
+  images. Do not call the stage failing unless it is unlikely to finish within the time left. Then output
+  JSON only between <json> and </json>:"
+  `{"stage_done": bool, "progress": 0..1, "status": "ok"|"stalled"|"failing", "holding": {"left": str, "right": str},
+    "recovery": <index into the recovery menu or null>, "scene_ok": bool, "confidence": 0..1, "reason": str}`
+- Parsing: take the text between the markers; on any error return `MonitorVerdict(done=None, ...)`.
+  Validate: `recovery` must be null or a valid index; clamp numbers.
+- Runs **asynchronously**: the runner keeps polling status while a call is in flight (a background thread,
+  at most one call in flight; results are consumed by the next tick). Calls take seconds (Sentinel: 14 s mean
+  on GPT-4o), and a blocking call would starve health checks.
+
+`MonitorVerdict(Verdict)` adds `progress: float|None`, `status: str|None`, `recovery: int|None`,
+`scene_ok: bool|None`, `holding: dict|None`. Other verifiers return plain `Verdict` (treated as status None).
+
+## 2. Debounced decisions (Sentinel, prep guide "false success is expensive")
+
+Plan-level `confirm` (default 1 = v1 behaviour; recommend 2 with monitor):
+- a stage succeeds only after `confirm` consecutive `done True` verdicts (manual `y` counts as confirmed at once);
+- a monitor `status: failing` ends the attempt only after `confirm` consecutive failing verdicts AND elapsed
+  >= 50% of `timeout_s` (manual `n` stays immediate);
+- verdicts with no frames (empty dict) are never counted as success (missing data can't pass).
+
+## 3. Stall detection from progress dynamics (Robometer, SARM)
+
+Stage field `stall_s` (default null = off). If the monitor reports progress, keep the max progress seen in
+the attempt; if it has not risen by >= 0.05 for `stall_s` seconds, or the monitor says `stalled` `confirm`
+times in a row, the attempt fails with reason "stalled". A drop of >= 0.3 below the attempt's max
+(regression, e.g. object dropped) logs a `regression` event and counts as a failing verdict.
+
+## 4. Recovery menu with applicability, chosen from a closed set (FLARE, Hi Robot)
+
+Stage `recovery` items may be a string (v1) or a mapping:
+`{name, prompt, when, kind: retry|reset, settle_s (default 8), max_uses (default 1)}`.
+- `kind: retry` = environment still on the task path: just re-issue the stage prompt (FLARE ID error).
+- `kind: reset` = scene broken (toppled/dropped/stuck object): send the recovery prompt, run it for
+  `settle_s`..`min(timeout_s/2, 20)` s, then ask the verifier for `scene_ok` (monitor) before re-issuing the
+  stage prompt; if the scene is still not ok, that counts as another failed attempt.
+- Selection on a failed attempt: the monitor's `recovery` index if it gave one and that item still has uses
+  left; else the next unused item in list order; never the same item twice in a row; when none is left, fall
+  back to `on_fail`.
+
+## 5. Prompt-change settle time (DreamZero, RTC)
+
+Stage `settle_s` (default = `min_run_s`): after any prompt change no verifier is asked and no stall clock
+runs. A VLA executes the chunk already in flight and DreamZero-style models keep ~seconds of visual context,
+so the old prompt lingers. Log `prompt_change` events with the status `chunks` count, and log the first
+check where the monitor's `progress` moved, so the delay can be measured on the station.
+
+## 6. Entry check (prep guide "entry conditions")
+
+Stage `skip_if_done` (default false): before sending a stage's prompt, ask the verifier once; if it says done
+with confidence >= 0.8 (monitor) or the operator typed y, record the stage ok with 0 attempts and move on.
+
+## 7. Data loop and evaluation (IWR, RECAP, SARM, prep guide)
+
+- `runs/<ts>/segments.jsonl`: one line per stage attempt and per recovery: `{stage, attempt, kind:
+  stage|recovery, prompt, t_start, t_end (epoch s), outcome, reason, max_progress}`. These line up with
+  Dream's own rollout recordings by wall clock, so successful stage segments can be cut out for fine-tuning
+  and failed ones excluded (SARM drops negative-progress data; IWR keeps the policy's own data around
+  corrections).
+- `runs/<ts>/manifest.json`: plan file path + sha256, harness version, station status at start (checkpoint,
+  prompt), CLI args, host, start/end time.
+- `python -m harness.report runs/ [--last N]`: a table over runs: run ok, stages ok/total, per-stage success
+  rate, mean attempts, mean seconds, recoveries used and their success rate, most common failure reasons.
+  Also counts "false success" when a stage after a successful one fails immediately with
+  `scene_ok false` (a lead, not proof).
+
+## 8. Small things
+
+- `MonitorVerifier` model default `claude-haiku-5-5`; plan `claude.model` overrides; `max_tokens` default 4000 (was 600; it cut off every Haiku 5.5 reply)
+  (the questions need room).
+- CLI `--verifier` accepts `monitor` and `monitor+manual` (operator key wins, like claude+manual).
+- `ClaudeVerifier` (v1) unchanged.
+- All new behaviour has tests against fake_station with a scripted fake monitor (no network).
+
+===== origin/final-harness:FINAL_HARNESS.md =====
+# Final harness (branch `final-harness`)
+
+This branch is `main` with `start-pose-live-guard` and `hybrid-harness` merged in, the LiveKit observer from
+`codex/hill-climb-livekit`, and two fixes the merge needed. This file records what was kept, what was left out and
+why, and how to run a match. The how-to for every flag is in [HARNESS_GUIDE.md](HARNESS_GUIDE.md).
+
+## Run a match
+
+```bash
+python -m harness plans/hill_climb_v4.yaml --live --match --detect plans/table_colors.yaml --live-guard
+```
+
+`--match` refuses to start (exit 2) with `--budget`, a `manual` / `+manual` verifier, or a stage a person would
+answer. It turns the operator console off, reads practice lessons without writing new ones, and records
+`match: true` in the manifest. It warns if `--detect ... --live-guard` is missing. Without the live guard, nothing
+stops an 8-ball between monitor verdicts.
+
+For base Dream-1 (no fine-tune), use `plans/hybrid_v4.yaml` instead. It has specific colour and position prompts,
+monitor-written prompt rewrites, `reset_first` and the "no power" prefix. Drop its cable 3 and 4 stages, which
+cost about 18 points a match in the sim:
+
+```bash
+python -m harness plans/hybrid_v4.yaml --live --match --skip cable_extra --detect plans/table_colors.yaml --live-guard
+```
+
+For the LiveKit points, show the referee `python -m harness.livekit_observer` before the match (guide §6h). It only
+subscribes and is never part of the run.
+
+## What's in, and where it came from
+
+| Piece | From | Why it's in |
+|---|---|---|
+| Runner state machine, `confirm: 2`, monitor verifier, `guard:` with `max_blind_s` | main | The core. A false "done" is a DQ, so every gated stage needs two agreeing verdicts. |
+| Local colour detector `--detect` | main | Local, so it answers in milliseconds where the monitor takes seconds. It feeds both guards and draws boxes on the monitor's frames. |
+| Live guard `--live-guard` (10 Hz on `/frame/<wrist>.jpg`, 3 frames in a row, sends `/stop` itself) | start-pose-live-guard | The only thing fast enough to stop an 8-ball. See the stress results below. |
+| Start-pose gate (`start_pose:` + `plans/start_poses.json`) | start-pose-live-guard | It won't send a prompt from a pose the policy never started from. |
+| `decide.py` | start-pose-live-guard | Kept in shadow mode only: it logs what it would do and decides nothing. |
+| Stitched history grid + `parallel: 2` (now in `hill_climb_v4.yaml` too) | hybrid-harness | Measured on the station: a verdict every ~4.9 s instead of ~9.7 s. Judge speed is the main lever in the sim. |
+| Light frames (`/frame/<cam>.jpg?w=640`, ~35 KB) | hybrid-harness | Dream's round trip went from 2–6 s to ~0.8 s once the harness stopped pulling ~2 MB debug-view trips. |
+| Gripper sensors (`GET /arms`) overrule the monitor's "holding" | hybrid-harness | A gripper closed on nothing is not holding a cable, whatever the image seems to show. |
+| `rewrite_prompts` (monitor `next_prompt`, 15 s cooldown, max 3 per attempt) | hybrid-harness | It gets base Dream-1 off the wrong object. Use `--no-rewrite` for a fine-tune, which only follows its recorded texts. |
+| `prompt_prefix` "no power" sentence | hybrid-harness | Dream refuses cable work without it. **Keep it only while it is literally true** (the station C notes say the strip is unplugged). |
+| `reset_first`, auto `/reset` after `SVD did not converge` (max 2) | hybrid-harness | Both grippers start open, and it recovers from Dream's IK error. Now goes through the motion checks (below). |
+| `requires_stage`, relative ball stages, `ARCHIVE_WAIT_S` 4 | hybrid-harness | Balls only after the tower passes. "One more ball" stages are counted from the start of that stage. |
+| Operator console | hybrid-harness | **Practice only.** Off under `--match`. |
+| LiveKit observer | codex/hill-climb-livekit | +10 for showing it to the referee. Read-only. Ported without that branch's plan rewrites. |
+| `--match` | new here | It makes the DQ rules something the harness checks, so nobody has to remember them on the day. |
+
+## Fixes the merge needed
+
+- **`/reset` bypassed the motion checks.** hybrid's `_reset_and_wait` posted `/reset` directly, so an operator stop
+  or a tripped guard didn't block it. `/reset` moves both arms and can't be cancelled once it starts. It now goes
+  through `_motion`, and it is skipped (`reset_skipped` event) while the live guard is armed.
+  `tests/test_final_harness.py` covers both.
+- Conflicts in `cli.py`, `plan.py` and `runner.py` were additive. `_PLAN_KEYS` is the union of both branches.
+
+## Left out
+
+| Idea | Where | Why not |
+|---|---|---|
+| `hybrid_v4_long.yaml` as the match plan | hybrid-harness | In the sim it lost 34 of 185 matches to an 8-ball and ended early in 134 of 185. Keep it for practice comparisons. |
+| Operator console, `--budget`, `monitor+manual` in a match | hybrid / main | Any human input after go is a DQ. `--match` refuses them. |
+| `hill_climb_full` / `hill_climb_sprint` rewrites | codex/hill-climb-livekit | `hill_climb_v4.yaml` and `hybrid_v4.yaml` already follow rubric v4. |
+| `decide.py` making decisions | start-pose-live-guard | No match evidence that it beats the plan order yet. Shadow mode first. |
+| The LiveKit branch's `required_cameras` plan field | codex/hill-climb-livekit | It needs that branch's plan and frames changes. The observer works without it. |
+
+## Stress results (virtual-clock sim, `experiments/stress_match.py` scenarios, 5 seeds each)
+
+37 scenarios × 5 seeds = 185 matches per config. Each scenario is a table the harness has to cope with: refusals,
+frozen or empty cameras, API outages, false "done" verdicts, an 8-ball near the bin, a knocky tower, and so on.
+"fast" means a judge call takes 4–6 s; otherwise 6.5–13 s (Haiku as measured). "final" is this merge with
+`--live-guard` and gripper sensors.
+
+| config | mean pts | lost to DQ | lost to 8-ball | mean balls |
+|---|---|---|---|---|
+| main, v4 plan | 60.5 | 4 | 0 | 0.00 |
+| hybrid, hybrid plan | 61.2 | 4 | 1 | 0.09 |
+| hybrid, hybrid plan, fast | 70.5 | 4 | **28** | 3.01 |
+| hybrid, long plan, fast | 63.2 | 5 | **34** | 3.38 |
+| **final, v4 plan, fast** | 66.6 | 6 | **0** | 2.37 |
+| **final, hybrid plan, fast** | **69.8** | 4 | **0** | 2.90 |
+
+- **The live guard is what makes a fast judge safe.** Without it, a fast judge reaches the balls and loses 28 of
+  185 matches to the 8-ball. With it, none are lost, at a cost of 0.7 points on average.
+- At Haiku's real latency, the live guard and the per-poll guard score the same (`guard_v4` and `guard_v4_live`
+  match row for row). Neither reaches the ball stage, so there is no 8-ball to stop.
+- The 4 DQs every config shares are all `reach_across` (see below).
+- **Open risk, v4 plan with a fast judge:** in 2 matches (`false_done_unplug` and `false_done_all`, same seed),
+  two false "cable out" verdicts landed seconds apart and passed `confirm: 2`. The robot then touched a block.
+  With two calls in flight, the confirming verdicts are close in time and can share the same error. A minimum gap
+  between confirming verdicts would close this. Not done yet.
+
+**This branch as committed**, at Haiku's real latency (6.5–13 s a call), with `--live-guard` and gripper sensors,
+on 8 of the scenarios (40 matches each):
+
+| scenario | main, v4 | this branch, v4 | hybrid, hybrid plan | this branch, hybrid plan |
+|---|---|---|---|---|
+| happy | 74.2 | 75.4 | 74.4 | 75.6 |
+| realistic | 47.6 | 57.6 | 60.0 | 59.2 |
+| realistic_faults | 44.6 | 46.4 | 45.6 | 44.0 |
+| calibrated_base | 35.4 | 32.6 | 49.4 | 54.0 |
+| calibrated_base_faults | 28.4 | 36.2 | 31.8 | 31.8 |
+| knocky_tower | 58.0 | 61.6 | 59.8 | 63.2 |
+| black_heavy_lagged | 89.2 | 90.4 | 90.0 | 87.8 |
+| unplug_never | 0 | 0 | 0 | 0 |
+
+No matches were lost in either config. The stitched, two-in-flight judge in the v4 plan is worth about +10 on
+`realistic`. On `calibrated_base` (base Dream-1's real unplug rate), the hybrid plan beats the v4 plan by about 20
+points.
+
+`hybrid_v4.yaml` needs `--skip cable_extra` in a match. Without it, the cable 3 and 4 stages take about 90 s, and
+the same 8 scenarios score 33.5 instead of 52.0.
+
+## Not solved by the harness
+
+- **Stuck cable / never unplugs:** 0–10 points in every config. Base Dream-1 unplugs about 1 try in 6
+  (TELEOP_PLAN). The sim's default of 0.8 per try is too optimistic, so treat the `calibrated_*` rows as the
+  realistic ones. A fine-tune for the unplug is worth more than any harness change.
+- **`reach_across`:** the robot touches a later-stage object early and gets a DQ in every config (4 of 5 seeds).
+  The guard sees it only after it happens.
+- **Judge latency:** with Haiku at 6.5–13 s a call, even two calls in flight rarely reach the ball stage. Balls
+  showed up only at 4–6 s a call.
+
+===== origin/final-harness:README.md =====
+# Hill Climb harness
+
+A supervisor that runs Dream-1 through a long-horizon task as a sequence of stages. For each stage it
+gives the model a prompt, watches the cameras, decides whether the stage worked, and recovers (re-prompt,
+home and retry, skip, or abort) when it did not. Every decision goes to `runs/<timestamp>/events.jsonl`
+with the camera frames it looked at.
+
+Python 3.12+, stdlib + PyYAML only. The design contract is `DESIGN.md`.
+
+## Safety model
+
+- **It never touches a motor.** It has no robot driver, no joint commands, no camera drivers. It only
+  calls Dream's own station agent over HTTP on 127.0.0.1 (`/status`, `/start`, `/stop`, `/home`, `/reset`,
+  `/prompt`) and reads frames from the debug view. Every speed cap, clamp, gripper force cap and home move
+  stays in Dream's control loop.
+- **Preflight refuses** to start if the station is not idle, an arm is dead, or a camera is stale (> 2 s).
+- **Fails safe**: an arm dying, the station entering `error`, the time budget, Ctrl+C, or `s` + Enter all
+  send `POST /stop` (the arms hold where they are). It never homes at the end; you do that.
+- `--dry-run` sends no POST at all; `--live` makes you type `yes` after the safety lines.
+- The physical e-stop is still the real safety. Keep your hand on it.
+
+## Run it (on the station)
+
+```bash
+source ~/dream-env/bin/activate
+dreamcli robot up --view-port 8093            # Metal fine-tune too; a YAM fine-tune: dreamcli robot up joint ...
+
+python -m harness plans/example_hill_climb.yaml --dry-run    # reads status/frames, prints what it would POST
+python -m harness plans/example_hill_climb.yaml --live       # hand on the e-stop, people clear; type yes
+
+dreamcli robot down                                          # at the end
+```
+
+Keep the `dreamcli robot up` terminal running; run the harness in a second terminal (also with the
+`dream-env` activated). Options: `--station URL` (default `http://127.0.0.1:8091`), `--view URL`
+(default `http://127.0.0.1:8093`), `--runs-dir DIR`, `--verifier manual|claude|time` (override every stage).
+
+While running, type `y` / `n` + Enter to answer a manual verifier, `s` + Enter to stop.
+
+Offline practice, no station needed: `python -m harness plans/example_hill_climb.yaml --mock
+[--scenario happy|arm_dies|start_error|slow_start|camera_stale]` (uses `fake_station.py`). Manual stages
+wait for your keypresses; add `--verifier time` to let it run unattended.
+
+## Test in simulation
+
+`sim_station.py` is a stand-in for the station agent that drives Dream's own MuJoCo YAM simulator
+(`dream_examples/yam_mujoco`), with the same HTTP routes on 8091 and the same debug view on 8093. The harness
+cannot tell the difference, so you can test a plan end to end, with the real Dream-1 model, before the robot.
+It uses Dream's own control loop (camera windows, `get_action`, `validate_chunk`, 20 Hz stepping), so nothing
+physical is involved and `--live` is safe to confirm.
+
+On a laptop with the `dreamlabs` library installed and your Dream API key saved (`~/.dreamlabs/credentials`,
+from the Getting started page):
+
+```bash
+# terminal 1: the simulated station (real Dream-1, real time)
+python sim_station.py --policy dream [--checkpoint dream-1-ft:...]
+
+# terminal 2: the harness against it
+python -m harness plans/sim_fruit_bowl.yaml --live --station http://127.0.0.1:8091 --view http://127.0.0.1:8093
+```
+
+`plans/sim_fruit_bowl.yaml` has three stages for objects in the sim scene (apple, orange, banana, a bowl and a
+blue plate). The verifier is `manual`: watch the saved frames in `runs/<timestamp>/` or the `/trip/<n>` frames
+on 8093, or run with `--verifier time` to let it run unattended. If Dream's example is not under
+site-packages, add `--example-dir PATH/TO/dream_examples/yam_mujoco`. `--no-realtime` runs the sim as fast as it
+renders.
+
+Offline, no key and no network: `python sim_station.py --policy scripted` returns small sinusoidal joint chunks
+of the right shape, so the harness, the state machine and the frames can be tested anywhere that has
+`pip install mujoco pillow numpy`. On a headless Linux box set `MUJOCO_GL=egl` (needs a GPU) or
+`MUJOCO_GL=osmesa` (software; `apt install libosmesa6`), which is the automatic default there. Software
+rendering is slow (about 5 s per chunk), so use long stage timeouts or `--verifier time`.
+`pytest tests/test_sim_station.py` covers the scripted mode and skips itself without mujoco.
+
+Watching it live: the view port serves `/live` (the three policy cameras, a ground-truth top-down map, the
+referee on `--scene hill_climb`, station state and the last policy round trips; `--open` opens it), and
+`--viewer` opens MuJoCo's own 3D window with a status overlay (macOS: start it with `mjpython`, not `python`).
+`python experiments/live_stress.py -s SCENARIO --speed 10` plays an offline stress match in the browser at 10x
+(table, stages, harness decisions, live score), and `experiments/sweep_variants.py` A/Bs plan and harness
+variants over every stress scenario at a given monitor latency (`--latency 6.5-13` is what Haiku 5.5 measured).
+
+## Match plan and the fine-tune
+
+`plans/hill_climb_v4.yaml` is the match plan for rubric v4. Its prompts are the six task texts in
+`TELEOP_PLAN.md`, the texts the fine-tune is recorded with. Check that a plan's prompts all have demos:
+
+```bash
+python -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/unplug-v1 ~/hackathon_data/relay-v1
+```
+
+It also has a black-ball `guard:`. On every ball check the monitor answers "is a gripper holding a black 8-ball?",
+and a yes stops the run at once, with the ball still held (HARNESS_GUIDE.md section 6d).
+
+## Writing a plan
+
+```yaml
+task: "clear the table into the bin"      # for logs
+checkpoint: null                           # dream-1-ft:... or null for base Dream-1
+time_budget_s: 900                         # whole run
+check_every_s: 3.0                         # how often a verifier is asked
+verifier: manual                           # default: manual | claude | time
+cameras_for_check: [scene]                 # optional: roles a verifier sees (substring match), default all
+stages:
+  - name: pick_red                         # unique
+    prompt: "pick up the red cube"         # one line, <= 512 chars; sent to the model as-is
+    success: "Is the red cube held in a gripper, off the table?"   # yes/no question for the verifier
+    timeout_s: 60                          # attempt fails after this
+    max_attempts: 3
+    min_run_s: 4                           # no verifier call before this
+    verifier: manual                       # optional per-stage override
+    recovery:                              # prompts tried in order on attempt 2, 3, ...
+      - "open both grippers and move the arms up"
+    on_fail: home_and_retry                # retry_in_place (default) | home_and_retry | skip | abort
+```
+
+Stages run back to back; between stages the harness changes the prompt live (`/prompt`) with no stop.
+`retry_in_place` runs the recovery prompt for `min(timeout_s/2, 20)` s and then the stage prompt again;
+`home_and_retry` does stop, home, start. Out of attempts: `skip` moves on, anything else fails the run.
+Bad plans are rejected with the stage and field named.
+
+## Verifiers
+
+- `manual` (default): you watch the robot; `y` = stage done, `n` = attempt failed now.
+- `time`: for stages with no check; done after 90% of `timeout_s`.
+- `claude` (optional): sends the camera frames and the stage question to the Anthropic API
+  (`claude-haiku-5-5` by default) and needs `ANTHROPIC_API_KEY` in the environment. The key is only sent to
+  api.anthropic.com and is never logged or printed. A stage counts as done only for `done: true` with
+  confidence >= 0.7. **Using an external model as a judge may not be allowed by the event rules. Check with
+  the organizers before using it.** Use `manual` if unsure.
+
+- `claude+manual`: Claude judges every check, and your `y` / `n` overrules it. Run with
+  `--verifier claude+manual`. Good for practice runs: you watch Claude's calls in `events.jsonl` and correct them.
+
+No API key? `--claude-backend subscription` (or `HARNESS_CLAUDE_BACKEND=subscription`) sends the same request
+(images, prompt, model, effort) through the Claude Code CLI, `claude -p`, on the Claude subscription it is logged
+in to (`claude`, then `/login`): no tools, no MCP, no saved session, `ANTHROPIC_API_KEY` removed from its
+environment. `python tools/check_monitor.py --backend subscription --sim` checks the real monitor on the station
+photo and MuJoCo renders with known answers (7 Nov, Haiku 5.5: 12/12 right, guard yes on a held 8-ball; latency
+median 8.4 s, max 12.7 s per call, about 2 s more than the API would take).
+
+## Logs
+
+`runs/<UTC timestamp>/` holds `events.jsonl` (one JSON event per line), `<seq>_<tag>_<role>.jpg` frames the
+verifier saw, and `summary.json`.
+
+===== origin/final-harness:TELEOP_PLAN.md =====
+# Teleop recording plan: Sat 7 Nov, until the fine-tune is queued
+
+Station: `ssh pah@nuck-5` (Tailscale; works off the venue LAN too). On the LAN it is also `pah@10.103.0.143`.
+
+## Decision (17:50): one fine-tune on UNPLUG and PUT-DOWN only
+
+- **Unplug is everything.** It is Stage 1's pass bar: without it the run scores 0, and base Dream-1 unplugs about
+  1 try in 6. Every demo minute goes here.
+- **Plug-in: in the fine-tune, not in the match plan (yet).** Base Dream-1 never seated a plug. The 18:45-18:52
+  takes have 12 checked insertions (below); the match plan gets a plug-in stage back only if Sunday's runs seat one.
+- **Stacking and balls stay on base Dream-1's own skill** (it stacks 2-4 cubes zero-shot). The fine-tune mixes in
+  Dream's data by default (`base_share` 0.5), which keeps general skill. Sunday morning, test the fine-tune on a
+  stack; if it got worse than base, run those stages on base Dream-1 (the harness can switch checkpoint per run).
+- **One job, queued when recording stops** (not at 20:00: takes are still coming in). 1000 steps (the default,
+  ~$200), constant learning rate. Training takes 7-8 h, plus any queue, plus up to 1 h of warm-up on the first call:
+  queue no later than about 10 h before the first match.
+
+## The two task texts (set one in the dashboard before EVERY take)
+
+| # | Task text | Take | Have | Want by 19:45 |
+| --- | --- | --- | --- | --- |
+| T1 | `unplug the USB cable at the end of the hub nearest the right arm` | Enter with the gripper open ~5 cm from the end plug. Squeeze fully, pause, pull straight up until clear. Save while holding it up. 5-10 s | 70 (20:00) | done |
+| T2 | `put the held cable down on the table away from the hub` | Starts holding the cable. Carry it to the same spot each time, open, lift. Save. 3-6 s | 52 (20:00) | done |
+
+Chain them: T1, save, switch the text to T2, Enter, put down, save. Then plug the cable back in by hand
+(arms still, between takes) and repeat. About 1 in 3 T1 takes with the end port already empty (the harness's extra
+unplug), and about 1 in 5 starting from home instead of 5 cm away.
+
+Other texts the harness sends (`put a block on top of the stack`, `put a golf ball in the bin`,
+`open both grippers and move the arms up`) are left to base skill: `harness.tasks` will list them as MISSING, which
+is expected.
+
+## Rules for every take
+
+- **Press Enter before touching anything,** gripper open, so the take starts before the grasp.
+- **Under 30 s, one sub-task, exact text.** Discard (`d` / B) any take that stalls, fails or fumbles.
+- **Full squeeze, straight pull.** The good takes pull the trigger fully for most of the grasp.
+- **No hands in the overhead camera,** nobody else at the table during a take, left arm (leader) held low.
+- **Leader/follower recording:** record into its own folder, then freeze the left wrist camera (below).
+
+## Splitting a long take into task episodes
+
+A take that does several sub-tasks in a row can be cut into one episode per sub-task, each under its exact text,
+into a NEW dataset (the source is never touched). Find the cut times from the video, write a spec like
+`tools/splits/plug-unplug-v1_ep3.json`, then run it on the laptop (it needs pyarrow, numpy and ffmpeg; the station
+has no ffmpeg):
+
+```bash
+rsync -a pah@nuck-5:hackathon_data/<source> ~/hackathon_data/          # the spec's paths start at ~/hackathon_data
+python tools/split_episodes.py tools/splits/<spec>.json
+rsync -a ~/hackathon_data/<out> pah@nuck-5:hackathon_data/
+# on the station: ~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/<out> --arm metal   (runs Dream's checks)
+```
+
+**Automatic cut times:** `tools/auto_split.py` proposes the spec from the right gripper's grasps (a grasp at the
+hub that lifts and releases away from it = unplug + put down; a grasp away from it that releases at the hub =
+plug-in), and writes one review image per episode (right wrist at each segment's start and end, overhead at its
+end). Look at every row, delete bad segments from the spec, then run `split_episodes.py`:
+
+```bash
+python tools/auto_split.py ~/hackathon_data/<dataset> --out ~/hackathon_data/<dataset>-split --spec spec.json --sheets sheets/
+```
+
+Done so far (21:30): every take in `plug-unplug-v1` (42 episodes, 13:20-21:07) and `unplug-v1` checked. Each folder
+has `-eef` built and passes Dream's checks; specs in `tools/splits/`. Every kept segment was checked on its frames.
+
+| Folder | From | T1 unplug | T2 put down | T3 plug-in | T7 cylinder | other |
+| --- | --- | --- | --- | --- | --- | --- |
+| `quest-split-v4` | Quest takes 12-22 (18:12-18:31); replaces v3 (one put-down where the left arm moved removed) | 40 | 34 | | | |
+| `leader-split-v4-frozen` | leader takes 3, 9, 25-35 (17:15-19:46), left wrist frozen | 14 | 8 | 3 | 6 | 1 × T5 ball |
+| `plugin-split-v1-frozen` | leader takes 25-26 (18:45-18:52), left wrist frozen | | | 12 | | |
+| `leader-split-v1-frozen` | leader takes 0-2 (17:09-17:16), left wrist frozen | 8 | 6 | | | |
+| `unplug-split-v1` | the 60 s Quest take (16:44) | 3 | 3 | | | |
+| `leader-split-v2-frozen` | leader takes 6 and 9 (17:30-17:53), left wrist frozen | 3 | | | | |
+| `unplug-v1-split` | the good parts of `unplug-v1` (13:20-13:47) | 2 | 1 | | | |
+| `stack-split-v1-frozen` | leader-right takes 10-11, right wrist frozen | | | | 2 | 2 × T4 block |
+| `leftarm-split-v5-frozen` | leader-right takes 36-38, 41 (19:51-21:07, left arm works), right wrist frozen | | | | 3 | 11 × T5 ball, 2 × T4 block |
+| **total** | | **70** | **52** | **15** | **11** | 12 × T5, 4 × T4 |
+
+How each was checked: unplug ends at the top of the pull, with the plug gripped and held up (jaw stops at 2-7%;
+the cut follows the lift until the hand stops rising or starts moving sideways, +0.3 s; an earlier cut at
++6 cm ended most unplugs mid-pull, so all 67 auto-cut unplugs were re-cut at 20:15);
+put-down ends open with the cable on the table at least 8 cm from the ports; plug-in ends with the cable still in a
+USB port after release (6 of the 15 are "insertion only": those takes pulled a plug out and pushed it back in one
+grasp, so only the insertion half is kept); cylinder (T7 `stand the cylinder upright in the hole of the top block`)
+ends with the cylinder standing in the block's hole.
+
+Plug-in and cylinders are in the fine-tune but not in the match plan yet: add a stage on Sunday if the fine-tuned
+model does them in practice runs. `quest-split-v3` is superseded by v4: do not upload both.
+
+Not used: raw `unplug-v1` (its other cuts end with an empty gripper); `plug-unplug-v1` 4, 5, 7, 8, 24 (start
+already holding, or never release), 39-40 (right-arm cable takes at 20:56-21:02: the cables end draped over the
+strip, so no unplug or insertion can be confirmed), 23 (59 s, nothing moves), 31, 33, 34 (no complete grasp-and-release), and
+every cycle that ended unclear on the frames: cables moved around the table, re-seats, blocks moved without
+stacking, a cylinder take of 54 s (29), and one ball take with a person's hand holding a cup in view (35). The raw
+`plug-unplug-v1` (placeholder text) never goes up as it is. `~/hackathon_backup/plug-unplug-v1-1714` is a 17:14
+copy of its first 5 takes, already covered.
+Better still, record each sub-task as its own episode from the start.
+
+## Leader/follower episodes: freeze the left wrist camera
+
+With `follower_code/metal/leader_collect.py` the left arm is the leader, moved by hand, so its wrist camera swings
+around and films the operator (measured on the 17:09 takes: the view wanders 59-63 on a 0-255 scale, against 6 for
+a parked camera). In a match the left arm is parked and that camera is still. Before `add_eef`, write a copy where
+that camera shows the parked view (laptop; the station has no ffmpeg):
+
+```bash
+rsync -a pah@nuck-5:hackathon_data/<leader-dataset> ~/hackathon_data/
+python tools/freeze_camera.py ~/hackathon_data/<leader-dataset> --ref ~/hackathon_data/<quest-dataset>:EP:0 --list
+python tools/freeze_camera.py ~/hackathon_data/<leader-dataset> ~/hackathon_data/<leader-dataset>-frozen \
+    --episodes all --ref ~/hackathon_data/<quest-dataset>:EP:0
+rsync -a ~/hackathon_data/<leader-dataset>-frozen pah@nuck-5:hackathon_data/
+# station: ~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/<leader-dataset>-frozen --arm metal
+```
+
+The reference must be a parked-left-arm frame from the CURRENT table layout. Keep leader and Quest episodes in
+separate folders, so `--episodes all` is right. Dream's checks pass on a frozen copy (tested 17:15).
+
+## Clean-up done
+
+17:00: 8 empty or no-grasp episodes dropped (unplug-v1 1, 2, 5, 7, 8, 9; plug-unplug-v1 1, 2). `unplug-v1` keeps 4
+(30, 15, 46 and 96 s). Long multi-task takes stay in `plug-unplug-v1` and never go up as they are: only their
+reviewed splits do.
+
+## Queue the fine-tune (when recording stops, arms not needed)
+
+What goes in: the four reviewed folders above, and whatever is recorded from now on (leader takes: split or
+recorded short with the exact text, then left wrist frozen). Each as its `-eef` copy:
+
+```bash
+cd ~/physical-ai-hacks
+# add_eef on each new folder (the frozen copy for leader takes); the four reviewed ones already have -eef
+mkdir -p ~/hackathon_data/ft-v1 && cp -r ~/hackathon_data/{quest-split-v4,leader-split-v4-frozen,plugin-split-v1-frozen,leader-split-v1-frozen,unplug-split-v1,leader-split-v2-frozen,unplug-v1-split,stack-split-v1-frozen,leftarm-split-v5-frozen}-eef ~/hackathon_data/ft-v1/
+(cd ~/hill-climb-harness && python3 -m harness.tasks plans/hill_climb_v4.yaml ~/hackathon_data/ft-v1)   # T1, T2 counts
+~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1 --check
+# PAID, about $200 (1000 steps): only with the team's yes
+tmux new -A -s finetune
+~/dream-env/bin/python tools/finetune.py ~/hackathon_data/ft-v1 --arm metal --name unplug-v1 --suffix unplug-v1
+```
+
+The platform reads each subfolder of `ft-v1` as one session. Keep the default constant learning rate (not cosine),
+which keeps `resume_from` possible. Training takes 7-8 h, so the model is ready around 04:00, and its first call can
+take up to 1 h to warm up.
+
+## Sunday morning
+
+1. Warm the model up early: `dreamcli robot run --checkpoint dream-1-ft:<account>-unplug-v1 --task "unplug the USB
+   cable at the end of the hub nearest the right arm" --dry-run` (the first call may wait up to an hour).
+2. Start the agent with `PYTHONPATH=~/hill-climb-harness/station_addons dreamcli robot up --view --view-port 8093`:
+   plain `up`, not `up joint` (a Metal fine-tune answers tool poses, which dreamcli solves to joints).
+3. Compare fine-tune and base on the same plan, `--verifier monitor+manual`, a few runs each: unplug success first,
+   then stacking. Put the winner's id in `plans/hill_climb_v4.yaml` (`checkpoint:`). If the fine-tune unplugs better
+   but stacks worse, splitting the checkpoint by stage is a harness change to make then.
+4. Match: `--live` with `monitor` only.
+
+===== origin/final-harness:docs/DECISIONS.md =====
+# Operator decisions (Darsh, 8 Nov 2026)
+
+Handwritten notes: [decisions.pdf](decisions.pdf). Below is a typed transcription, with Darsh's answers to the
+unclear spots in brackets. These notes are for the **real table**: coloured golf balls (green, yellow, orange) are
+legal and the white ball is illegal. In the sim the colours differ (white golf balls legal, black 8-balls illegal),
+and the sim plans translate them.
+
+## Blocks
+
+- Come down on the block from the top, normal to the table.
+- Invoke the other arm as a watcher first, then do the cylinders. [It reads "watcher", not "doesn't work".]
+- Place the square blocks (the ones with a round hole) with the hole facing sideways (circle plane normal to the
+  table).
+- Place each square block directly on top of the previous one, minimising overhang.
+- On the last block, turn the hole to face up (circle parallel to the table). Then put a cylinder in the hole,
+  minimising the cylinder's angle.
+- Pick the cylinder up normal to the table, then turn it lengthwise vertical and place it through the hole, at 90°
+  to the table (vertical).
+- Then stack the next cylinder on top, minimising vibration so the tower doesn't topple.
+
+## Golf balls
+
+- Push the white balls off the table.
+- If other objects are in the way, avoid the white balls. Pick up the coloured balls and drop them into the basket.
+
+## Cables
+
+- Use the other arm to watch the cables from a different angle.
+- Come in normal to the cables and grip at max strength.
+- Orient the cables vertical, then pull.
+- Grip 2–3 cables at a time.
+- Drop or lay the cables flat near the power hub (the big black power strip).
+
+## Power outlet
+
+- Pick up a USB-C cable connector by the black part, normal to the table, at peak strength.
+- Come down to the USB-C port (the first port from the left side), normal to the port.
+- Plug it in by bringing the arm vertically down.
+- Confirm the cable is plugged in, then open the gripper and disengage.
+
+## Error detection
+
+- Detect problems.
+
+## Decisions
+
+- If a task fails more than twice, move on.
+- Allow up to three tries if the task is worth a lot of points.
+
+===== origin/final-harness:lessons/operator.md =====
+- For cable stages, unplug the cables one at a time, always the rightmost plug still in the strip, and keep going through all of them.  (operator: "good job - it tried to unplug 3rd cable but corrected and unplugged first one instead. is a little slow at places tho and not sure why.  can we unplug all the cables one by one now?", run 20261108T051204Z)

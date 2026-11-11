@@ -1,0 +1,40 @@
+71:tower_prompts:
+72:  cube: "put a block on top of the stack"   # the recorded text, byte for byte
+73:  stick: "stand a stick upright on top of the stack"
+78:    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+80:    success: "Compared with the stage-start overhead image, is at least one cable that was plugged into the hub at the start now fully out of its port (lying on the table or held in a gripper)?"
+89:      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+94:    prompt: "put the held cable down on the table away from the hub"
+95:    success: "Are both grippers empty, with the unplugged cable lying on the table away from the hub?"
+110:    prompt: "open both grippers and move the arms up"
+111:    success: "Are both grippers open and empty, with no cable held?"
+120:    prompt: "unplug the USB cable at the end of the hub nearest the right arm"
+121:    success: "Compared with the stage-start overhead image, is one more cable now fully out of the hub than at the start of this stage?"
+128:    prompt: "put the held cable down on the table away from the hub"
+129:    success: "Are both grippers empty, with no cable held?"
+136:    prompt: "open both grippers and move the arms up"
+137:    success: "Are both grippers empty and raised, clear of the hub, the cables and the blocks?"
+144:  - name: stack_2
+145:    prompt: "put a block on top of the stack"
+146:    success: "Is one block resting on top of another block, standing on its own, with no gripper touching either?"
+156:      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+160:  - name: stack_3
+161:    prompt: "put a block on top of the stack"
+162:    success: "Is the tower three blocks tall, standing on its own, with no gripper touching it?"
+172:      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+176:  - name: tower_pass
+177:    prompt: "put a block on top of the stack"
+178:    success: "Is the tower more than 4 inches (10 cm) tall, standing on its own, with both grippers open and clear of it?"
+189:      - {name: let_go_and_lift, kind: reset, prompt: "open both grippers and move the arms up",
+196:    prompt: "put a block on top of the stack"
+197:    success: "Does the tower have one more block on top than in the first image of this stage, standing on its own with no gripper touching it?"
+211:    prompt: "put a golf ball in the bin"
+212:    success: "Is at least 1 golf ball resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+216:    confirm: 1                # every ball stage sends the same prompt: a false "done" only renames the stage
+220:    success: "Are at least 2 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+223:    success: "Are at least 3 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+226:    success: "Are at least 4 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+229:    success: "Are at least 5 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+232:    success: "Are at least 6 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+235:    success: "Are at least 7 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"
+238:    success: "Are at least 8 golf balls resting inside the bin, with no white or black ball in the bin and the tower still standing?"

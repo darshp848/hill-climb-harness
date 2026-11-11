@@ -1,0 +1,31 @@
+You are auditing a robotics hackathon "hill climb" harness for logical fallacies and bugs. Demos start at 15:00 PT today, so prioritise issues that could lose points or crash a live run.
+
+LAYOUT (all under the current directory, fresh throwaway clones):
+- harness/            = github.com/darshp848/hill-climb-harness checked out at main (b1f6e4b). All 14 remote branches are available as origin/<name> (git branch -r).
+- harness-cloud-sims/ = worktree of origin/cloud-sims (c6a3255). main and cloud-sims are the two candidate match branches; both now default to the fine-tune model dream-1-ft:bb4b9e5f-relay-final.
+- task_simulation/    = github.com/darshp848/task_simulation (the MuJoCo sim of the station/tasks, with results/).
+- out/                = the ONLY place you may write files.
+
+RULES:
+- Do NOT modify, commit, checkout-over, or push anything in harness/, harness-cloud-sims/ or task_simulation/. Do not run git push/commit/reset/checkout. Use git show/diff/log/grep to read other branches.
+- Never call any real robot, Dream Labs API, or network service. Do not read or print credential files (~/.dreamlabs, .env, keys). If you see a secret in the code, report its file/line but redact the value.
+- You may run the test suites (pytest) if they work offline; save raw output to out/.
+
+CONTEXT TO READ FIRST: harness/docs/LAST_NIGHT_2026-11-08.md, and from origin/docs/how-it-works: docs/HOW_THE_HARNESS_WORKS.md (also docs/Hill_Climb_Harness_Explained.pdf). Also the README/TELEOP_PLAN/strategy docs on each branch, and task_simulation's README.
+
+WHAT TO FIND (be skeptical; verify each claim against code with file:line):
+1. Wrong assumptions: about the station, the robot, the tasks, the scoring rules, the model API, timing.
+2. Flawed retry / skip / move-on / guard / disqualification (DQ) logic: off-by-one counters, guards that never fire or fire wrongly, retries that can repeat an unsafe action, "fail twice move on" not actually doing that, start-pose guards, unsafe-instruction handling.
+3. Race conditions and async issues: hedged/parallel model calls, pacing, timeouts, cancellation, shared state, stale observations, clock use.
+4. Mis-specified stage success checks: checks that pass when the stage failed or fail when it succeeded, thresholds, coordinate frames, units.
+5. Sim-vs-station mismatches: assumptions in task_simulation or harness sim code that don't match the real station (e.g. which balls are legal, tower colour order, table geometry, start pose, latencies).
+6. Config/default drift between main and cloud-sims (model id, checkpoint, flags like confirm_gap_s), and anything on the other 12 branches that fixed a bug which main/cloud-sims still has.
+7. Test-suite problems: failing tests, tests that can't fail, tests that skip silently.
+
+Focus depth on main and cloud-sims; for the other 12 branches, diff them against main/cloud-sims and note anything relevant (unmerged fixes, regressions).
+
+OUTPUT (write these files):
+- out/AUDIT_FINDINGS.md: summary table first (id, severity Critical/High/Medium/Low, branch(es), file:line, one-line claim), then per finding: evidence (quoted code), why it is wrong, concrete failure scenario at the demo, suggested fix, and your confidence. Order by severity. Then a section "Branch notes" covering all 14 branches, and a section "Things I checked and found OK".
+- out/findings.json: the same findings as a JSON array of objects {id, severity, branches, file, line, title, failure_scenario, fix, confidence}.
+- out/raw/: raw evidence (test output, greps, diffs between branches) as text files.
+Your final message should be a short summary of the top 10 findings.

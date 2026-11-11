@@ -1,0 +1,1449 @@
+diff --git a/HARNESS_GUIDE.md b/HARNESS_GUIDE.md
+index be81333..7780363 100644
+--- a/HARNESS_GUIDE.md
++++ b/HARNESS_GUIDE.md
+@@ -39,6 +39,75 @@ pip install pyyaml pytest             # pytest only for the tests
+ python -m pytest -q                   # offline, against fake_station.py
+ ```
+ 
++### 2b. The match laptop: macOS on Apple Silicon (MacBook Air)
++
++The match harness runs on an M-series MacBook Air. Nothing on the match path is Linux- or Windows-only (audited
++8 Nov: the only exceptions are `harness/can_torque.py listen`, which needs Linux SocketCAN and is an offline tool,
++and `sim_station.py`, whose `MUJOCO_GL=egl/osmesa` default applies only on Linux).
++
++**Python.** 3.12 or 3.13, as a native arm64 build: the python.org macOS installer (universal2), Homebrew
++(`brew install python@3.12`) or `uv python install 3.12`. Not an x86_64 Python under Rosetta, which is about 2x slower
++and pulls x86 wheels. Check:
++
++```bash
++python3.12 -c "import platform, sys; print(platform.machine(), sys.version)"   # must print arm64
++```
++
++**venv and wheels.** Everything the match needs has macOS arm64 wheels; `--only-binary` makes pip fail instead of
++silently compiling from source:
++
++```bash
++cd hill-climb-harness
++python3.12 -m venv .venv && source .venv/bin/activate
++pip install --upgrade pip
++pip install --only-binary=:all: -r requirements-match.txt     # pyyaml numpy pillow scipy pytest
++pip install --only-binary=:all: opencv-python-headless       # only for --cable-ends
++pip install --only-binary=:all: livekit==1.2.1                # only for harness.livekit_observer
++python -m pytest -q                                           # offline; all should pass on macOS
++python -c "import numpy; numpy.show_config()" | grep -i -A2 blas   # numpy >= 2 on macOS 14+: Accelerate
++```
++
++scipy is optional for the harness but the detector's hole filling uses it; without scipy the detector falls back
++to a pure-Python labeller that is much slower. Install it on the Mac.
++
++**Permissions.** The harness never opens a local camera: every frame comes from the station over HTTP (the SSH
++tunnel, `/frame/<camera>.jpg`, LiveKit), so macOS will not ask for Camera access. What it may ask for:
++- *Local Network* (macOS 15+): the first `ssh` to the station's LAN address, or a direct `--station http://<ip>`,
++  pops "Allow Terminal to find devices on your local network". Allow it. If it was denied, connections fail with
++  "No route to host": System Settings > Privacy & Security > Local Network > turn on Terminal (or iTerm / VS Code).
++- *Camera*: only if you record table photos with the Mac's own camera or a USB camera (System Settings > Privacy &
++  Security > Camera > your terminal app).
++
++**Keep it fast and awake on the day.**
++- On the charger, Low Power Mode off (System Settings > Battery), lid open (a fanless Air sheds heat through the
++  case; closed-lid on a dock runs hotter).
++- `caffeinate -dimsu` in a spare terminal for the whole match, so neither the Mac nor its Wi-Fi sleeps.
++- Close browsers with video, Docker, and indexing-heavy apps; Activity Monitor > CPU should show the harness alone.
++- Keep the harness terminal in front: macOS gives background apps lower QoS and moves their threads to the
++  efficiency cores.
++- `python -m harness` caps numpy/BLAS/OpenMP to one thread each (`harness/perf.py`). Its arrays are small, so a
++  thread pool only adds wake-ups and heat. Leave `OMP_NUM_THREADS` etc. unset unless you are measuring.
++
++**Measure it on the Mac before the match** (offline, no API calls, no station):
++
++```bash
++python tools/mac_bench.py                                    # component table, ~30 s
++python tools/mac_bench.py --sustained 300 --label "Air, charger, lid open"     # + 5 min of match load
++python tools/mac_bench.py --sustained 300 --sustained-mode max --threads 4     # worst-case heat, 4 threads
++```
++
++It prints p50/p95 per component and, in sustained mode, a row per 30 s with `pmset -g therm` (CPU_Speed_Limit below
++100 means the Air is throttling). Pass: live guard p95 well under 100 ms (its 10 Hz period), fast-loop tick p95 under
++50 ms, no growth in p95 across the 5 minutes, and `guards/s` near 50-60 in match mode (10 Hz + 20 Hz on two wrists).
++A much lower `guards/s` with low CPU means macOS is stretching the loops' sleeps (timer coalescing for a background
++or low-priority process): on GitHub's macos-15 runner it was ~28/s. Keep the terminal in front and re-run.
++Results land in `bench_results/`; commit the JSON.
++
++Reference, GitHub `macos-15` runner (Apple Silicon VM, has a fan, shared), 8 Nov: guard 5.7 ms p50 (the
++pre-optimisation detector: 34 ms), fast-loop tick 12.5 ms, monitor request build 36 ms
++(`bench_results/mac_bench_gha_macos15.json`). `.github/workflows/mac-bench.yml` runs the tests and the bench there on
++every push to `mac-arm64` / `final-harness` that touches the harness.
++
+ ## 3. Where to run it
+ 
+ **Option A: on the station.** This needs two terminals, both with `source ~/dream-env/bin/activate`.
+diff --git a/docs/LOCAL_DECISIONS_PERF.md b/docs/LOCAL_DECISIONS_PERF.md
+new file mode 100644
+index 0000000..1beef63
+--- /dev/null
++++ b/docs/LOCAL_DECISIONS_PERF.md
+@@ -0,0 +1,110 @@
++# Making the local decision code fast (notes for whoever sets up the match laptop)
++
++The match runs on an Apple Silicon MacBook Air: 4 performance + 4 efficiency cores, no fan. Everything below runs on
++that laptop, every frame or every tick, with no API call. The remote calls (Dream-1, the Claude/OpenRouter monitor)
++are network-bound and not covered here.
++
++## What runs locally, and how often
++
++| Piece | File | Rate in a match | Work per call |
++|---|---|---|---|
++| Live guard | `harness/live_guard.py` | 10 Hz x 2 wrist cameras (`--live-guard`) | `TableDetector.guard` on each new wrist JPEG |
++| Fast loop (if `fast:` in the plan; no shipped plan has it) | `harness/fastloop.py` | 20 Hz x 2 wrists | the same guard + observer + state-space step |
++| Per-poll guard | `runner.fast_guard` | every `check_every_s` (3 s in v4) | the same guard on the poll's frames |
++| Monitor request | `MonitorVerifier._build` | each check (~every 3-6 s, `parallel: 2`) | boxes on 3 frames (`annotate_frames`), stitched history grid, base64, stage text |
++| Decision model | `harness/statespace.py` | each fast-loop tick | `Observer.fast` + `StateSpace.step`: tens of microseconds |
++| Shadow decider | `harness/decide.py` | each runner look | pure Python on a few numbers; negligible |
++| Prompt layers | `harness/promptgen.py` | each prompt | string joins; ~2 us |
++
++So the hot code is the colour detector (`harness/detect.py`), first in the guard and second in the monitor's
++annotation. The decision maths is not the bottleneck: keep it simple and exact.
++
++## Measured (tools/mac_bench.py, recorded frames, no network)
++
++Windows 11 x86-64 dev laptop (Darsh's, on AC), 8 Nov, same frames, before (f756095) -> after (this branch):
++`bench_results/mac_bench_LAPTOP-3VMSCT0C_{before,after}.json`. No Mac was available: run the bench on the Air
++(HARNESS_GUIDE.md section 2b) and add its numbers here.
++
++| Component | before p50 / p95 ms | after p50 / p95 ms | p50 speedup |
++|---|---|---|---|
++| guard, one wrist frame | 19.2 / 21.7 | 5.3 / 7.4 | 3.6x |
++| fast-loop tick (2 new frames) | 38.3 / 42.5 | 11.2 / 13.9 | 3.4x |
++| monitor annotate (3 frames) | 137 / 139 | 27.0 / 29.2 | 5.1x |
++| whole monitor request build | 152 / 158 | 32.9 / 36.1 | 4.6x |
++| stitch, one check | 23.3 / 24.5 | 6.2 / 6.8 | 3.8x |
++| state-space step (K = 1) | 0.022 / 0.025 | 0.020 / 0.022 | same (K = 1000: 246 -> 46 us) |
++| prompt composition | 0.002 | 0.002 | same |
++
++GitHub `macos-15` runner (Apple Silicon VM, shared, has a fan), same bench in CI
++(`bench_results/mac_bench_gha_macos15.json`): guard 34.1 -> 5.7 ms p50 (6.0x, both measured in the same run),
++fast-loop tick 12.5 ms, annotate 31.9 ms, monitor request build 35.7 ms, stitch 7.7 ms. Its sustained rows managed
++only ~28 guards/s of ~50-60 at low CPU: the VM stretches short sleeps (a timing test also saw 50 ms waits take ~100 ms).
++Check `guards/s` on the Air; if it is low there too, the loops' waits need a look before the match.
++
++5 minutes of match load (live guard 10 Hz + fast loop 20 Hz on both wrists + a monitor request every 3 s), per
++30 s window: guard p50 20.6 -> 5.0 ms, fast-loop tick p95 47 -> 13.7 ms (period 50 ms), overruns 1-12 -> 0,
++process CPU 107% -> 26% of one core. Flat across the 5 minutes on this laptop (it has a fan); the Air is the test
++that matters.
++
++## Rules for any further optimisation
++
++1. **Exact or not at all.** A guard verdict that changes is a behaviour change in a safety stop. Every change to
++   `detect.py` must keep `tests/test_guard_equivalence.py` green: it compares the guard verdict, every box and every
++   annotated JPEG with `tests/_detect_reference.py` (the detector the match was tuned with) on
++   `tests/data/guard_frames`. Run it on more frames with
++   `HARNESS_GUARD_FRAMES=<folder> python -m pytest tests/test_guard_equivalence.py`.
++   If you do want different behaviour (a smaller frame, a crop), that is a re-tune: change
++   `plans/table_colors.yaml` or the reference on purpose, re-run the table photos, and say so in the commit.
++2. **Measure on the Mac, sustained.** A fanless Air is fast for 30 s and slower after a few minutes.
++   `python tools/mac_bench.py --sustained 300` shows p95 per 30 s window and `pmset -g therm`.
++3. **Vectorise and do less, don't add threads.** numpy and Pillow release the GIL in their C loops, but there are
++   only 4 performance cores and the guard, the fast loop, the monitor build and the HTTP threads already share them.
++   `harness/perf.py` caps BLAS/OpenMP to one thread; keep it that way.
++4. **Never touch what Dream-1 sees or is told.** The detector only reads frames; prompts stay byte for byte.
++
++## What was done (8 Nov, branch mac-arm64)
++
++All exact (equivalence test above, plus 201 more real and sim frames):
++
++- **Morphology without scipy's iterated loops.** `binary_closing(iterations=2)` is four whole-array shifts each
++  way (`_close2`); `binary_fill_holes` is one labelling of the background (`_fill_holes`). Both are checked against
++  scipy on random masks of every shape in `test_close_and_fill_are_scipys`.
++- **Crop before labelling.** Fill and label run on the box around the mask plus one pixel (`_crop`); a colour with
++  a handful of pixels costs microseconds instead of a full-frame label.
++- **No per-blob full-image scans.** The old loop did `np.nonzero(lab == i)` over the whole image for every blob; now
++  each blob is read inside its `find_objects` box, and a box too small to pass `min_frac` is skipped unread.
++- **The guard asks only its own question.** `TableDetector._held` runs only the colours that can trip it, skips
++  blobs too small to be held or centred outside `grip_roi` before the shape test, and stops at the first held ball.
++- **uint8 HSV planes.** No int16 copy; bounds every pixel passes (black's hue and saturation) build no array.
++- **Stitch tile cache.** The stage-start and history frames come back in every check; resized tiles are cached by
++  digest (32 tiles, ~8 MB), so a check decodes and resizes only its new frame.
++- **State-space thresholds built once.** `StateSpace.decide` rebuilt five arrays from Python lists every tick;
++  with K = 1000 weight sets (offline hill-climb sweeps) a step went from 246 us to 46 us, decisions identical.
++
++## What is left, best first
++
++1. **Share frames and verdicts between the live guard and the fast loop.** With both on, each has its own
++   `LiveFrames` and runs the detector on its own fetch of the same cameras, so the detector work doubles. One
++   frame source feeding both, plus a verdict memo keyed by the frame's SHA-1 (both loops already hash each frame),
++   halves it. Behaviour note: the fast loop would then see the guard's frames, not its own fetch 0-50 ms later.
++2. **Ask the station for 640 px frames in the live guard** (`/frame/<cam>.jpg?w=640`, as `FrameSource` already does).
++   Fewer bytes over Wi-Fi and a smaller decode. The pixels differ slightly from a draft-mode decode of the full
++   frame, so this is a re-tune: re-check `plans/table_colors.yaml` on real wrist frames first.
++3. **HSV conversion** (~2 ms of the ~5 ms guard on x86; decode ~1 ms, the rest is per-colour masks and labels). Pillow's RGB->HSV is a per-pixel float routine. A
++   256^3 lookup table built once from Pillow itself would be exact by construction (50 MB) but may not beat Pillow
++   on memory bandwidth; measure on the Air. Do not re-derive the HSV formula in numpy: rounding differs.
++4. **Do the guard only where a held ball can be.** A held ball's blob must be centred in `grip_roi`, but it can
++   extend outside it, so cropping the image before closing is not exact. Only as a re-tune.
++5. **Fast loop at 10 Hz instead of 20** when it is in shadow mode: it logs only, so half the rate halves its cost.
++   That is a plan setting (`fast.rate_hz`), not code.
++6. **State-space model.** Already microseconds a tick; `Observer._update` loops over a dict in Python, which is
++   fine at K = 1. For offline sweeps over many weight sets, batch over K (the `StateSpace` already is) rather than
++   over runs in Python.
++
++## How to check a change
++
++```bash
++python -m pytest -q tests/test_guard_equivalence.py tests/test_detect.py tests/test_statespace.py tests/test_fast_additions.py
++python tools/mac_bench.py --seconds 2                  # guard vs guard_ref is the before/after on the same box
++python tools/mac_bench.py --sustained 300              # on the Air: p95 must not climb window after window
++```
+diff --git a/harness/cli.py b/harness/cli.py
+index a7799fe..4b611de 100644
+--- a/harness/cli.py
++++ b/harness/cli.py
+@@ -14,6 +14,7 @@ from . import __version__
+ from .frames import FrameSource
+ from .log import RunLog
+ from .operator import Operator, load_lessons
++from .perf import cap_cv2, cap_threads
+ from .plan import load_plan
+ from .runner import Runner
+ from .station_client import StationClient, StationError
+@@ -89,6 +90,7 @@ def match_problems(args: argparse.Namespace, plan) -> list[str]:
+ 
+ 
+ def main(argv: list[str] | None = None) -> int:
++    cap_threads()   # before numpy / OpenCV load: one BLAS/OpenMP thread each (harness.perf)
+     args = _parser().parse_args(argv)
+     if args.match:
+         args.no_operator = True
+@@ -203,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
+             if args.cable_ends:
+                 from .cable_end import CableEndClassifier  # noqa: PLC0415
+                 det.cable_ends = CableEndClassifier(args.cable_ends)
++                cap_cv2()
+                 log.event("cable_ends", model=str(args.cable_ends))
+             runner.fast_guard = det.guard
+             for v in verifiers.values():
+diff --git a/harness/detect.py b/harness/detect.py
+index e6430af..80cb976 100644
+--- a/harness/detect.py
++++ b/harness/detect.py
+@@ -115,10 +115,12 @@ def _load(jpeg: bytes, min_w: int | None = None) -> Image.Image | None:
+         return None
+ 
+ 
+-def _hsv(im: Image.Image) -> np.ndarray:
++def _hsv(im: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++    """H, S, V planes (uint8, each contiguous) of the image at WORK_W wide."""
+     w, h = im.size
+-    small = im.resize((WORK_W, max(1, round(h * WORK_W / w))))
+-    return np.asarray(small.convert("HSV"), dtype=np.int16)
++    size = (WORK_W, max(1, round(h * WORK_W / w)))
++    small = im if im.size == size else im.resize(size)   # resize to the same size is only a copy
++    return tuple(np.asarray(c) for c in small.convert("HSV").split())  # type: ignore[return-value]
+ 
+ 
+ def _label(mask: np.ndarray) -> tuple[np.ndarray, int]:
+@@ -141,10 +143,89 @@ def _label(mask: np.ndarray) -> tuple[np.ndarray, int]:
+     return lab, n
+ 
+ 
+-def _in_range(hsv: np.ndarray, lo: tuple[int, int, int], hi: tuple[int, int, int]) -> np.ndarray:
+-    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+-    hue = (h >= lo[0]) & (h <= hi[0]) if lo[0] <= hi[0] else (h >= lo[0]) | (h <= hi[0])   # red wraps around
+-    return hue & (s >= lo[1]) & (s <= hi[1]) & (v >= lo[2]) & (v <= hi[2])
++def _ge(x: np.ndarray, t: int) -> np.ndarray | None:
++    """x >= t on a uint8 plane; None means true everywhere (no array built)."""
++    return None if t <= 0 else (np.zeros(x.shape, bool) if t > 255 else x >= t)
++
++
++def _le(x: np.ndarray, t: int) -> np.ndarray | None:
++    return None if t >= 255 else (np.zeros(x.shape, bool) if t < 0 else x <= t)
++
++
++def _and(parts: list[np.ndarray | None], shape: tuple[int, ...]) -> np.ndarray:
++    out = None
++    for p in parts:
++        if p is not None:
++            if out is None:
++                out = p           # a fresh array from _ge/_le: safe to AND into in place
++            else:
++                out &= p
++    return np.ones(shape, bool) if out is None else out
++
++
++def _in_range(hsv: tuple[np.ndarray, np.ndarray, np.ndarray], lo: tuple[int, int, int],
++              hi: tuple[int, int, int]) -> np.ndarray:
++    """lo <= pixel <= hi per channel on the uint8 planes; a hue range with lo > hi wraps around (red). Bounds that
++    every 0-255 value passes build no array (black's hue and saturation, say)."""
++    h, s, v = hsv
++    if lo[0] <= hi[0]:
++        hue = [_ge(h, lo[0]), _le(h, hi[0])]
++    else:
++        a, b = _ge(h, lo[0]), _le(h, hi[0])
++        hue = [None if a is None or b is None else a | b]
++    return _and(hue + [_ge(s, lo[1]), _le(s, hi[1]), _ge(v, lo[2]), _le(v, hi[2])], h.shape)
++
++
++def _close2(m: np.ndarray) -> np.ndarray:
++    """scipy.ndimage.binary_closing(m, iterations=2) with its default cross and border 0, in whole-array shifts:
++    two cross dilations, then two cross erosions that also clear the pixels next to the image edge."""
++    for _ in range(2):
++        o = m.copy()
++        o[1:] |= m[:-1]
++        o[:-1] |= m[1:]
++        o[:, 1:] |= m[:, :-1]
++        o[:, :-1] |= m[:, 1:]
++        m = o
++    for _ in range(2):
++        o = m.copy()
++        o[1:] &= m[:-1]
++        o[:-1] &= m[1:]
++        o[:, 1:] &= m[:, :-1]
++        o[:, :-1] &= m[:, 1:]
++        o[0] = o[-1] = False
++        o[:, 0] = o[:, -1] = False
++        m = o
++    return m
++
++
++def _fill_holes(m: np.ndarray) -> np.ndarray:
++    """scipy.ndimage.binary_fill_holes(m): background regions (4-connected) that touch no image edge become
++    foreground. One labelling of the background instead of scipy's iterated dilation."""
++    lab, n = _ndi.label(~m)
++    if n == 0:
++        return m
++    edge = np.zeros(n + 1, bool)
++    for line in (lab[0], lab[-1], lab[:, 0], lab[:, -1]):
++        edge[line] = True
++    edge[0] = False                       # label 0 is the foreground itself
++    if edge[1:].all():
++        return m                          # every background region reaches the edge: no holes
++    return ~edge[lab]
++
++
++def _crop(m: np.ndarray) -> tuple[int, int, int, int] | None:
++    """(y0, y1, x0, x1): the box around m's foreground plus one pixel (cut at the image edge), or None if m is empty.
++
++    Filling holes and labelling inside this box give what they give on the whole image: every blob lies inside it,
++    and the one-pixel margin (or the image edge) is background joined to everything outside the box, so a background
++    region reaches the box edge exactly when it reaches the image edge. Blobs keep their raster order, so labels
++    are numbered the same."""
++    rows = np.flatnonzero(m.any(axis=1))
++    if rows.size == 0:
++        return None
++    cols = np.flatnonzero(m.any(axis=0))
++    H, W = m.shape
++    return max(0, rows[0] - 1), min(H, rows[-1] + 2), max(0, cols[0] - 1), min(W, cols[-1] + 2)
+ 
+ 
+ def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
+@@ -178,36 +259,85 @@ def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
+                  classes: list[ClassSpec] | None = None) -> list[Box]:
+     """detect() on a decoded image; `classes` limits the colours looked for (default: all of cfg's)."""
+     hsv = _hsv(im)
+-    H, W = hsv.shape[:2]
+-    total = float(H * W)
+     out: list[Box] = []
+     for spec in cfg.classes if classes is None else classes:
+-        mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
+-        if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
+-            mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
+-        lab, n = _label(mask)
+-        if n == 0:
+-            continue
++        out += _blobs(hsv, spec)
++    if overhead and cfg.table_roi:
++        x0, y0, x1, y1 = cfg.table_roi
++        out = [b for b in out if x0 <= b.cx <= x1 and y0 <= b.cy <= y1]
++    return out
++
++
++def _candidates(lab: np.ndarray, n: int, spec: ClassSpec, keep: tuple[float, ...] | None, W: int, H: int,
++                oy: int = 0, ox: int = 0):
++    """(label, ys, xs, frac) of each blob within spec's size range (and `keep`), in label order, with its pixels in
++    row-major order as np.nonzero(lab == i) gives them, in whole-image coordinates (lab is the crop at oy, ox).
++    With scipy, each blob is read only inside its bounding box, and a box too small to hold min_frac of the image
++    (or centred outside `keep`'s region) is skipped unread."""
++    total = float(H * W)
++    if _ndi is None:
+         sizes = np.bincount(lab.ravel())
+         for i in range(1, n + 1):
+-            area = sizes[i]
+-            frac = area / total
++            frac = sizes[i] / total
+             if not spec.min_frac <= frac <= spec.max_frac:
+                 continue
+             ys, xs = np.nonzero(lab == i)
+-            kind, orient = _kind(ys, xs)
+-            if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
+-                kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
+-                                # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
+-            if kind is None or (spec.kinds and kind not in spec.kinds):
++            if keep is not None and not _kept(keep, frac, xs.min(), xs.max() + 1, ys.min(), ys.max() + 1, W, H):
+                 continue
+-            role = spec.kinds.get(kind, "info")
+-            label = f"{spec.label or spec.name} {kind}"
+-            out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
+-                           orient, role))
+-    if overhead and cfg.table_roi:
+-        x0, y0, x1, y1 = cfg.table_roi
+-        out = [b for b in out if x0 <= b.cx <= x1 and y0 <= b.cy <= y1]
++            yield i, ys, xs, frac
++        return
++    lo = max(spec.min_frac, keep[0] if keep is not None else 0.0)
++    min_box = lo * total * (1 - 1e-9)       # area <= box area; the margin keeps float rounding on the safe side
++    for i, (sy, sx) in enumerate(_ndi.find_objects(lab), 1):
++        if (sy.stop - sy.start) * (sx.stop - sx.start) < min_box:
++            continue
++        if keep is not None and not _kept(keep, 1.0, ox + sx.start, ox + sx.stop, oy + sy.start, oy + sy.stop, W, H):
++            continue
++        sub = lab[sy, sx] == i
++        area = np.count_nonzero(sub)
++        frac = area / total
++        if not spec.min_frac <= frac <= spec.max_frac or (keep is not None and frac < keep[0]):
++            continue
++        ys, xs = np.nonzero(sub)
++        yield i, ys + (oy + sy.start), xs + (ox + sx.start), frac
++
++
++def _kept(keep: tuple[float, ...], frac: float, x0: int, x1: int, y0: int, y1: int, W: int, H: int) -> bool:
++    """held()'s size and grip-region test on a blob's box (x1, y1 exclusive), with Box.cx / Box.cy's arithmetic."""
++    cx, cy = (x0 / W + x1 / W) / 2, (y0 / H + y1 / H) / 2
++    return frac >= keep[0] and keep[1] <= cx <= keep[3] and keep[2] <= cy <= keep[4]
++
++
++def _blobs(hsv: tuple[np.ndarray, np.ndarray, np.ndarray], spec: ClassSpec,
++           keep: tuple[float, float, float, float, float] | None = None) -> list[Box]:
++    """The boxes of one colour class, in label order. `keep` = (min_frac, x0, y0, x1, y1): skip, before the shape
++    test, any blob smaller than min_frac or whose box centre is outside the region (the guard's grip_roi): held()
++    would drop those anyway, and the shape test is the costly part per blob."""
++    H, W = hsv[0].shape
++    mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
++    oy = ox = 0
++    if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
++        mask = _close2(mask)
++        box = _crop(mask)
++        if box is None:
++            return []
++        oy, y1, ox, x1 = box
++        mask = _fill_holes(mask[oy:y1, ox:x1])
++    lab, n = _label(mask)
++    if n == 0:
++        return []
++    out: list[Box] = []
++    for _i, ys, xs, frac in _candidates(lab, n, spec, keep, W, H, oy, ox):
++        kind, orient = _kind(ys, xs)
++        if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
++            kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
++                            # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
++        if kind is None or (spec.kinds and kind not in spec.kinds):
++            continue
++        role = spec.kinds.get(kind, "info")
++        label = f"{spec.label or spec.name} {kind}"
++        out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
++                       orient, role))
+     return out
+ 
+ 
+@@ -258,7 +388,6 @@ class TableDetector:
+         """(True, why) if a wrist camera shows the guard class between the fingers; (False, ...) if the wrist views
+         were readable and showed none; (None, ...) if no wrist view could be read."""
+         looked = False
+-        avoid = [c for c in self.cfg.classes if "avoid" in c.kinds.values()]   # only the colours that can trip it
+         for role, jpeg in frames.items():
+             if not any(w in role for w in self.cfg.wrist_roles):
+                 continue
+@@ -266,11 +395,26 @@ class TableDetector:
+             if im is None:
+                 continue
+             looked = True
+-            b = held(detect_image(im, self.cfg, classes=avoid), self.cfg)
++            b = self._held(im)
+             if b is not None:
+                 return True, f"local detector: {b.cls} between the fingers in {role} ({b.frac:.1%} of the view)"
+         return (False, "local detector: none held") if looked else (None, "local detector: no wrist view")
+ 
++    def _held(self, im: Image.Image) -> Box | None:
++        """held(detect_image(im, cfg, classes=<avoid colours>), cfg), computed lazily: colours in config order, blobs
++        that can't be held (too small, centre outside grip_roi) skipped before the shape test, stopping at the first
++        held ball. Same answer as the full detection (tests/test_guard_equivalence.py)."""
++        hsv = None
++        keep = (self.cfg.grip_min_frac, *self.cfg.grip_roi)
++        for spec in self.cfg.classes:
++            if "avoid" not in spec.kinds.values():   # only the colours that can trip it
++                continue
++            hsv = hsv if hsv is not None else _hsv(im)
++            b = held(_blobs(hsv, spec, keep), self.cfg)
++            if b is not None:
++                return b
++        return None
++
+     def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
+         if not self.cfg.annotate:
+             return frames
+diff --git a/harness/perf.py b/harness/perf.py
+new file mode 100644
+index 0000000..39d4272
+--- /dev/null
++++ b/harness/perf.py
+@@ -0,0 +1,33 @@
++"""Thread caps for the match laptop (Apple Silicon MacBook Air: 4 performance + 4 efficiency cores, no fan).
++
++The harness's numeric work is small arrays (a 640 x 360 mask, a 9-state model), where a BLAS/OpenMP thread pool only
++adds wake-ups and, for OpenBLAS, idle threads that spin after each call. One thread per library keeps the cores free
++for the guard, the fast loop and the HTTP threads, and keeps a fanless laptop cooler. It must run before numpy (or
++OpenCV) is first imported; values already set in the environment win.
++"""
++
++from __future__ import annotations
++
++import os
++import sys
++
++THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
++               "NUMEXPR_NUM_THREADS")
++
++
++def cap_threads(n: int = 1) -> dict[str, str]:
++    """setdefault each thread variable to `n`; also caps OpenCV's pool if cv2 is already imported. Returns the
++    values in force. Too late for a library already imported (numpy reads them at import), hence the warning flag."""
++    for k in THREAD_VARS:
++        os.environ.setdefault(k, str(n))
++    cv2 = sys.modules.get("cv2")
++    if cv2 is not None:
++        cv2.setNumThreads(int(os.environ["OMP_NUM_THREADS"]))
++    return {k: os.environ[k] for k in THREAD_VARS}
++
++
++def cap_cv2() -> None:
++    """Call after importing cv2 (harness.cable_end): OpenCV ignores the environment variables above."""
++    cv2 = sys.modules.get("cv2")
++    if cv2 is not None:
++        cv2.setNumThreads(int(os.environ.get("OMP_NUM_THREADS", "1")))
+diff --git a/harness/statespace.py b/harness/statespace.py
+index 9c176bc..f6338c9 100644
+--- a/harness/statespace.py
++++ b/harness/statespace.py
+@@ -122,6 +122,10 @@ class StateSpace:
+         vec = lambda f: np.array([getattr(w, f) for w in ws], float)  # noqa: E731
+         self._conf, self._window, self._gap = vec("confirm"), vec("window_s"), vec("min_gap_s")
+         self._w_goal, self._w_release, self._goal_conf = vec("w_goal"), vec("w_release"), vec("goal_conf")
++        # decide()'s thresholds, built once: a per-tick list comprehension over K weight sets is the slow part of an
++        # offline sweep with thousands of them
++        self._fail_frac, self._fail_conf = vec("fail_min_fraction"), vec("fail_confirm")
++        self._stall_conf, self._guard_conf, self._live_frames = vec("stall_confirm"), vec("guard_confirm"),             vec("live_guard_frames")
+ 
+     def start(self, timeout_s: float, stall_s: float | None, *, monitor: bool = True) -> None:
+         self.x[:] = 0.0
+@@ -174,18 +178,16 @@ class StateSpace:
+ 
+     def decide(self, pass_now: np.ndarray | None = None) -> dict[str, np.ndarray]:
+         x = self.x
+-        w = self.ws
+         t = x[:, XI["t"]]
+         no_done = x[:, XI["since_done"]] >= BIG / 2
+-        fmin = np.array([v.fail_min_fraction for v in w]) * self.timeout_s
+-        fail = (x[:, XI["fail"]] >= np.array([v.fail_confirm for v in w])) & ((t >= fmin) | (not self.monitor))
++        fmin = self._fail_frac * self.timeout_s
++        fail = (x[:, XI["fail"]] >= self._fail_conf) & ((t >= fmin) | (not self.monitor))
+         stall = np.zeros(self.K, bool)
+         if self.stall_s is not None:
+-            stall = no_done & ((x[:, XI["stalled"]] >= np.array([v.stall_confirm for v in w]))
++            stall = no_done & ((x[:, XI["stalled"]] >= self._stall_conf)
+                                | ((x[:, XI["since_rise"]] >= self.stall_s) & (x[:, XI["pmax"]] < 0.95)
+                                   & (x[:, XI["pmax"]] > 0)))
+-        guard = ((x[:, XI["guard_m"]] >= np.array([v.guard_confirm for v in w]))
+-                 | (x[:, XI["guard_l"]] >= np.array([v.live_guard_frames for v in w])))
++        guard = (x[:, XI["guard_m"]] >= self._guard_conf) | (x[:, XI["guard_l"]] >= self._live_frames)
+         timeout = t >= self.timeout_s
+         return {"pass": pass_now if pass_now is not None else np.zeros(self.K, bool), "fail": fail, "stall": stall,
+                 "guard": guard, "timeout": timeout}
+diff --git a/harness/verifiers.py b/harness/verifiers.py
+index 7d534a2..b22f778 100644
+--- a/harness/verifiers.py
++++ b/harness/verifiers.py
+@@ -11,6 +11,7 @@ import threading
+ import time
+ import urllib.error
+ import urllib.request
++from collections import OrderedDict
+ from collections.abc import Callable
+ from dataclasses import dataclass
+ from typing import IO, Any, Protocol
+@@ -54,6 +55,11 @@ def valid_jpeg(data: bytes) -> bool:
+ 
+ STITCH_TILE_W = 384     # 4 tiles a row: 1536 px wide, under the API's 1568 px long edge, so nothing is rescaled
+ STITCH_COLS = 4
++# Resized tiles by frame digest: a stage's start frame and its history frames come back in every check, so each
++# check decodes and resizes only the frames that are new (~25 ms -> a few ms a grid). 32 tiles of 384 px ~ 8 MB.
++_TILE_CACHE = 32
++_TILES: OrderedDict[bytes, Any] = OrderedDict()
++_TILE_LOCK = threading.Lock()
+ 
+ 
+ def stitch(images: list[tuple[str, bytes]]) -> bytes | None:
+@@ -67,12 +73,23 @@ def stitch(images: list[tuple[str, bytes]]) -> bytes | None:
+         return None
+     tiles = []
+     for label, jpeg in images:
+-        try:
+-            im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+-        except Exception:  # noqa: BLE001 - a bad frame is left out, not fatal
+-            continue
+-        h = max(1, round(im.height * STITCH_TILE_W / im.width))
+-        tiles.append((label, im.resize((STITCH_TILE_W, h))))
++        key = hashlib.sha1(jpeg).digest()
++        with _TILE_LOCK:
++            tile = _TILES.get(key)
++            if tile is not None:
++                _TILES.move_to_end(key)
++        if tile is None:
++            try:
++                im = Image.open(io.BytesIO(jpeg)).convert("RGB")
++            except Exception:  # noqa: BLE001 - a bad frame is left out, not fatal
++                continue
++            h = max(1, round(im.height * STITCH_TILE_W / im.width))
++            tile = im.resize((STITCH_TILE_W, h))
++            with _TILE_LOCK:
++                _TILES[key] = tile
++                while len(_TILES) > _TILE_CACHE:
++                    _TILES.popitem(last=False)
++        tiles.append((label, tile))
+     if not tiles:
+         return None
+     th = max(t.height for _, t in tiles)
+diff --git a/tests/_detect_reference.py b/tests/_detect_reference.py
+new file mode 100644
+index 0000000..086e1cb
+--- /dev/null
++++ b/tests/_detect_reference.py
+@@ -0,0 +1,311 @@
++"""FROZEN REFERENCE: harness/detect.py as of f756095, before the Apple Silicon optimisation (8 Nov 2026). Do not edit.
++tests/test_guard_equivalence.py and tools/mac_bench.py (guard_ref) compare the live detector against it.
++
++Local colour-blob detector for the relay table: golf balls, the black 8-balls, blocks and cylinders.
++
++It runs on the laptop in a few milliseconds per frame, with no API call, so it serves two jobs the Claude monitor
++is too slow or too fragile for:
++
++1. A fast black-ball guard. Every harness poll on a guarded stage looks at the wrist cameras; a black ball between
++   the fingers counts as a guard "yes" at once. This also keeps the guard answering when the Claude API is down.
++2. Boxes on the frames the monitor sees, labelled with class, colour and (for cylinders) upright/lying, so the
++   monitor counts balls in the bin, black balls and tower blocks from marked objects instead of guessing.
++
++It does NOT change what Dream-1 sees or is told: the station builds the policy's camera input itself, the fine-tune
++was trained on plain frames, and prompts must stay the recorded task texts word for word.
++
++Colours live in a YAML file (plans/table_colors.yaml). Tune them on a real frame of the table:
++    python -m harness.detect plans/table_colors.yaml frame.jpg --out boxed.jpg
++"""
++
++from __future__ import annotations
++
++import argparse
++import io
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++from PIL import Image, ImageDraw
++
++try:
++    from scipy import ndimage as _ndi
++except ImportError:   # pragma: no cover
++    _ndi = None
++
++SMALL_BALL_FRAC = 0.004  # a golf ball in the overhead view is ~0.05-0.1% of the image
++WORK_W = 640           # frames are shrunk to this width before detection
++COLORS = {"avoid": (230, 20, 20), "target": (20, 200, 60), "info": (30, 120, 230)}
++
++
++@dataclass
++class ClassSpec:
++    name: str
++    hsv_lo: tuple[int, int, int]
++    hsv_hi: tuple[int, int, int]
++    min_frac: float = 0.0005       # blob area as a fraction of the image
++    max_frac: float = 0.15
++    label: str = ""                # colour name, e.g. "blue"
++    # which shapes of this colour to report, and how: kind (ball | cube | stick) -> role (avoid | target | info).
++    # Empty = every kind, role info. Black lists only ball, so the black gripper fingers are never reported.
++    kinds: dict[str, str] = field(default_factory=dict)
++    small_ball: bool = False       # this colour only comes as balls: read a small compact blob as a ball
++
++
++@dataclass
++class Box:
++    cls: str
++    x0: float
++    y0: float
++    x1: float
++    y1: float                      # fractions of the image, 0-1
++    frac: float
++    orientation: str | None = None
++    role: str = "info"
++
++    @property
++    def cx(self) -> float:
++        return (self.x0 + self.x1) / 2
++
++    @property
++    def cy(self) -> float:
++        return (self.y0 + self.y1) / 2
++
++    def text(self) -> str:
++        return self.cls + (f" {self.orientation}" if self.orientation else "")
++
++
++@dataclass
++class DetectConfig:
++    classes: list[ClassSpec]
++    guard_class: str = "black_ball"
++    wrist_roles: list[str] = field(default_factory=lambda: ["wrist"])
++    grip_roi: tuple[float, float, float, float] = (0.25, 0.35, 0.75, 1.0)   # x0 y0 x1 y1 between the fingers
++    grip_min_frac: float = 0.01   # a ball this big in the wrist view is in or at the fingers
++    table_roi: tuple[float, float, float, float] | None = None   # overhead view: ignore blobs outside (people, chairs)
++    annotate: bool = True
++
++
++def load_config(path: str | Path) -> DetectConfig:
++    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
++    classes = []
++    for name, c in (raw.get("classes") or {}).items():
++        lo, hi = c["hsv"]
++        classes.append(ClassSpec(name=name, hsv_lo=tuple(lo), hsv_hi=tuple(hi),
++                                 min_frac=float(c.get("min_frac", 0.0005)), max_frac=float(c.get("max_frac", 0.15)),
++                                 label=c.get("label", name), kinds=dict(c.get("kinds") or {}),
++                                 small_ball=bool(c.get("small_ball", False))))
++    g = raw.get("guard") or {}
++    return DetectConfig(classes=classes, guard_class=g.get("class", "black_ball"),
++                        wrist_roles=list(g.get("wrist_roles", ["wrist"])),
++                        grip_roi=tuple(g.get("grip_roi", (0.25, 0.35, 0.75, 1.0))),
++                        grip_min_frac=float(g.get("grip_min_frac", 0.01)), annotate=bool(raw.get("annotate", True)),
++                        table_roi=tuple(raw["table_roi"]) if raw.get("table_roi") else None)
++
++
++def _load(jpeg: bytes, min_w: int | None = None) -> Image.Image | None:
++    """Decoded RGB image, or None for a bad frame. With min_w, a JPEG is decoded at the smallest 1/2, 1/4 or 1/8
++    scale that is still at least min_w wide (libjpeg's draft mode): a 1280 px station frame decodes at 640."""
++    try:
++        im = Image.open(io.BytesIO(jpeg))
++        if min_w and im.format == "JPEG" and im.width > min_w:
++            im.draft("RGB", (min_w, max(1, im.height * min_w // im.width)))
++        im.load()
++        return im.convert("RGB")
++    except Exception:   # noqa: BLE001 - a bad frame is simply not looked at
++        return None
++
++
++def _hsv(im: Image.Image) -> np.ndarray:
++    w, h = im.size
++    small = im.resize((WORK_W, max(1, round(h * WORK_W / w))))
++    return np.asarray(small.convert("HSV"), dtype=np.int16)
++
++
++def _label(mask: np.ndarray) -> tuple[np.ndarray, int]:
++    if _ndi is not None:
++        return _ndi.label(mask)
++    lab = np.zeros(mask.shape, dtype=np.int32)   # small 4-connected flood fill for machines without scipy
++    n = 0
++    for y, x in zip(*np.nonzero(mask)):
++        if lab[y, x]:
++            continue
++        n += 1
++        stack = [(y, x)]
++        lab[y, x] = n
++        while stack:
++            cy, cx = stack.pop()
++            for ny, nx in ((cy + 1, cx), (cy - 1, cx), (cy, cx + 1), (cy, cx - 1)):
++                if 0 <= ny < mask.shape[0] and 0 <= nx < mask.shape[1] and mask[ny, nx] and not lab[ny, nx]:
++                    lab[ny, nx] = n
++                    stack.append((ny, nx))
++    return lab, n
++
++
++def _in_range(hsv: np.ndarray, lo: tuple[int, int, int], hi: tuple[int, int, int]) -> np.ndarray:
++    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
++    hue = (h >= lo[0]) & (h <= hi[0]) if lo[0] <= hi[0] else (h >= lo[0]) | (h <= hi[0])   # red wraps around
++    return hue & (s >= lo[1]) & (s <= hi[1]) & (v >= lo[2]) & (v <= hi[2])
++
++
++def _kind(ys: np.ndarray, xs: np.ndarray) -> tuple[str | None, str | None]:
++    """(kind, orientation) of one blob from its pixels, independent of rotation.
++    ball: compact and fills its circumscribed circle; cube: compact but square (or an upright stick seen from above);
++    stick: long and thin, i.e. lying on its side."""
++    n = len(xs)
++    if n < 6:
++        return None, None
++    pts = np.stack([xs, ys], axis=1).astype(float)
++    c = pts.mean(axis=0)
++    ev = np.linalg.eigvalsh(np.cov((pts - c).T)) if n > 2 else np.array([1.0, 1.0])
++    elong = float(np.sqrt(max(ev[1], 1e-9) / max(ev[0], 1e-9)))
++    rmax = float(np.sqrt(((pts - c) ** 2).sum(axis=1).max())) + 0.5
++    roundness = n / (np.pi * rmax * rmax)          # disc ~1, square ~0.64, thin bar small
++    if elong >= 2.2:
++        return "stick", "lying"
++    if elong <= 1.5 and roundness >= 0.72:
++        return "ball", None
++    if elong <= 1.6:
++        return "cube", None
++    return None, None
++
++
++def detect(jpeg: bytes, cfg: DetectConfig, *, overhead: bool = False) -> list[Box]:
++    im = _load(jpeg, WORK_W)
++    return [] if im is None else detect_image(im, cfg, overhead=overhead)
++
++
++def detect_image(im: Image.Image, cfg: DetectConfig, *, overhead: bool = False,
++                 classes: list[ClassSpec] | None = None) -> list[Box]:
++    """detect() on a decoded image; `classes` limits the colours looked for (default: all of cfg's)."""
++    hsv = _hsv(im)
++    H, W = hsv.shape[:2]
++    total = float(H * W)
++    out: list[Box] = []
++    for spec in cfg.classes if classes is None else classes:
++        mask = _in_range(hsv, spec.hsv_lo, spec.hsv_hi)
++        if _ndi is not None:   # close specular highlights and the cubes' holes, so shapes read whole
++            mask = _ndi.binary_fill_holes(_ndi.binary_closing(mask, iterations=2))
++        lab, n = _label(mask)
++        if n == 0:
++            continue
++        sizes = np.bincount(lab.ravel())
++        for i in range(1, n + 1):
++            area = sizes[i]
++            frac = area / total
++            if not spec.min_frac <= frac <= spec.max_frac:
++                continue
++            ys, xs = np.nonzero(lab == i)
++            kind, orient = _kind(ys, xs)
++            if kind == "cube" and spec.small_ball and frac <= SMALL_BALL_FRAC:
++                kind = "ball"   # a colour that only comes as balls: a small, half-lit ball reads square-ish
++                                # (the size cap keeps the white bin out; a held ball fills the wrist view and is round)
++            if kind is None or (spec.kinds and kind not in spec.kinds):
++                continue
++            role = spec.kinds.get(kind, "info")
++            label = f"{spec.label or spec.name} {kind}"
++            out.append(Box(label, xs.min() / W, ys.min() / H, (xs.max() + 1) / W, (ys.max() + 1) / H, frac,
++                           orient, role))
++    if overhead and cfg.table_roi:
++        x0, y0, x1, y1 = cfg.table_roi
++        out = [b for b in out if x0 <= b.cx <= x1 and y0 <= b.cy <= y1]
++    return out
++
++
++def held(boxes: list[Box], cfg: DetectConfig) -> Box | None:
++    """A ball the plan must never bin (role avoid) between the fingers of a wrist camera, big enough to be held."""
++    rx0, ry0, rx1, ry1 = cfg.grip_roi
++    for b in boxes:
++        if b.role == "avoid" and b.frac >= cfg.grip_min_frac and rx0 <= b.cx <= rx1 and ry0 <= b.cy <= ry1:
++            return b
++    return None
++
++
++def annotate(jpeg: bytes, boxes: list[Box]) -> bytes:
++    im = _load(jpeg)
++    if im is None or not boxes:
++        return jpeg
++    d = ImageDraw.Draw(im)
++    W, H = im.size
++    width = max(2, W // 200)
++    for b in boxes:
++        col = COLORS.get(b.role, COLORS["info"])
++        xy = (b.x0 * W, b.y0 * H, b.x1 * W, b.y1 * H)
++        d.rectangle(xy, outline=col, width=width)
++        d.text((xy[0] + 2, max(0, xy[1] - 12)), b.text().upper() if b.role == "avoid" else b.text(), fill=col)
++    buf = io.BytesIO()
++    im.save(buf, format="JPEG", quality=88)
++    return buf.getvalue()
++
++
++class TableDetector:
++    """What the runner and the monitor use."""
++
++    def __init__(self, cfg: DetectConfig) -> None:
++        self.cfg = cfg
++        self.cable_ends = None   # harness.cable_end.CableEndClassifier: USB-C / USB-A end boxes (--cable-ends)
++
++    @classmethod
++    def from_file(cls, path: str | Path) -> TableDetector:
++        return cls(load_config(path))
++
++    def _overhead(self, role: str) -> bool:
++        return not any(w in role for w in self.cfg.wrist_roles)
++
++    def boxes(self, frames: dict[str, bytes]) -> dict[str, list[Box]]:
++        return {role: detect(j, self.cfg, overhead=self._overhead(role)) for role, j in frames.items()}
++
++    def guard(self, frames: dict[str, bytes]) -> tuple[bool | None, str]:
++        """(True, why) if a wrist camera shows the guard class between the fingers; (False, ...) if the wrist views
++        were readable and showed none; (None, ...) if no wrist view could be read."""
++        looked = False
++        avoid = [c for c in self.cfg.classes if "avoid" in c.kinds.values()]   # only the colours that can trip it
++        for role, jpeg in frames.items():
++            if not any(w in role for w in self.cfg.wrist_roles):
++                continue
++            im = _load(jpeg, WORK_W)
++            if im is None:
++                continue
++            looked = True
++            b = held(detect_image(im, self.cfg, classes=avoid), self.cfg)
++            if b is not None:
++                return True, f"local detector: {b.cls} between the fingers in {role} ({b.frac:.1%} of the view)"
++        return (False, "local detector: none held") if looked else (None, "local detector: no wrist view")
++
++    def annotate_frames(self, frames: dict[str, bytes]) -> dict[str, bytes]:
++        if not self.cfg.annotate:
++            return frames
++        out = {role: annotate(j, detect(j, self.cfg, overhead=self._overhead(role))) for role, j in frames.items()}
++        if self.cable_ends is not None:
++            out = {role: self.cable_ends.annotate(j) for role, j in out.items()}
++        return out
++
++    def legend(self) -> str:
++        avoid = [f"{c.label or c.name} {k}" for c in self.cfg.classes for k, r in c.kinds.items() if r == "avoid"]
++        return ("Boxes on the images come from a local colour detector and can miss or mislabel objects: "
++                f"RED boxes = {', '.join(avoid) or 'objects to avoid'} (never pick these); green = targets; "
++                "blue = other objects (blocks: colour, cylinders: upright or lying)."
++                + (" " + self.cable_ends.legend() if self.cable_ends is not None else ""))
++
++
++def main(argv: list[str] | None = None) -> int:
++    ap = argparse.ArgumentParser(description="Run the table detector on one image and draw the boxes.")
++    ap.add_argument("config")
++    ap.add_argument("image")
++    ap.add_argument("--out", default="boxed.jpg")
++    ap.add_argument("--wrist", action="store_true", help="the image is a wrist view (no table_roi)")
++    args = ap.parse_args(argv)
++    det = TableDetector.from_file(args.config)
++    jpeg = Path(args.image).read_bytes()
++    boxes = detect(jpeg, det.cfg, overhead=not args.wrist)
++    for b in boxes:
++        print(f"{b.text():24s} x {b.x0:.2f}-{b.x1:.2f} y {b.y0:.2f}-{b.y1:.2f} area {b.frac:.2%}")
++    Path(args.out).write_bytes(annotate(jpeg, boxes))
++    print(f"{len(boxes)} boxes -> {args.out}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_guard_equivalence.py b/tests/test_guard_equivalence.py
+new file mode 100644
+index 0000000..d5b5e72
+--- /dev/null
++++ b/tests/test_guard_equivalence.py
+@@ -0,0 +1,141 @@
++"""The optimised detector must answer exactly as the one the match was tested with.
++
++tests/_detect_reference.py is harness/detect.py as of f756095, before the Apple Silicon work. On every recorded frame
++in tests/data/guard_frames the guard verdict, every box and every annotated JPEG must be identical; golden.json holds
++the verdicts the reference gave when the frames were added. The frames (8 Nov, all chosen with no people in view, the
++repo is public): real_* station wrist frames from the NUC's last-run_inputs, sim_* Dream YAM sim wrist frames, synth_*
++real frames with a white or black ball painted at the fingers (five are guard yeses), table_* overhead views. Set HARNESS_GUARD_FRAMES=<folder> to also compare on a folder of your own frames (searched recursively).
++"""
++
++from __future__ import annotations
++
++import importlib.util
++import json
++import os
++import random
++import sys
++from dataclasses import asdict
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from harness import detect
++from harness.detect import TableDetector
++
++ndi = pytest.importorskip("scipy.ndimage")
++
++HERE = Path(__file__).resolve().parent
++FRAMES = HERE / "data" / "guard_frames"
++CONFIG = HERE.parent / "plans" / "table_colors.yaml"
++
++
++def _reference():
++    spec = importlib.util.spec_from_file_location("_detect_reference", HERE / "_detect_reference.py")
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++REF = _reference()
++
++
++def _frames() -> list[Path]:
++    files = sorted(FRAMES.glob("*.jpg"))
++    extra = os.environ.get("HARNESS_GUARD_FRAMES")
++    if extra:
++        files += sorted(Path(extra).rglob("*.jpg"))
++    return files
++
++
++def _role(path: Path) -> str:
++    return "wrist_l" if "wrist_l" in str(path) else "wrist_r"
++
++
++@pytest.fixture(scope="module")
++def dets():
++    return TableDetector.from_file(CONFIG), REF.TableDetector.from_file(CONFIG)
++
++
++def test_golden_guard_verdicts(dets):
++    new, _ = dets
++    golden = json.loads((FRAMES / "golden.json").read_text(encoding="utf-8"))
++    assert len(golden) >= 20 and sum(v["guard"] is True for v in golden.values()) >= 3   # positives are in the set
++    for name, want in golden.items():
++        got = new.guard({want["role"]: (FRAMES / name).read_bytes()})
++        assert got == (want["guard"], want["why"]), name
++
++
++def test_guard_boxes_and_annotations_match_the_reference(dets):
++    new, ref = dets
++    files = _frames()
++    assert files
++    for f in files:
++        jpeg, role = f.read_bytes(), _role(f)
++        assert new.guard({role: jpeg}) == ref.guard({role: jpeg}), f
++        assert new.guard({"scene": jpeg, role: jpeg}) == ref.guard({"scene": jpeg, role: jpeg}), f
++        for overhead in (False, True):
++            got = [asdict(b) for b in detect.detect(jpeg, new.cfg, overhead=overhead)]
++            want = [asdict(b) for b in REF.detect(jpeg, ref.cfg, overhead=overhead)]
++            assert got == want, (f, overhead)
++    trio = {"scene": files[-1].read_bytes(), "wrist_l": files[0].read_bytes(), "wrist_r": files[1].read_bytes()}
++    assert new.annotate_frames(trio) == ref.annotate_frames(trio)
++
++
++def test_unreadable_and_non_wrist_frames_match(dets):
++    new, ref = dets
++    for frames in ({"wrist_r": b"not a jpeg"}, {"scene": (FRAMES / "golden.json").read_bytes()}, {}):
++        assert new.guard(frames) == ref.guard(frames)
++
++
++def _random_masks():
++    rng = np.random.default_rng(3)
++    shapes = [(1, 1), (1, 9), (9, 1), (2, 2), (3, 5), (7, 7), (40, 64), (360, 640)]
++    for shape in shapes:
++        for density in (0.0, 0.05, 0.3, 0.6, 0.95, 1.0):
++            yield rng.random(shape) < density
++    # blobs with holes and blobs touching the edges
++    m = np.zeros((60, 80), bool)
++    m[5:25, 5:25] = True
++    m[10:15, 10:15] = False
++    m[40:60, 60:80] = True
++    m[0:10, 40:50] = True
++    m[48:52, 68:72] = False
++    yield m
++
++
++def test_close_and_fill_are_scipys():
++    for m in _random_masks():
++        want_c = ndi.binary_closing(m, iterations=2)
++        got_c = detect._close2(m)
++        assert np.array_equal(got_c, want_c), m.shape
++        assert np.array_equal(detect._fill_holes(want_c), ndi.binary_fill_holes(want_c)), m.shape
++        assert np.array_equal(detect._fill_holes(m), ndi.binary_fill_holes(m)), m.shape
++
++
++def test_in_range_is_the_int16_comparison():
++    rng = random.Random(5)
++    img = np.random.default_rng(5).integers(0, 256, (37, 53, 3), dtype=np.uint8)
++    planes = tuple(np.ascontiguousarray(img[..., c]) for c in range(3))
++    wide = img.astype(np.int16)
++    edges = [-5, 0, 1, 37, 128, 200, 254, 255, 256, 300]
++    for _ in range(400):
++        lo = tuple(rng.choice(edges + [rng.randint(0, 255)]) for _ in range(3))
++        hi = tuple(rng.choice(edges + [rng.randint(0, 255)]) for _ in range(3))
++        assert np.array_equal(detect._in_range(planes, lo, hi), REF._in_range(wide, lo, hi)), (lo, hi)
++
++
++def test_stitch_tile_cache_gives_the_same_grid():
++    from harness import verifiers
++
++    files = _frames()[:9]
++    imgs = [(f.name, f.read_bytes()) for f in files]
++    verifiers._TILES.clear()
++    cold = verifiers.stitch(imgs)
++    warm = verifiers.stitch(imgs)                    # every tile from the cache
++    verifiers._TILES.clear()
++    mixed_first = verifiers.stitch(imgs[:5])
++    mixed = verifiers.stitch(imgs)                   # half cached, half new
++    assert cold is not None and cold == warm == mixed and mixed_first != cold
++    assert len(verifiers._TILES) <= verifiers._TILE_CACHE
+diff --git a/tests/test_start_pose_live_guard.py b/tests/test_start_pose_live_guard.py
+index bd50640..5cc68f9 100644
+--- a/tests/test_start_pose_live_guard.py
++++ b/tests/test_start_pose_live_guard.py
+@@ -421,4 +421,6 @@ def test_a_dead_camera_does_not_slow_the_live_one():
+     got = [lf.grab(wait_s=0.05) for _ in range(5)]
+     took = _t.monotonic() - t0
+     assert all(g == {"wrist_r": b"jpeg"} for g in got)  # the live camera every tick
+-    assert took < 0.5                                  # the dead one (1 s per try) never held a tick up
++    # the dead one (1 s per try) never held a tick up: ideal 5 x 50 ms; one blocked tick would make it >= 1 s.
++    # 0.9 s, not 0.5: a macOS CI runner's timed waits overshoot ~2x (0.508 s on macos-15, 8 Nov).
++    assert took < 0.9
+diff --git a/tools/mac_bench.py b/tools/mac_bench.py
+new file mode 100644
+index 0000000..b0ba07d
+--- /dev/null
++++ b/tools/mac_bench.py
+@@ -0,0 +1,354 @@
++"""Offline benchmark of the harness's live path, for the match laptop (Apple Silicon MacBook Air) and any other box.
++
++No station, no network, no paid API call: it replays recorded wrist frames (tests/data/guard_frames by default) through
++the same code the match runs, and measures per-iteration latency (p50 / p95 / max, ms) and CPU (% of one core, from
++process CPU time over wall time) for:
++
++  guard          TableDetector.guard on one wrist JPEG (the live guard's and fast loop's per-frame work)
++  guard_ref      the same on the frozen pre-optimisation detector (tests/_detect_reference.py): before/after on one box
++  fastloop       FastLoop.step with two new wrist frames a tick (detector included), as at 20 Hz in a match
++  statespace     Observer.fast + StateSpace.step alone (the decision model, no perception)
++  jpeg_decode    decode one 640 px frame to RGB;  jpeg_encode: encode it at q85
++  stitch         verifiers.stitch on 9 history frames, one of them new (the monitor's grid image, one per check)
++  annotate       TableDetector.annotate_frames on scene + both wrists (boxes drawn on the monitor's frames)
++  monitor_build  MonitorVerifier._build: annotate + stitch + base64 + stage text, i.e. one whole monitor request
++  prompt         promptgen.compose at level 5 (the longest layered prompt)
++
++--sustained S runs the match load for S seconds (live guard 10 Hz + fast loop 20 Hz on both wrists, in their own
++threads, a monitor request every 3 s) and prints a row per 30 s window: guard p50/p95, fast-loop tick p95, overruns
++(ticks longer than their period) and CPU %. On a fanless Air, a p95 that climbs window after window is thermal
++throttling. --sustained-mode max runs the guard flat out on --threads threads instead (worst-case heat).
++
++    python tools/mac_bench.py                              # component table, ~30 s
++    python tools/mac_bench.py --sustained 300              # + 5 minutes of match load
++    python tools/mac_bench.py --sustained 300 --sustained-mode max --threads 4
++Results go to bench_results/mac_bench_<host>_<time>.json (--out to change).
++"""
++
++from __future__ import annotations
++
++import argparse
++import importlib.util
++import io
++import json
++import os
++import platform
++import socket
++import subprocess
++import sys
++import threading
++import time
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++from harness.perf import cap_threads  # noqa: E402
++
++cap_threads()
++
++import numpy as np  # noqa: E402
++from PIL import Image  # noqa: E402
++
++from harness.detect import TableDetector  # noqa: E402
++from harness.fastloop import FastLoop  # noqa: E402
++from harness.plan import load_plan  # noqa: E402
++from harness.promptgen import Context, compose  # noqa: E402
++from harness.statespace import Observer, StateSpace, Weights  # noqa: E402
++from harness.verifiers import MonitorVerifier, stitch  # noqa: E402
++
++
++def _reference_detector(cfg_path: Path):
++    ref = ROOT / "tests" / "_detect_reference.py"
++    if not ref.exists():
++        return None
++    spec = importlib.util.spec_from_file_location("_detect_reference", ref)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = mod      # dataclasses look their module up by name
++    spec.loader.exec_module(mod)
++    return mod.TableDetector.from_file(cfg_path)
++
++
++def _stats(ms: list[float], cpu_s: float, wall_s: float) -> dict[str, float]:
++    a = np.sort(np.asarray(ms))
++    return {"n": int(a.size), "p50_ms": float(np.percentile(a, 50)), "p95_ms": float(np.percentile(a, 95)),
++            "max_ms": float(a[-1]), "mean_ms": float(a.mean()), "cpu_pct": 100.0 * cpu_s / max(wall_s, 1e-9)}
++
++
++def bench(fn, *, seconds: float, min_iters: int = 20) -> dict[str, float]:
++    """Runs fn() back to back for `seconds` (at least min_iters times) after a short warm-up."""
++    for _ in range(3):
++        fn()
++    ms: list[float] = []
++    c0, w0 = time.process_time(), time.perf_counter()
++    while len(ms) < min_iters or time.perf_counter() - w0 < seconds:
++        t = time.perf_counter()
++        fn()
++        ms.append(1000 * (time.perf_counter() - t))
++    return _stats(ms, time.process_time() - c0, time.perf_counter() - w0)
++
++
++class Cycle:
++    """Endless supply of recorded frames. Each one is made unique (a counter after the JPEG's end marker, which
++    decoders ignore), as a live camera's frames are, so no digest-keyed cache can reuse an earlier result."""
++
++    def __init__(self, frames: list[bytes]):
++        self.frames, self.i = frames, 0
++
++    def next(self) -> bytes:
++        j = self.frames[self.i % len(self.frames)]
++        self.i += 1
++        return j + self.i.to_bytes(8, "little")
++
++
++def _load_frames(folder: Path) -> tuple[list[bytes], list[bytes]]:
++    files = sorted(folder.glob("*.jpg"))
++    if not files:
++        raise SystemExit(f"no .jpg frames in {folder}")
++    wrists = [f.read_bytes() for f in files if "wrist" in f.name] or [f.read_bytes() for f in files]
++    # overhead-like frames for the monitor's scene view; a top-down one first if there is one
++    others = [f.read_bytes() for f in sorted((f for f in files if "wrist" not in f.name),
++                                             key=lambda f: "topdown" not in f.name)] or wrists
++    return wrists, others
++
++
++def components(args, det: TableDetector, ref, wrists: list[bytes], others: list[bytes]) -> dict[str, dict]:
++    s = args.seconds
++    out: dict[str, dict] = {}
++    cyc = Cycle(wrists)
++    out["guard"] = bench(lambda: det.guard({"wrist_r": cyc.next()}), seconds=s)
++    if ref is not None:
++        cyc_r = Cycle(wrists)
++        out["guard_ref"] = bench(lambda: ref.guard({"wrist_r": cyc_r.next()}), seconds=s)
++
++    cyc_f = Cycle(wrists)
++    fl = FastLoop(frames=lambda: {"wrist_l": cyc_f.next(), "wrist_r": cyc_f.next()}, guard_judge=det.guard,
++                  grippers=lambda: {"left": {"opening": 0.5}, "right": {"opening": 0.1}})
++    fl.attempt_start("pick_ball", 60.0, 20.0, guarded=True)
++    out["fastloop"] = bench(fl.step, seconds=s)
++
++    ss, ob = StateSpace(Weights()), Observer(Weights())
++    ss.start(60.0, 20.0)
++    ob.reset()
++    u = ss.u(dt=0.05, l_guard_no=1.0)
++
++    def ss_step():
++        ob.fast({"illegal_grip": 0.0, "holding": 1.0})
++        ss.step(u, ob.z)
++    out["statespace"] = bench(ss_step, seconds=s, min_iters=2000)
++
++    jpeg = wrists[0]
++    out["jpeg_decode"] = bench(lambda: Image.open(io.BytesIO(jpeg)).convert("RGB"), seconds=s)
++    rgb = Image.open(io.BytesIO(jpeg)).convert("RGB")
++
++    def enc():
++        b = io.BytesIO()
++        rgb.save(b, "JPEG", quality=85)
++    out["jpeg_encode"] = bench(enc, seconds=s)
++    # A check's grid: the stage-start frame plus a sliding history, so each check brings one new frame
++    cyc_s = Cycle(wrists)
++    hist = [("stage start", cyc_s.next())] + [(f"t={2 * i} s", cyc_s.next()) for i in range(8)]
++
++    def stitch_check():
++        del hist[1]
++        hist.append(("newest history", cyc_s.next()))
++        stitch(hist)
++    out["stitch"] = bench(stitch_check, seconds=s)
++    scene = others[0]
++    trio = {"scene": scene, "wrist_l": wrists[0], "wrist_r": wrists[1 % len(wrists)]}
++    out["annotate"] = bench(lambda: det.annotate_frames(trio), seconds=s)
++
++    plan = load_plan(ROOT / "plans" / "hill_climb_v4.yaml")
++    mv = MonitorVerifier(plan, transport=lambda payload: {"content": []})
++    mv.annotator, mv.legend = det.annotate_frames, det.legend()
++    stage = next(st for st in plan.stages if plan.guard is not None and plan.guard.covers(st.name))
++    cyc_m = Cycle(wrists)
++    t_el = [0.0]
++
++    def build():
++        t_el[0] += 3.0
++        payload = mv._build(stage, {"scene": scene, "wrist_l": cyc_m.next(), "wrist_r": cyc_m.next()}, t_el[0])
++        json.dumps({k: v for k, v in (payload or {}).items() if not k.startswith("_")})
++    out["monitor_build"] = bench(build, seconds=s)
++
++    ctx = Context(prefix="The strip has no power.", holding={"right": "a cable", "left": "nothing"},
++                  tower=["blue cube", "pink cube"], attempt=2, progress=0.4, last_failure="the gripper slipped")
++    p = "The strip has no power. Pull the black cable out of the hub with the right arm."
++    out["prompt"] = bench(lambda: compose(p, 5, ctx), seconds=s, min_iters=2000)
++    return out
++
++
++def sustained(args, det: TableDetector, wrists: list[bytes], others: list[bytes]) -> list[dict]:
++    """Match load (or flat out) for args.sustained seconds; one row per args.window seconds."""
++    stop = threading.Event()
++    lock = threading.Lock()
++    rec: dict[str, list[float]] = {"guard": [], "tick": []}
++    over = {"n": 0}
++
++    def timed_guard(frames):
++        t = time.perf_counter()
++        r = det.guard(frames)
++        with lock:
++            rec["guard"].append(1000 * (time.perf_counter() - t))
++        return r
++
++    threads: list[threading.Thread] = []
++    if args.sustained_mode == "match":
++        cyc_g, cyc_f = Cycle(wrists), Cycle(wrists[::-1])
++
++        def periodic(period: float, body, record_tick: bool = False):
++            def run():
++                while not stop.is_set():
++                    t = time.perf_counter()
++                    body()
++                    took = time.perf_counter() - t
++                    with lock:
++                        if record_tick:
++                            rec["tick"].append(1000 * took)
++                        if took > period:
++                            over["n"] += 1
++                    stop.wait(max(0.0, period - took))
++            return run
++        fl = FastLoop(frames=lambda: {"wrist_l": cyc_f.next(), "wrist_r": cyc_f.next()}, guard_judge=timed_guard,
++                      grippers=lambda: {"right": {"opening": 0.1}})
++        fl.attempt_start("pick_ball", 1e9, None, guarded=True)
++
++        def live_guard_tick():
++            for role in ("wrist_l", "wrist_r"):
++                timed_guard({role: cyc_g.next()})
++        plan = load_plan(ROOT / "plans" / "hill_climb_v4.yaml")
++        mv = MonitorVerifier(plan, transport=lambda payload: {"content": []})
++        mv.annotator = det.annotate_frames
++        stage = next(st for st in plan.stages if plan.guard is not None and plan.guard.covers(st.name))
++        cyc_m, t_el = Cycle(wrists), [0.0]
++
++        def monitor_tick():
++            t_el[0] += 3.0
++            mv._build(stage, {"scene": others[0], "wrist_l": cyc_m.next(), "wrist_r": cyc_m.next()}, t_el[0])
++        threads = [threading.Thread(target=periodic(0.1, live_guard_tick), daemon=True),
++                   threading.Thread(target=periodic(0.05, fl.step, True), daemon=True),
++                   threading.Thread(target=periodic(3.0, monitor_tick), daemon=True)]
++    else:
++        def flat_out(k: int):
++            cyc = Cycle(wrists[k:] + wrists[:k])
++            while not stop.is_set():
++                timed_guard({"wrist_r": cyc.next()})
++        threads = [threading.Thread(target=flat_out, args=(k,), daemon=True) for k in range(args.threads)]
++
++    rows: list[dict] = []
++    t_end = time.perf_counter() + args.sustained
++    for th in threads:
++        th.start()
++    print(f"\nsustained {args.sustained_mode} load, {args.sustained:.0f} s"
++          f"{'' if args.sustained_mode == 'match' else f' on {args.threads} threads'}:")
++    print(f"{'window':>8} {'guard p50':>10} {'guard p95':>10} {'guards/s':>9} {'tick p95':>9} {'overruns':>9} "
++          f"{'cpu %':>7}  thermal")
++    w = 0
++    while time.perf_counter() < t_end:
++        c0, w0 = time.process_time(), time.perf_counter()
++        stop.wait(min(args.window, t_end - w0))
++        with lock:
++            g, tk, ov = rec["guard"], rec["tick"], over["n"]
++            rec["guard"], rec["tick"], over["n"] = [], [], 0
++        wall = time.perf_counter() - w0
++        row = {"t_s": round((w + 1) * args.window), "guards": len(g), "guards_per_s": len(g) / wall,
++               "guard_p50_ms": float(np.percentile(g, 50)) if g else None,
++               "guard_p95_ms": float(np.percentile(g, 95)) if g else None,
++               "tick_p95_ms": float(np.percentile(tk, 95)) if tk else None, "overruns": ov,
++               "cpu_pct": 100.0 * (time.process_time() - c0) / wall, "thermal": thermal_state()}
++        rows.append(row)
++        f = lambda v: f"{v:10.2f}" if v is not None else f"{'-':>10}"  # noqa: E731
++        print(f"{row['t_s']:>7}s {f(row['guard_p50_ms'])} {f(row['guard_p95_ms'])} {row['guards_per_s']:9.1f} "
++              f"{f(row['tick_p95_ms'])[1:]} {ov:9d} {row['cpu_pct']:7.1f}  {row['thermal'] or ''}")
++        w += 1
++    stop.set()
++    for th in threads:
++        th.join(timeout=2.0)
++    return rows
++
++
++def thermal_state() -> str | None:
++    """macOS: `pmset -g therm` (CPU_Speed_Limit 100 = not throttled). None elsewhere."""
++    if sys.platform != "darwin":
++        return None
++    try:
++        out = subprocess.run(["pmset", "-g", "therm"], capture_output=True, text=True, timeout=2).stdout
++    except (OSError, subprocess.SubprocessError):
++        return None
++    vals = [ln.strip().replace(" ", "") for ln in out.splitlines() if "=" in ln]
++    return ",".join(vals) or "no warning"
++
++
++def machine() -> dict[str, str | int | None]:
++    info: dict[str, str | int | None] = {"host": socket.gethostname(), "platform": platform.platform(),
++                                         "machine": platform.machine(), "python": platform.python_version(),
++                                         "cpus": os.cpu_count(), "numpy": np.__version__,
++                                         "pillow": Image.__version__}
++    try:
++        import scipy
++        info["scipy"] = scipy.__version__
++    except ImportError:
++        info["scipy"] = None
++    if sys.platform == "darwin":
++        for key in ("machdep.cpu.brand_string", "hw.perflevel0.physicalcpu", "hw.perflevel1.physicalcpu"):
++            try:
++                info[key] = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True,
++                                           timeout=2).stdout.strip()
++            except (OSError, subprocess.SubprocessError):
++                pass
++    else:
++        info["cpu"] = platform.processor()
++    info["threads_env"] = {k: os.environ.get(k) for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
++                                                          "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS")}
++    return info
++
++
++def main(argv: list[str] | None = None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
++    ap.add_argument("--frames", type=Path, default=ROOT / "tests" / "data" / "guard_frames",
++                    help="folder of recorded JPEGs (names with 'wrist' are wrist views)")
++    ap.add_argument("--config", type=Path, default=ROOT / "plans" / "table_colors.yaml")
++    ap.add_argument("--seconds", type=float, default=2.0, help="time per component")
++    ap.add_argument("--sustained", type=float, default=0.0, help="seconds of sustained load (300 = 5 min)")
++    ap.add_argument("--sustained-mode", choices=("match", "max"), default="match")
++    ap.add_argument("--threads", type=int, default=4, help="--sustained-mode max: guard threads")
++    ap.add_argument("--window", type=float, default=30.0, help="sustained: seconds per row")
++    ap.add_argument("--no-ref", action="store_true", help="skip the pre-optimisation detector")
++    ap.add_argument("--label", default="", help="free text saved in the JSON (e.g. 'on battery, lid open')")
++    ap.add_argument("--out", type=Path, default=None)
++    args = ap.parse_args(argv)
++
++    wrists, others = _load_frames(args.frames)
++    det = TableDetector.from_file(args.config)
++    ref = None if args.no_ref else _reference_detector(args.config)
++    info = machine()
++    print(f"{info['host']}  {info['platform']}  {info['machine']}  python {info['python']}  "
++          f"numpy {info['numpy']}  pillow {info['pillow']}  scipy {info['scipy']}")
++    print(f"{len(wrists)} wrist frames, {len(others)} other frames from {args.frames}")
++    t0 = time.time()
++    comp = components(args, det, ref, wrists, others)
++    print(f"\n{'component':<14} {'p50 ms':>9} {'p95 ms':>9} {'max ms':>9} {'cpu %':>7} {'n':>7}")
++    for name, r in comp.items():
++        print(f"{name:<14} {r['p50_ms']:9.3f} {r['p95_ms']:9.3f} {r['max_ms']:9.3f} {r['cpu_pct']:7.1f} {r['n']:7d}")
++    if "guard_ref" in comp:
++        print(f"\nguard speedup over the pre-optimisation detector: "
++              f"p50 x{comp['guard_ref']['p50_ms'] / comp['guard']['p50_ms']:.2f}, "
++              f"p95 x{comp['guard_ref']['p95_ms'] / comp['guard']['p95_ms']:.2f}")
++    # What the match asks of the guard: 10 Hz live guard + 20 Hz fast loop, two wrists each = 60 frames/s worst case
++    load = 60 * comp["guard"]["mean_ms"] / 1000
++    print(f"match guard load (60 wrist frames/s): ~{100 * load:.0f}% of one core")
++    rows = sustained(args, det, wrists, others) if args.sustained > 0 else []
++    result = {"machine": info, "label": args.label, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z",
++                                                                             time.localtime(t0)),
++              "frames": str(args.frames), "components": comp, "match_guard_core_fraction": load,
++              "sustained": {"mode": args.sustained_mode, "seconds": args.sustained, "rows": rows} if rows else None}
++    out = args.out or ROOT / "bench_results" / (f"mac_bench_{info['host']}_"
++                                                f"{time.strftime('%Y%m%dT%H%M%S', time.localtime(t0))}.json")
++    out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
++    print(f"\nwrote {out}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
